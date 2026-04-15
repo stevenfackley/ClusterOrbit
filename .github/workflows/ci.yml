@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  mobile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: Install mobile deps
+        working-directory: app/mobile
+        run: flutter pub get
+      - name: Analyze
+        working-directory: app/mobile
+        run: flutter analyze
+      - name: Test
+        working-directory: app/mobile
+        run: flutter test
+
+  gateway:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+      - name: Test gateway
+        working-directory: app/gateway
+        run: go test ./...
