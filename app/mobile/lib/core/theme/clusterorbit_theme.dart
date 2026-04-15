@@ -11,7 +11,7 @@ class ClusterOrbitTheme {
   static const Color _warning = Color(0xFFFFB86B);
 
   static ThemeData dark() {
-    final scheme = ColorScheme.dark(
+    const scheme = ColorScheme.dark(
       primary: _teal,
       secondary: _cyan,
       tertiary: _indigo,

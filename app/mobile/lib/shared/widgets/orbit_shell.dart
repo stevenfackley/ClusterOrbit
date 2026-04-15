@@ -155,10 +155,10 @@ class _SideRail extends StatelessWidget {
                   ),
                 ),
               const Spacer(),
-              Wrap(
+              const Wrap(
                 spacing: 8,
                 runSpacing: 8,
-                children: const [
+                children: [
                   Chip(label: Text('3 clusters')),
                   Chip(label: Text('42 nodes')),
                   Chip(label: Text('5 alerts')),
