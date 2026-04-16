@@ -3,9 +3,14 @@ import 'package:clusterorbit_mobile/core/theme/clusterorbit_theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'test_helpers.dart';
+
 void main() {
-  testWidgets('MaterialApp uses ClusterOrbit identity and dark mode', (tester) async {
-    await tester.pumpWidget(const ClusterOrbitApp());
+  testWidgets('MaterialApp uses ClusterOrbit identity and dark mode',
+      (tester) async {
+    await tester.pumpWidget(
+      ClusterOrbitApp(connection: TestClusterConnection()),
+    );
 
     final app = tester.widget<MaterialApp>(find.byType(MaterialApp));
 
@@ -16,8 +21,11 @@ void main() {
     expect(app.theme, isNotNull);
   });
 
-  testWidgets('dark theme exposes ClusterOrbit palette extension', (tester) async {
-    await tester.pumpWidget(const ClusterOrbitApp());
+  testWidgets('dark theme exposes ClusterOrbit palette extension',
+      (tester) async {
+    await tester.pumpWidget(
+      ClusterOrbitApp(connection: TestClusterConnection()),
+    );
 
     final context = tester.element(find.byType(Scaffold).first);
     final palette = Theme.of(context).extension<ClusterOrbitPalette>();
