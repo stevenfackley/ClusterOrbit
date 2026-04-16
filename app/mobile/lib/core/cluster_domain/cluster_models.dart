@@ -102,6 +102,9 @@ class ClusterNode {
     required this.podCount,
     required this.schedulable,
     required this.health,
+    required this.cpuCapacity,
+    required this.memoryCapacity,
+    required this.osImage,
   });
 
   final String id;
@@ -112,6 +115,9 @@ class ClusterNode {
   final int podCount;
   final bool schedulable;
   final ClusterHealthLevel health;
+  final String cpuCapacity;
+  final String memoryCapacity;
+  final String osImage;
 }
 
 class ClusterWorkload {
@@ -124,6 +130,7 @@ class ClusterWorkload {
     required this.readyReplicas,
     required this.nodeIds,
     required this.health,
+    required this.images,
   });
 
   final String id;
@@ -134,6 +141,7 @@ class ClusterWorkload {
   final int readyReplicas;
   final List<String> nodeIds;
   final ClusterHealthLevel health;
+  final List<String> images;
 }
 
 class ServicePort {
@@ -159,6 +167,7 @@ class ClusterService {
     required this.targetWorkloadIds,
     required this.ports,
     required this.health,
+    this.clusterIp,
   });
 
   final String id;
@@ -168,6 +177,7 @@ class ClusterService {
   final List<String> targetWorkloadIds;
   final List<ServicePort> ports;
   final ClusterHealthLevel health;
+  final String? clusterIp;
 }
 
 class ClusterAlert {

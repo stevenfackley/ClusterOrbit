@@ -344,6 +344,10 @@ final class KubernetesSnapshotLoader {
       podCount: nodePodCounts[name] ?? 0,
       schedulable: schedulable,
       health: health,
+      cpuCapacity: _stringAt(item, ['status', 'capacity', 'cpu']) ?? 'unknown',
+      memoryCapacity:
+          _stringAt(item, ['status', 'capacity', 'memory']) ?? 'unknown',
+      osImage: _stringAt(item, ['status', 'nodeInfo', 'osImage']) ?? 'unknown',
     );
   }
 
@@ -382,6 +386,13 @@ final class KubernetesSnapshotLoader {
         ? ClusterHealthLevel.warning
         : (healthSignal ?? ClusterHealthLevel.healthy);
 
+    final containers = _listAt(item, ['spec', 'template', 'spec', 'containers'])
+        .cast<Map?>()
+        .whereType<Map>()
+        .map((c) => '${c['image']}')
+        .where((s) => s.isNotEmpty && s != 'null')
+        .toList();
+
     return ClusterWorkload(
       id: workloadId,
       namespace: namespace,
@@ -391,6 +402,7 @@ final class KubernetesSnapshotLoader {
       readyReplicas: readyReplicas,
       nodeIds: (nodeIds[workloadId] ?? const <String>{}).toList()..sort(),
       health: health,
+      images: containers,
     );
   }
 
@@ -430,6 +442,7 @@ final class KubernetesSnapshotLoader {
       health: targetWorkloadIds.isEmpty
           ? ClusterHealthLevel.warning
           : ClusterHealthLevel.healthy,
+      clusterIp: _toNullableClusterIp(_stringAt(item, ['spec', 'clusterIP'])),
     );
   }
 
@@ -492,6 +505,11 @@ final class KubernetesSnapshotLoader {
             scope: 'Service routing',
           ),
     ];
+  }
+
+  String? _toNullableClusterIp(String? raw) {
+    if (raw == null || raw.isEmpty || raw == 'None') return null;
+    return raw;
   }
 
   bool _matchesSelector(

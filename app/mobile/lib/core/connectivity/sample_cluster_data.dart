@@ -40,6 +40,9 @@ final class SampleClusterData {
           podCount: 17 + index,
           schedulable: true,
           health: ClusterHealthLevel.healthy,
+          cpuCapacity: '4',
+          memoryCapacity: '16Gi',
+          osImage: 'Ubuntu 22.04.3 LTS',
         ),
       ),
       ...List.generate(
@@ -58,6 +61,9 @@ final class SampleClusterData {
             health: isWarning
                 ? ClusterHealthLevel.warning
                 : ClusterHealthLevel.healthy,
+            cpuCapacity: index % 2 == 0 ? '8' : '16',
+            memoryCapacity: index % 2 == 0 ? '32Gi' : '64Gi',
+            osImage: 'Ubuntu 22.04.3 LTS',
           );
         },
       ),
@@ -92,6 +98,9 @@ final class SampleClusterData {
           health: readyReplicas == desiredReplicas
               ? ClusterHealthLevel.healthy
               : ClusterHealthLevel.warning,
+          images: [
+            'ghcr.io/clusterorbit/service-${index + 1}:v0.${index + 1}.0'
+          ],
         );
       },
     );
@@ -122,6 +131,9 @@ final class SampleClusterData {
           health: index == 10
               ? ClusterHealthLevel.warning
               : ClusterHealthLevel.healthy,
+          clusterIp: exposure == ServiceExposure.ingress
+              ? null
+              : '10.96.0.${index + 1}',
         );
       },
     );
