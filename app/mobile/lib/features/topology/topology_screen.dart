@@ -427,10 +427,12 @@ class _TopologySidebar extends StatelessWidget {
                               child: ConstrainedBox(
                                 constraints:
                                     const BoxConstraints(maxHeight: 320),
-                                child: _EntityDetailPanel(
-                                  entity: selectedEntity!,
-                                  palette: palette,
-                                  onDismiss: onDismiss,
+                                child: SingleChildScrollView(
+                                  child: _EntityDetailPanel(
+                                    entity: selectedEntity!,
+                                    palette: palette,
+                                    onDismiss: onDismiss,
+                                  ),
                                 ),
                               ),
                             )
@@ -1266,14 +1268,7 @@ class _EntityDetailPanel extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 12),
-          Flexible(
-            child: SingleChildScrollView(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: _buildFields(theme),
-              ),
-            ),
-          ),
+          ..._buildFields(theme),
         ],
       ),
     );
