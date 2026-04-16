@@ -28,8 +28,7 @@ void main() {
     tester.view.devicePixelRatio = 1.0;
     tester.view.physicalSize = const Size(1400, 900);
 
-    final profile =
-        SampleClusterData.profilesFor(ConnectionMode.direct).first;
+    final profile = SampleClusterData.profilesFor(ConnectionMode.direct).first;
     final snapshot = SampleClusterData.snapshotFor(profile);
 
     await tester.pumpWidget(
@@ -112,8 +111,7 @@ void main() {
     tester.view.devicePixelRatio = 1.0;
     tester.view.physicalSize = const Size(1400, 900);
 
-    final profile =
-        SampleClusterData.profilesFor(ConnectionMode.direct).first;
+    final profile = SampleClusterData.profilesFor(ConnectionMode.direct).first;
     final snapshot = SampleClusterData.snapshotFor(profile);
 
     await tester.pumpWidget(

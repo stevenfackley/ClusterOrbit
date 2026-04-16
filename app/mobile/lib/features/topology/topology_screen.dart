@@ -191,193 +191,196 @@ class _TopologyWorkspace extends StatelessWidget {
         final compact = constraints.maxHeight < 300;
         final canvasTop = compact ? 0.0 : 188.0;
         return Stack(
-        children: [
-          Positioned.fill(
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [
-                    palette.panel.withValues(alpha: 0.96),
-                    const Color(0xFF0D1727),
-                  ],
-                ),
-              ),
-            ),
-          ),
-          Positioned.fill(
-            child: IgnorePointer(
-              child: CustomPaint(
-                painter: _OrbitBackdropPainter(
-                  accent: palette.canvasGlow,
-                  secondary: palette.accentCyan,
-                ),
-              ),
-            ),
-          ),
-          if (!compact) Positioned(
-            top: 22,
-            left: 24,
-            right: 24,
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('Cluster Map',
-                          style: theme.textTheme.headlineMedium),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Machine-first topology canvas for ${snapshot.profile.name}. Pan and zoom to inspect placement, workload fan-out, and service attachment.',
-                        style: theme.textTheme.bodyLarge,
-                      ),
+          children: [
+            Positioned.fill(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [
+                      palette.panel.withValues(alpha: 0.96),
+                      const Color(0xFF0D1727),
                     ],
                   ),
                 ),
-                const SizedBox(width: 16),
-                _ModeBadge(
-                  label: '${snapshot.profile.connectionMode.label} mode',
-                  tint: palette.accentTeal,
-                ),
-              ],
-            ),
-          ),
-          if (!compact) Positioned(
-            top: 96,
-            left: 24,
-            right: 24,
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(
-                children: [
-                  _SummaryChip(
-                      label: 'Nodes', value: '${snapshot.nodes.length}'),
-                  const SizedBox(width: 12),
-                  _SummaryChip(
-                      label: 'Workloads',
-                      value: '${snapshot.workloads.length}'),
-                  const SizedBox(width: 12),
-                  _SummaryChip(
-                      label: 'Services', value: '${snapshot.services.length}'),
-                  const SizedBox(width: 12),
-                  _SummaryChip(
-                      label: 'Links', value: '${snapshot.links.length}'),
-                  const SizedBox(width: 12),
-                  _SummaryChip(
-                      label: 'Alerts', value: '${snapshot.alerts.length}'),
-                ],
               ),
             ),
-          ),
-          Positioned.fill(
-            top: canvasTop,
-            left: 16,
-            right: 16,
-            bottom: 16,
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(28),
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.14),
-                  border:
-                      Border.all(color: Colors.white.withValues(alpha: 0.06)),
+            Positioned.fill(
+              child: IgnorePointer(
+                child: CustomPaint(
+                  painter: _OrbitBackdropPainter(
+                    accent: palette.canvasGlow,
+                    secondary: palette.accentCyan,
+                  ),
                 ),
-                child: Stack(
+              ),
+            ),
+            if (!compact)
+              Positioned(
+                top: 22,
+                left: 24,
+                right: 24,
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Positioned.fill(
-                      child: CustomPaint(
-                        painter: _GridPainter(
-                          gridColor: Colors.white.withValues(alpha: 0.03),
-                        ),
-                      ),
-                    ),
-                    Positioned.fill(
-                      child: InteractiveViewer(
-                        constrained: true,
-                        minScale: 0.8,
-                        maxScale: 1.8,
-                        boundaryMargin: const EdgeInsets.all(24),
-                        child: SizedBox(
-                          width: layout.canvasWidth,
-                          height: layout.canvasHeight,
-                          child: Stack(
-                            children: [
-                              Positioned.fill(
-                                child: CustomPaint(
-                                  painter: _LinkPainter(
-                                    layout: layout,
-                                    accent: palette.accentCyan,
-                                  ),
-                                ),
-                              ),
-                              for (final node in snapshot.nodes)
-                                _CanvasNode(
-                                  offset: layout.positions[node.id]!,
-                                  onTap: () => onEntityTap(node),
-                                  child: _NodeOrb(
-                                    node: node,
-                                    palette: palette,
-                                    selected: selectedEntity == node,
-                                  ),
-                                ),
-                              for (final workload in snapshot.workloads)
-                                _CanvasNode(
-                                  offset: layout.positions[workload.id]!,
-                                  onTap: () => onEntityTap(workload),
-                                  child: _WorkloadOrb(
-                                    workload: workload,
-                                    palette: palette,
-                                    selected: selectedEntity == workload,
-                                  ),
-                                ),
-                              for (final service in snapshot.services)
-                                _CanvasNode(
-                                  offset: layout.positions[service.id]!,
-                                  onTap: () => onEntityTap(service),
-                                  child: _ServiceOrb(
-                                    service: service,
-                                    palette: palette,
-                                    selected: selectedEntity == service,
-                                  ),
-                                ),
-                            ],
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Cluster Map',
+                              style: theme.textTheme.headlineMedium),
+                          const SizedBox(height: 8),
+                          Text(
+                            'Machine-first topology canvas for ${snapshot.profile.name}. Pan and zoom to inspect placement, workload fan-out, and service attachment.',
+                            style: theme.textTheme.bodyLarge,
                           ),
-                        ),
+                        ],
                       ),
                     ),
-                    Positioned(
-                        left: 16,
-                        bottom: 16,
-                        child: IgnorePointer(
-                            child: _LegendCard(palette: palette))),
-                    Positioned(
-                        right: 16,
-                        bottom: 16,
-                        child: IgnorePointer(
-                            child: _MiniStatusCard(snapshot: snapshot))),
-                    if (showPortraitPanel && selectedEntity != null)
-                      Positioned(
-                        bottom: 0,
-                        left: 0,
-                        right: 0,
-                        child: _EntityDetailPanel(
-                          entity: selectedEntity!,
-                          palette: palette,
-                          onDismiss: onDismiss,
-                        ),
-                      ),
+                    const SizedBox(width: 16),
+                    _ModeBadge(
+                      label: '${snapshot.profile.connectionMode.label} mode',
+                      tint: palette.accentTeal,
+                    ),
                   ],
                 ),
               ),
+            if (!compact)
+              Positioned(
+                top: 96,
+                left: 24,
+                right: 24,
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
+                      _SummaryChip(
+                          label: 'Nodes', value: '${snapshot.nodes.length}'),
+                      const SizedBox(width: 12),
+                      _SummaryChip(
+                          label: 'Workloads',
+                          value: '${snapshot.workloads.length}'),
+                      const SizedBox(width: 12),
+                      _SummaryChip(
+                          label: 'Services',
+                          value: '${snapshot.services.length}'),
+                      const SizedBox(width: 12),
+                      _SummaryChip(
+                          label: 'Links', value: '${snapshot.links.length}'),
+                      const SizedBox(width: 12),
+                      _SummaryChip(
+                          label: 'Alerts', value: '${snapshot.alerts.length}'),
+                    ],
+                  ),
+                ),
+              ),
+            Positioned.fill(
+              top: canvasTop,
+              left: 16,
+              right: 16,
+              bottom: 16,
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(28),
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.14),
+                    border:
+                        Border.all(color: Colors.white.withValues(alpha: 0.06)),
+                  ),
+                  child: Stack(
+                    children: [
+                      Positioned.fill(
+                        child: CustomPaint(
+                          painter: _GridPainter(
+                            gridColor: Colors.white.withValues(alpha: 0.03),
+                          ),
+                        ),
+                      ),
+                      Positioned.fill(
+                        child: InteractiveViewer(
+                          constrained: true,
+                          minScale: 0.8,
+                          maxScale: 1.8,
+                          boundaryMargin: const EdgeInsets.all(24),
+                          child: SizedBox(
+                            width: layout.canvasWidth,
+                            height: layout.canvasHeight,
+                            child: Stack(
+                              children: [
+                                Positioned.fill(
+                                  child: CustomPaint(
+                                    painter: _LinkPainter(
+                                      layout: layout,
+                                      accent: palette.accentCyan,
+                                    ),
+                                  ),
+                                ),
+                                for (final node in snapshot.nodes)
+                                  _CanvasNode(
+                                    offset: layout.positions[node.id]!,
+                                    onTap: () => onEntityTap(node),
+                                    child: _NodeOrb(
+                                      node: node,
+                                      palette: palette,
+                                      selected: selectedEntity == node,
+                                    ),
+                                  ),
+                                for (final workload in snapshot.workloads)
+                                  _CanvasNode(
+                                    offset: layout.positions[workload.id]!,
+                                    onTap: () => onEntityTap(workload),
+                                    child: _WorkloadOrb(
+                                      workload: workload,
+                                      palette: palette,
+                                      selected: selectedEntity == workload,
+                                    ),
+                                  ),
+                                for (final service in snapshot.services)
+                                  _CanvasNode(
+                                    offset: layout.positions[service.id]!,
+                                    onTap: () => onEntityTap(service),
+                                    child: _ServiceOrb(
+                                      service: service,
+                                      palette: palette,
+                                      selected: selectedEntity == service,
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                      Positioned(
+                          left: 16,
+                          bottom: 16,
+                          child: IgnorePointer(
+                              child: _LegendCard(palette: palette))),
+                      Positioned(
+                          right: 16,
+                          bottom: 16,
+                          child: IgnorePointer(
+                              child: _MiniStatusCard(snapshot: snapshot))),
+                      if (showPortraitPanel && selectedEntity != null)
+                        Positioned(
+                          bottom: 0,
+                          left: 0,
+                          right: 0,
+                          child: _EntityDetailPanel(
+                            entity: selectedEntity!,
+                            palette: palette,
+                            onDismiss: onDismiss,
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
             ),
-          ),
-        ],
-        );       // Stack
-      }),        // LayoutBuilder
-    );           // Card
+          ],
+        ); // Stack
+      }), // LayoutBuilder
+    ); // Card
   }
 }
 
@@ -1255,8 +1258,7 @@ class _EntityDetailPanel extends StatelessWidget {
               Expanded(child: _buildTitle(theme)),
               IconButton(
                 onPressed: onDismiss,
-                icon:
-                    const Icon(Icons.close, size: 18, color: Colors.white),
+                icon: const Icon(Icons.close, size: 18, color: Colors.white),
                 padding: EdgeInsets.zero,
                 constraints: const BoxConstraints(),
                 tooltip: 'Dismiss',
