@@ -185,7 +185,10 @@ class _TopologyWorkspace extends StatelessWidget {
 
     return Card(
       clipBehavior: Clip.antiAlias,
-      child: Stack(
+      child: LayoutBuilder(builder: (context, constraints) {
+        final compact = constraints.maxHeight < 300;
+        final canvasTop = compact ? 0.0 : 188.0;
+        return Stack(
         children: [
           Positioned.fill(
             child: DecoratedBox(
@@ -211,7 +214,7 @@ class _TopologyWorkspace extends StatelessWidget {
               ),
             ),
           ),
-          Positioned(
+          if (!compact) Positioned(
             top: 22,
             left: 24,
             right: 24,
@@ -240,7 +243,7 @@ class _TopologyWorkspace extends StatelessWidget {
               ],
             ),
           ),
-          Positioned(
+          if (!compact) Positioned(
             top: 96,
             left: 24,
             right: 24,
@@ -268,7 +271,7 @@ class _TopologyWorkspace extends StatelessWidget {
             ),
           ),
           Positioned.fill(
-            top: 188,
+            top: canvasTop,
             left: 16,
             right: 16,
             bottom: 16,
@@ -346,11 +349,13 @@ class _TopologyWorkspace extends StatelessWidget {
                     Positioned(
                         left: 16,
                         bottom: 16,
-                        child: _LegendCard(palette: palette)),
+                        child: IgnorePointer(
+                            child: _LegendCard(palette: palette))),
                     Positioned(
                         right: 16,
                         bottom: 16,
-                        child: _MiniStatusCard(snapshot: snapshot)),
+                        child: IgnorePointer(
+                            child: _MiniStatusCard(snapshot: snapshot))),
                     if (showPortraitPanel && selectedEntity != null)
                       Positioned(
                         bottom: 0,
@@ -368,8 +373,9 @@ class _TopologyWorkspace extends StatelessWidget {
             ),
           ),
         ],
-      ),
-    );
+        );       // Stack
+      }),        // LayoutBuilder
+    );           // Card
   }
 }
 
@@ -1197,7 +1203,216 @@ class _EntityDetailPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Stub — content implemented in Task 4
-    return const SizedBox.shrink();
+    final theme = Theme.of(context);
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: palette.panel.withValues(alpha: 0.96),
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.40),
+            blurRadius: 24,
+            offset: const Offset(0, -4),
+          ),
+        ],
+      ),
+      child: SingleChildScrollView(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              children: [
+                Expanded(child: _buildTitle(theme)),
+                IconButton(
+                  onPressed: onDismiss,
+                  icon:
+                      const Icon(Icons.close, size: 18, color: Colors.white),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(),
+                  tooltip: 'Dismiss',
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            ..._buildFields(theme),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTitle(ThemeData theme) {
+    final (name, badge) = switch (entity) {
+      ClusterNode n => (n.name, n.role.label),
+      ClusterWorkload w => (w.name, w.kind.label),
+      ClusterService s => (s.name, s.exposure.label),
+      _ => ('Unknown', ''),
+    };
+    return Row(
+      children: [
+        Expanded(
+          child: Text(
+            name,
+            style: theme.textTheme.titleMedium,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+        const SizedBox(width: 8),
+        Flexible(
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Text(
+              badge,
+              style: theme.textTheme.bodySmall?.copyWith(color: Colors.white70),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  List<Widget> _buildFields(ThemeData theme) => switch (entity) {
+        ClusterNode n => _nodeFields(n, theme),
+        ClusterWorkload w => _workloadFields(w, theme),
+        ClusterService s => _serviceFields(s, theme),
+        _ => const [],
+      };
+
+  List<Widget> _nodeFields(ClusterNode n, ThemeData theme) {
+    final tint = _healthTint(n.health, palette);
+    return [
+      _DetailRow(label: 'Role', value: n.role.label, theme: theme),
+      _DetailRow(label: 'Zone', value: n.zone, theme: theme),
+      _DetailRow(label: 'K8s Version', value: n.version, theme: theme),
+      _DetailRow(label: 'Pod Count', value: '${n.podCount}', theme: theme),
+      _DetailRow(
+          label: 'Schedulable',
+          value: n.schedulable ? 'Yes' : 'Cordoned',
+          theme: theme),
+      _DetailStatusRow(
+          label: 'Health', value: n.health.name, tint: tint, theme: theme),
+    ];
+  }
+
+  List<Widget> _workloadFields(ClusterWorkload w, ThemeData theme) {
+    final tint = _healthTint(w.health, palette);
+    return [
+      _DetailRow(label: 'Namespace', value: w.namespace, theme: theme),
+      _DetailRow(label: 'Kind', value: w.kind.label, theme: theme),
+      _DetailRow(
+          label: 'Replicas',
+          value: '${w.readyReplicas} / ${w.desiredReplicas} ready',
+          theme: theme),
+      _DetailRow(
+          label: 'Nodes',
+          value: '${w.nodeIds.length} placement(s)',
+          theme: theme),
+      _DetailStatusRow(
+          label: 'Health', value: w.health.name, tint: tint, theme: theme),
+    ];
+  }
+
+  List<Widget> _serviceFields(ClusterService s, ThemeData theme) {
+    final tint = _healthTint(s.health, palette);
+    return [
+      _DetailRow(label: 'Namespace', value: s.namespace, theme: theme),
+      _DetailRow(label: 'Exposure', value: s.exposure.label, theme: theme),
+      _DetailRow(
+          label: 'Targets',
+          value: '${s.targetWorkloadIds.length} workload(s)',
+          theme: theme),
+      for (final p in s.ports)
+        _DetailRow(
+          label: 'Port',
+          value:
+              '${p.port} → ${p.targetPort} / ${p.protocol}${p.name != null ? ' (${p.name})' : ''}',
+          theme: theme,
+        ),
+      _DetailStatusRow(
+          label: 'Health', value: s.health.name, tint: tint, theme: theme),
+    ];
+  }
+}
+
+class _DetailRow extends StatelessWidget {
+  const _DetailRow({
+    required this.label,
+    required this.value,
+    required this.theme,
+  });
+
+  final String label;
+  final String value;
+  final ThemeData theme;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 96,
+            child: Text(
+              label,
+              style: theme.textTheme.bodySmall?.copyWith(color: Colors.white54),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              style: theme.textTheme.bodySmall?.copyWith(color: Colors.white),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DetailStatusRow extends StatelessWidget {
+  const _DetailStatusRow({
+    required this.label,
+    required this.value,
+    required this.tint,
+    required this.theme,
+  });
+
+  final String label;
+  final String value;
+  final Color tint;
+  final ThemeData theme;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 96,
+            child: Text(
+              label,
+              style: theme.textTheme.bodySmall?.copyWith(color: Colors.white54),
+            ),
+          ),
+          _StatusDot(color: tint),
+          const SizedBox(width: 6),
+          Text(
+            value,
+            style: theme.textTheme.bodySmall?.copyWith(color: tint),
+          ),
+        ],
+      ),
+    );
   }
 }
