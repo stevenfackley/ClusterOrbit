@@ -401,38 +401,37 @@ class _TopologySidebar extends StatelessWidget {
   Widget build(BuildContext context) {
     final alerts = snapshot.alerts.take(4).toList();
     return Column(
+      children: [
+        _InsightPanel(snapshot: snapshot),
+        const SizedBox(height: 16),
+        Expanded(
+          child: Column(
             children: [
-              _InsightPanel(snapshot: snapshot),
-              const SizedBox(height: 16),
-              Expanded(
-                child: Column(
-                  children: [
-                    Expanded(child: _AlertPanel(alerts: alerts)),
-                    AnimatedSize(
-                      duration: const Duration(milliseconds: 250),
-                      curve: Curves.easeInOut,
-                      child: selectedEntity != null
-                          ? Padding(
-                              padding: const EdgeInsets.only(top: 16),
-                              child: ConstrainedBox(
-                                constraints:
-                                    const BoxConstraints(maxHeight: 320),
-                                child: SingleChildScrollView(
-                                  child: _EntityDetailPanel(
-                                    entity: selectedEntity!,
-                                    palette: palette,
-                                    onDismiss: onDismiss,
-                                  ),
-                                ),
-                              ),
-                            )
-                          : const SizedBox.shrink(),
-                    ),
-                  ],
-                ),
+              Expanded(child: _AlertPanel(alerts: alerts)),
+              AnimatedSize(
+                duration: const Duration(milliseconds: 250),
+                curve: Curves.easeInOut,
+                child: selectedEntity != null
+                    ? Padding(
+                        padding: const EdgeInsets.only(top: 16),
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(maxHeight: 320),
+                          child: SingleChildScrollView(
+                            child: _EntityDetailPanel(
+                              entity: selectedEntity!,
+                              palette: palette,
+                              onDismiss: onDismiss,
+                            ),
+                          ),
+                        ),
+                      )
+                    : const SizedBox.shrink(),
               ),
             ],
-          );
+          ),
+        ),
+      ],
+    );
   }
 }
 
