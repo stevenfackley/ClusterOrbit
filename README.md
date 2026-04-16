@@ -46,6 +46,7 @@ Planned local commands:
 ```powershell
 # mobile
 cd app/mobile
+Copy-Item .env.example .env
 flutter pub get
 flutter run
 
@@ -53,6 +54,8 @@ flutter run
 cd ../gateway
 go test ./...
 ```
+
+The mobile app now expects a local `.env` file for startup configuration. Use `app/mobile/.env.example` as the template and keep the real `.env` out of version control.
 
 ## Screenshots
 

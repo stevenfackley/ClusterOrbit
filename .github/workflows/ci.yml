@@ -8,28 +8,49 @@ on:
 jobs:
   mobile:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app/mobile
     steps:
       - uses: actions/checkout@v4
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+          cache: true
+      - name: Seed mobile env
+        run: cp .env.example .env
       - name: Install mobile deps
-        working-directory: app/mobile
         run: flutter pub get
+      - name: Format check
+        run: dart format --output=none --set-exit-if-changed lib test
       - name: Analyze
-        working-directory: app/mobile
         run: flutter analyze
       - name: Test
-        working-directory: app/mobile
-        run: flutter test
+        run: flutter test --coverage
+      - name: Upload mobile coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobile-coverage
+          path: app/mobile/coverage/lcov.info
 
   gateway:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app/gateway
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: '1.24'
+          cache: true
+      - name: Verify module files
+        run: |
+          go mod tidy
+          git diff --exit-code
+      - name: Check formatting
+        run: test -z "$(gofmt -l .)"
+      - name: Vet gateway
+        run: go vet ./...
       - name: Test gateway
-        working-directory: app/gateway
-        run: go test ./...
+        run: go test -cover ./...

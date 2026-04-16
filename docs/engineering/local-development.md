@@ -12,6 +12,7 @@
 
 ```powershell
 cd app/mobile
+Copy-Item .env.example .env
 flutter pub get
 flutter run
 
