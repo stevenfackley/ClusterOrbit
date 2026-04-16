@@ -90,6 +90,23 @@ class ClusterProfile {
   final String apiServerHost;
   final String environmentLabel;
   final ConnectionMode connectionMode;
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'name': name,
+        'apiServerHost': apiServerHost,
+        'environmentLabel': environmentLabel,
+        'connectionMode': connectionMode.name,
+      };
+
+  factory ClusterProfile.fromJson(Map<String, dynamic> json) => ClusterProfile(
+        id: json['id'] as String,
+        name: json['name'] as String,
+        apiServerHost: json['apiServerHost'] as String,
+        environmentLabel: json['environmentLabel'] as String,
+        connectionMode:
+            ConnectionMode.values.byName(json['connectionMode'] as String),
+      );
 }
 
 class ClusterNode {
@@ -118,6 +135,34 @@ class ClusterNode {
   final String cpuCapacity;
   final String memoryCapacity;
   final String osImage;
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'name': name,
+        'role': role.name,
+        'version': version,
+        'zone': zone,
+        'podCount': podCount,
+        'schedulable': schedulable,
+        'health': health.name,
+        'cpuCapacity': cpuCapacity,
+        'memoryCapacity': memoryCapacity,
+        'osImage': osImage,
+      };
+
+  factory ClusterNode.fromJson(Map<String, dynamic> json) => ClusterNode(
+        id: json['id'] as String,
+        name: json['name'] as String,
+        role: ClusterNodeRole.values.byName(json['role'] as String),
+        version: json['version'] as String,
+        zone: json['zone'] as String,
+        podCount: json['podCount'] as int,
+        schedulable: json['schedulable'] as bool,
+        health: ClusterHealthLevel.values.byName(json['health'] as String),
+        cpuCapacity: json['cpuCapacity'] as String,
+        memoryCapacity: json['memoryCapacity'] as String,
+        osImage: json['osImage'] as String,
+      );
 }
 
 class ClusterWorkload {
@@ -142,6 +187,30 @@ class ClusterWorkload {
   final List<String> nodeIds;
   final ClusterHealthLevel health;
   final List<String> images;
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'namespace': namespace,
+        'name': name,
+        'kind': kind.name,
+        'desiredReplicas': desiredReplicas,
+        'readyReplicas': readyReplicas,
+        'nodeIds': nodeIds,
+        'health': health.name,
+        'images': images,
+      };
+
+  factory ClusterWorkload.fromJson(Map<String, dynamic> json) => ClusterWorkload(
+        id: json['id'] as String,
+        namespace: json['namespace'] as String,
+        name: json['name'] as String,
+        kind: WorkloadKind.values.byName(json['kind'] as String),
+        desiredReplicas: json['desiredReplicas'] as int,
+        readyReplicas: json['readyReplicas'] as int,
+        nodeIds: List<String>.from(json['nodeIds'] as List),
+        health: ClusterHealthLevel.values.byName(json['health'] as String),
+        images: List<String>.from(json['images'] as List),
+      );
 }
 
 class ServicePort {
@@ -156,6 +225,20 @@ class ServicePort {
   final int targetPort;
   final String protocol;
   final String? name;
+
+  Map<String, dynamic> toJson() => {
+        'port': port,
+        'targetPort': targetPort,
+        'protocol': protocol,
+        'name': name,
+      };
+
+  factory ServicePort.fromJson(Map<String, dynamic> json) => ServicePort(
+        port: json['port'] as int,
+        targetPort: json['targetPort'] as int,
+        protocol: json['protocol'] as String,
+        name: json['name'] as String?,
+      );
 }
 
 class ClusterService {
@@ -178,6 +261,31 @@ class ClusterService {
   final List<ServicePort> ports;
   final ClusterHealthLevel health;
   final String? clusterIp;
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'namespace': namespace,
+        'name': name,
+        'exposure': exposure.name,
+        'targetWorkloadIds': targetWorkloadIds,
+        'ports': ports.map((p) => p.toJson()).toList(),
+        'health': health.name,
+        'clusterIp': clusterIp,
+      };
+
+  factory ClusterService.fromJson(Map<String, dynamic> json) => ClusterService(
+        id: json['id'] as String,
+        namespace: json['namespace'] as String,
+        name: json['name'] as String,
+        exposure: ServiceExposure.values.byName(json['exposure'] as String),
+        targetWorkloadIds:
+            List<String>.from(json['targetWorkloadIds'] as List),
+        ports: (json['ports'] as List)
+            .map((p) => ServicePort.fromJson(p as Map<String, dynamic>))
+            .toList(),
+        health: ClusterHealthLevel.values.byName(json['health'] as String),
+        clusterIp: json['clusterIp'] as String?,
+      );
 }
 
 class ClusterAlert {
@@ -194,6 +302,22 @@ class ClusterAlert {
   final String summary;
   final ClusterHealthLevel level;
   final String scope;
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'title': title,
+        'summary': summary,
+        'level': level.name,
+        'scope': scope,
+      };
+
+  factory ClusterAlert.fromJson(Map<String, dynamic> json) => ClusterAlert(
+        id: json['id'] as String,
+        title: json['title'] as String,
+        summary: json['summary'] as String,
+        level: ClusterHealthLevel.values.byName(json['level'] as String),
+        scope: json['scope'] as String,
+      );
 }
 
 class TopologyLink {
@@ -208,6 +332,20 @@ class TopologyLink {
   final String targetId;
   final TopologyEntityKind kind;
   final String? label;
+
+  Map<String, dynamic> toJson() => {
+        'sourceId': sourceId,
+        'targetId': targetId,
+        'kind': kind.name,
+        'label': label,
+      };
+
+  factory TopologyLink.fromJson(Map<String, dynamic> json) => TopologyLink(
+        sourceId: json['sourceId'] as String,
+        targetId: json['targetId'] as String,
+        kind: TopologyEntityKind.values.byName(json['kind'] as String),
+        label: json['label'] as String?,
+      );
 }
 
 class ClusterSnapshot {
@@ -228,6 +366,40 @@ class ClusterSnapshot {
   final List<ClusterService> services;
   final List<ClusterAlert> alerts;
   final List<TopologyLink> links;
+
+  Map<String, dynamic> toJson() => {
+        'profile': profile.toJson(),
+        'generatedAt': generatedAt.millisecondsSinceEpoch,
+        'nodes': nodes.map((n) => n.toJson()).toList(),
+        'workloads': workloads.map((w) => w.toJson()).toList(),
+        'services': services.map((s) => s.toJson()).toList(),
+        'alerts': alerts.map((a) => a.toJson()).toList(),
+        'links': links.map((l) => l.toJson()).toList(),
+      };
+
+  factory ClusterSnapshot.fromJson(Map<String, dynamic> json) => ClusterSnapshot(
+        profile:
+            ClusterProfile.fromJson(json['profile'] as Map<String, dynamic>),
+        generatedAt: DateTime.fromMillisecondsSinceEpoch(
+          json['generatedAt'] as int,
+          isUtc: true,
+        ),
+        nodes: (json['nodes'] as List)
+            .map((n) => ClusterNode.fromJson(n as Map<String, dynamic>))
+            .toList(),
+        workloads: (json['workloads'] as List)
+            .map((w) => ClusterWorkload.fromJson(w as Map<String, dynamic>))
+            .toList(),
+        services: (json['services'] as List)
+            .map((s) => ClusterService.fromJson(s as Map<String, dynamic>))
+            .toList(),
+        alerts: (json['alerts'] as List)
+            .map((a) => ClusterAlert.fromJson(a as Map<String, dynamic>))
+            .toList(),
+        links: (json['links'] as List)
+            .map((l) => TopologyLink.fromJson(l as Map<String, dynamic>))
+            .toList(),
+      );
 
   int get controlPlaneCount =>
       nodes.where((node) => node.role == ClusterNodeRole.controlPlane).length;
