@@ -1,22 +1,1081 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
-import '../../shared/widgets/feature_placeholder.dart';
+import '../../core/cluster_domain/cluster_models.dart';
+import '../../core/theme/clusterorbit_theme.dart';
 
 class TopologyScreen extends StatelessWidget {
-  const TopologyScreen({super.key});
+  const TopologyScreen({
+    super.key,
+    required this.snapshot,
+    required this.isLoading,
+    required this.error,
+  });
+
+  final ClusterSnapshot? snapshot;
+  final bool isLoading;
+  final Object? error;
 
   @override
   Widget build(BuildContext context) {
-    return const FeaturePlaceholder(
-      title: 'Cluster Map',
-      description:
-          'This placeholder represents the future machine-first topology canvas with grouped nodes, overlays, and tablet-scale navigation.',
-      chips: [
-        'Machine-first',
-        'Fast pan/zoom',
-        'Grouping modes',
-        'Orbit visual language',
-      ],
+    final theme = Theme.of(context);
+    final palette = theme.extension<ClusterOrbitPalette>()!;
+    final clusterSnapshot = snapshot;
+
+    if (isLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (error != null || clusterSnapshot == null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 560),
+            child: Card(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Cluster Map', style: theme.textTheme.headlineSmall),
+                    const SizedBox(height: 12),
+                    Text(
+                      'The topology workspace could not be loaded. Direct and gateway connections both feed this canvas once a snapshot is available.',
+                      style: theme.textTheme.bodyLarge,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isWide = constraints.maxWidth >= 1180;
+        final canvasHeight = math.max(520.0, constraints.maxHeight - 40);
+        final layout = _TopologyLayout.build(
+          clusterSnapshot,
+          canvasHeight: canvasHeight,
+        );
+
+        return Padding(
+          padding: const EdgeInsets.all(20),
+          child: isWide
+              ? Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      flex: 10,
+                      child: _TopologyWorkspace(
+                        snapshot: clusterSnapshot,
+                        layout: layout,
+                        canvasHeight: canvasHeight,
+                        palette: palette,
+                      ),
+                    ),
+                    const SizedBox(width: 20),
+                    SizedBox(
+                      width: 312,
+                      child: _TopologySidebar(
+                        snapshot: clusterSnapshot,
+                        palette: palette,
+                      ),
+                    ),
+                  ],
+                )
+              : Column(
+                  children: [
+                    Expanded(
+                      child: _TopologyWorkspace(
+                        snapshot: clusterSnapshot,
+                        layout: layout,
+                        canvasHeight: canvasHeight,
+                        palette: palette,
+                      ),
+                    ),
+                  ],
+                ),
+        );
+      },
     );
   }
+}
+
+class _TopologyWorkspace extends StatelessWidget {
+  const _TopologyWorkspace({
+    required this.snapshot,
+    required this.layout,
+    required this.canvasHeight,
+    required this.palette,
+  });
+
+  final ClusterSnapshot snapshot;
+  final _TopologyLayout layout;
+  final double canvasHeight;
+  final ClusterOrbitPalette palette;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
+                    palette.panel.withValues(alpha: 0.96),
+                    const Color(0xFF0D1727),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          Positioned.fill(
+            child: IgnorePointer(
+              child: CustomPaint(
+                painter: _OrbitBackdropPainter(
+                  accent: palette.canvasGlow,
+                  secondary: palette.accentCyan,
+                ),
+              ),
+            ),
+          ),
+          Positioned(
+            top: 22,
+            left: 24,
+            right: 24,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Cluster Map',
+                          style: theme.textTheme.headlineMedium),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Machine-first topology canvas for ${snapshot.profile.name}. Pan and zoom to inspect placement, workload fan-out, and service attachment.',
+                        style: theme.textTheme.bodyLarge,
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 16),
+                _ModeBadge(
+                  label: '${snapshot.profile.connectionMode.label} mode',
+                  tint: palette.accentTeal,
+                ),
+              ],
+            ),
+          ),
+          Positioned(
+            top: 96,
+            left: 24,
+            right: 24,
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  _SummaryChip(
+                      label: 'Nodes', value: '${snapshot.nodes.length}'),
+                  const SizedBox(width: 12),
+                  _SummaryChip(
+                      label: 'Workloads',
+                      value: '${snapshot.workloads.length}'),
+                  const SizedBox(width: 12),
+                  _SummaryChip(
+                      label: 'Services', value: '${snapshot.services.length}'),
+                  const SizedBox(width: 12),
+                  _SummaryChip(
+                      label: 'Links', value: '${snapshot.links.length}'),
+                  const SizedBox(width: 12),
+                  _SummaryChip(
+                      label: 'Alerts', value: '${snapshot.alerts.length}'),
+                ],
+              ),
+            ),
+          ),
+          Positioned.fill(
+            top: 188,
+            left: 16,
+            right: 16,
+            bottom: 16,
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(28),
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.14),
+                  border:
+                      Border.all(color: Colors.white.withValues(alpha: 0.06)),
+                ),
+                child: Stack(
+                  children: [
+                    Positioned.fill(
+                      child: CustomPaint(
+                        painter: _GridPainter(
+                          gridColor: Colors.white.withValues(alpha: 0.03),
+                        ),
+                      ),
+                    ),
+                    Positioned.fill(
+                      child: InteractiveViewer(
+                        constrained: true,
+                        minScale: 0.8,
+                        maxScale: 1.8,
+                        boundaryMargin: const EdgeInsets.all(24),
+                        child: SizedBox(
+                          width: layout.canvasWidth,
+                          height: layout.canvasHeight,
+                          child: Stack(
+                            children: [
+                              Positioned.fill(
+                                child: CustomPaint(
+                                  painter: _LinkPainter(
+                                    layout: layout,
+                                    accent: palette.accentCyan,
+                                  ),
+                                ),
+                              ),
+                              for (final node in snapshot.nodes)
+                                _CanvasNode(
+                                  offset: layout.positions[node.id]!,
+                                  child: _NodeOrb(node: node, palette: palette),
+                                ),
+                              for (final workload in snapshot.workloads)
+                                _CanvasNode(
+                                  offset: layout.positions[workload.id]!,
+                                  child: _WorkloadOrb(
+                                    workload: workload,
+                                    palette: palette,
+                                  ),
+                                ),
+                              for (final service in snapshot.services)
+                                _CanvasNode(
+                                  offset: layout.positions[service.id]!,
+                                  child: _ServiceOrb(
+                                    service: service,
+                                    palette: palette,
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                    Positioned(
+                        left: 16,
+                        bottom: 16,
+                        child: _LegendCard(palette: palette)),
+                    Positioned(
+                        right: 16,
+                        bottom: 16,
+                        child: _MiniStatusCard(snapshot: snapshot)),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TopologySidebar extends StatelessWidget {
+  const _TopologySidebar({
+    required this.snapshot,
+    required this.palette,
+    this.compact = false,
+  });
+
+  final ClusterSnapshot snapshot;
+  final ClusterOrbitPalette palette;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    final alerts = snapshot.alerts.take(compact ? 2 : 4).toList();
+    return compact
+        ? Row(
+            children: [
+              Expanded(child: _InsightPanel(snapshot: snapshot)),
+              const SizedBox(width: 16),
+              Expanded(child: _AlertPanel(alerts: alerts)),
+            ],
+          )
+        : Column(
+            children: [
+              _InsightPanel(snapshot: snapshot),
+              const SizedBox(height: 16),
+              Expanded(child: _AlertPanel(alerts: alerts)),
+            ],
+          );
+  }
+}
+
+class _InsightPanel extends StatelessWidget {
+  const _InsightPanel({required this.snapshot});
+
+  final ClusterSnapshot snapshot;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Flight Deck', style: theme.textTheme.titleLarge),
+            const SizedBox(height: 8),
+            Text(
+              '${snapshot.profile.apiServerHost} / ${snapshot.profile.environmentLabel}',
+              style: theme.textTheme.bodyMedium,
+            ),
+            const SizedBox(height: 18),
+            _MetricRow(
+                label: 'Control planes',
+                value: '${snapshot.controlPlaneCount}'),
+            _MetricRow(label: 'Workers', value: '${snapshot.workerCount}'),
+            _MetricRow(
+                label: 'Unschedulable',
+                value: '${snapshot.unschedulableNodeCount}'),
+            _MetricRow(
+                label: 'Critical alerts', value: '${snapshot.criticalCount}'),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _AlertPanel extends StatelessWidget {
+  const _AlertPanel({required this.alerts});
+
+  final List<ClusterAlert> alerts;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Priority Alerts', style: theme.textTheme.titleLarge),
+            const SizedBox(height: 8),
+            Text(
+              'The canvas stays read-only for now, so this rail is the fast path to what needs attention.',
+              style: theme.textTheme.bodyMedium,
+            ),
+            const SizedBox(height: 16),
+            Expanded(
+              child: alerts.isEmpty
+                  ? Center(
+                      child: Text(
+                        'No active alerts in this snapshot.',
+                        style: theme.textTheme.bodyMedium,
+                      ),
+                    )
+                  : ListView.separated(
+                      itemCount: alerts.length,
+                      itemBuilder: (context, index) =>
+                          _AlertTile(alert: alerts[index]),
+                      separatorBuilder: (_, __) => const SizedBox(height: 12),
+                    ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _OrbitBackdropPainter extends CustomPainter {
+  const _OrbitBackdropPainter({
+    required this.accent,
+    required this.secondary,
+  });
+
+  final Color accent;
+  final Color secondary;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final orbitPaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1
+      ..color = accent.withValues(alpha: 0.12);
+    final secondaryPaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1
+      ..color = secondary.withValues(alpha: 0.08);
+
+    canvas.drawCircle(
+      Offset(size.width * 0.16, size.height * 0.82),
+      size.width * 0.28,
+      orbitPaint,
+    );
+    canvas.drawCircle(
+      Offset(size.width * 0.82, size.height * 0.18),
+      size.width * 0.22,
+      secondaryPaint,
+    );
+    canvas.drawCircle(
+      Offset(size.width * 0.58, size.height * 0.52),
+      size.width * 0.42,
+      orbitPaint..color = accent.withValues(alpha: 0.06),
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _OrbitBackdropPainter oldDelegate) {
+    return oldDelegate.accent != accent || oldDelegate.secondary != secondary;
+  }
+}
+
+class _GridPainter extends CustomPainter {
+  const _GridPainter({
+    required this.gridColor,
+  });
+
+  final Color gridColor;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = gridColor
+      ..strokeWidth = 1;
+
+    for (double x = 0; x <= size.width; x += 64) {
+      canvas.drawLine(Offset(x, 0), Offset(x, size.height), paint);
+    }
+    for (double y = 0; y <= size.height; y += 64) {
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _GridPainter oldDelegate) {
+    return oldDelegate.gridColor != gridColor;
+  }
+}
+
+class _LinkPainter extends CustomPainter {
+  const _LinkPainter({
+    required this.layout,
+    required this.accent,
+  });
+
+  final _TopologyLayout layout;
+  final Color accent;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round
+      ..strokeWidth = 2
+      ..color = accent.withValues(alpha: 0.22);
+
+    for (final edge in layout.edges) {
+      final path = Path()
+        ..moveTo(edge.start.dx, edge.start.dy)
+        ..cubicTo(
+          edge.start.dx + 120,
+          edge.start.dy,
+          edge.end.dx - 120,
+          edge.end.dy,
+          edge.end.dx,
+          edge.end.dy,
+        );
+      canvas.drawPath(path, paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _LinkPainter oldDelegate) {
+    return oldDelegate.layout != layout || oldDelegate.accent != accent;
+  }
+}
+
+class _CanvasNode extends StatelessWidget {
+  const _CanvasNode({
+    required this.offset,
+    required this.child,
+    this.onTap,
+  });
+
+  final Offset offset;
+  final Widget child;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Positioned(
+      left: offset.dx,
+      top: offset.dy,
+      child: GestureDetector(
+        onTap: onTap,
+        behavior: HitTestBehavior.opaque,
+        child: child,
+      ),
+    );
+  }
+}
+
+class _NodeOrb extends StatelessWidget {
+  const _NodeOrb({
+    required this.node,
+    required this.palette,
+  });
+
+  final ClusterNode node;
+  final ClusterOrbitPalette palette;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final tint = _healthTint(node.health, palette);
+
+    return Container(
+      width: 132,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: tint.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: tint.withValues(alpha: 0.24)),
+        boxShadow: [
+          BoxShadow(
+            color: tint.withValues(alpha: 0.14),
+            blurRadius: 18,
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(node.name, style: theme.textTheme.titleMedium),
+          const SizedBox(height: 6),
+          Text('${node.role.label} / ${node.zone}',
+              style: theme.textTheme.bodyMedium),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 6,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              _StatusDot(color: tint),
+              Text(
+                '${node.podCount} pods',
+                style: theme.textTheme.bodySmall?.copyWith(color: Colors.white),
+              ),
+              if (!node.schedulable)
+                Text(
+                  'Cordoned',
+                  style: theme.textTheme.bodySmall?.copyWith(color: tint),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _WorkloadOrb extends StatelessWidget {
+  const _WorkloadOrb({
+    required this.workload,
+    required this.palette,
+  });
+
+  final ClusterWorkload workload;
+  final ClusterOrbitPalette palette;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final tint = _healthTint(workload.health, palette);
+
+    return Container(
+      width: 132,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.04),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: tint.withValues(alpha: 0.22)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(workload.name, style: theme.textTheme.titleMedium),
+          const SizedBox(height: 6),
+          Text(
+            '${workload.kind.label} / ${workload.namespace}',
+            style: theme.textTheme.bodyMedium,
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 6,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              _StatusDot(color: tint),
+              Text(
+                '${workload.readyReplicas}/${workload.desiredReplicas} ready',
+                style: theme.textTheme.bodySmall?.copyWith(color: Colors.white),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ServiceOrb extends StatelessWidget {
+  const _ServiceOrb({
+    required this.service,
+    required this.palette,
+  });
+
+  final ClusterService service;
+  final ClusterOrbitPalette palette;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final tint = _healthTint(service.health, palette);
+
+    return Container(
+      width: 128,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            palette.canvasGlow.withValues(alpha: 0.16),
+            palette.accentCyan.withValues(alpha: 0.08),
+          ],
+        ),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: tint.withValues(alpha: 0.24)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(service.name, style: theme.textTheme.titleMedium),
+          const SizedBox(height: 6),
+          Text(
+            '${service.exposure.label} / ${service.namespace}',
+            style: theme.textTheme.bodyMedium,
+          ),
+          const SizedBox(height: 10),
+          Text(
+            '${service.targetWorkloadIds.length} workload targets',
+            style: theme.textTheme.bodySmall?.copyWith(color: Colors.white),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LegendCard extends StatelessWidget {
+  const _LegendCard({
+    required this.palette,
+  });
+
+  final ClusterOrbitPalette palette;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.24),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Legend',
+              style: theme.textTheme.titleSmall?.copyWith(color: Colors.white),
+            ),
+            const SizedBox(height: 10),
+            _LegendRow(label: 'Healthy', color: palette.accentTeal),
+            _LegendRow(label: 'Warning', color: palette.warning),
+            _LegendRow(label: 'Critical', color: const Color(0xFFFF6F7A)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _MiniStatusCard extends StatelessWidget {
+  const _MiniStatusCard({
+    required this.snapshot,
+  });
+
+  final ClusterSnapshot snapshot;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.24),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Map status',
+              style: theme.textTheme.titleSmall?.copyWith(color: Colors.white),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '${snapshot.warningCount} warnings / ${snapshot.criticalCount} critical',
+              style: theme.textTheme.bodySmall?.copyWith(color: Colors.white),
+            ),
+            const SizedBox(height: 4),
+            Text(snapshot.profile.apiServerHost,
+                style: theme.textTheme.bodySmall),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ModeBadge extends StatelessWidget {
+  const _ModeBadge({
+    required this.label,
+    required this.tint,
+  });
+
+  final String label;
+  final Color tint;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: tint.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: tint.withValues(alpha: 0.28)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        child: Text(
+          label,
+          style: theme.textTheme.bodyMedium?.copyWith(color: Colors.white),
+        ),
+      ),
+    );
+  }
+}
+
+class _SummaryChip extends StatelessWidget {
+  const _SummaryChip({
+    required this.label,
+    required this.value,
+  });
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      width: 132,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.05),
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label, style: theme.textTheme.bodyMedium),
+          const SizedBox(height: 8),
+          Text(value, style: theme.textTheme.headlineSmall),
+        ],
+      ),
+    );
+  }
+}
+
+class _MetricRow extends StatelessWidget {
+  const _MetricRow({
+    required this.label,
+    required this.value,
+  });
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 14),
+      child: Row(
+        children: [
+          Expanded(child: Text(label, style: theme.textTheme.bodyLarge)),
+          Text(value, style: theme.textTheme.titleMedium),
+        ],
+      ),
+    );
+  }
+}
+
+class _AlertTile extends StatelessWidget {
+  const _AlertTile({
+    required this.alert,
+  });
+
+  final ClusterAlert alert;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final palette = theme.extension<ClusterOrbitPalette>()!;
+    final tint = _healthTint(alert.level, palette);
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: tint.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: tint.withValues(alpha: 0.18)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(alert.title, style: theme.textTheme.titleMedium),
+          const SizedBox(height: 6),
+          Text(alert.summary, style: theme.textTheme.bodyMedium),
+          const SizedBox(height: 8),
+          Text(alert.scope, style: theme.textTheme.labelLarge),
+        ],
+      ),
+    );
+  }
+}
+
+class _LegendRow extends StatelessWidget {
+  const _LegendRow({
+    required this.label,
+    required this.color,
+  });
+
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _StatusDot(color: color),
+          const SizedBox(width: 8),
+          Text(
+            label,
+            style: theme.textTheme.bodySmall?.copyWith(color: Colors.white),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StatusDot extends StatelessWidget {
+  const _StatusDot({
+    required this.color,
+  });
+
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 10,
+      height: 10,
+      decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+    );
+  }
+}
+
+Color _healthTint(ClusterHealthLevel level, ClusterOrbitPalette palette) {
+  switch (level) {
+    case ClusterHealthLevel.healthy:
+      return palette.accentTeal;
+    case ClusterHealthLevel.warning:
+      return palette.warning;
+    case ClusterHealthLevel.critical:
+      return const Color(0xFFFF6F7A);
+  }
+}
+
+class _TopologyLayout {
+  const _TopologyLayout({
+    required this.positions,
+    required this.edges,
+    required this.canvasWidth,
+    required this.canvasHeight,
+  });
+
+  final Map<String, Offset> positions;
+  final List<_TopologyEdge> edges;
+  final double canvasWidth;
+  final double canvasHeight;
+
+  static _TopologyLayout build(
+    ClusterSnapshot snapshot, {
+    required double canvasHeight,
+  }) {
+    const leftMargin = 56.0;
+    const topMargin = 32.0;
+    const bottomMargin = 92.0;
+    const nodeWidth = 132.0;
+    const workloadWidth = 132.0;
+    const serviceWidth = 128.0;
+    const infrastructureWidth = 360.0;
+    const workloadLeft = 470.0;
+    const serviceLeft = 790.0;
+
+    final controlPlanes = snapshot.nodes
+        .where((node) => node.role == ClusterNodeRole.controlPlane)
+        .toList()
+      ..sort((a, b) => a.name.compareTo(b.name));
+    final workers = snapshot.nodes
+        .where((node) => node.role == ClusterNodeRole.worker)
+        .toList()
+      ..sort((a, b) => a.name.compareTo(b.name));
+    final workloads = [...snapshot.workloads]
+      ..sort((a, b) => a.name.compareTo(b.name));
+    final services = [...snapshot.services]
+      ..sort((a, b) => a.name.compareTo(b.name));
+
+    final positions = <String, Offset>{};
+    final usableHeight =
+        math.max(280.0, canvasHeight - topMargin - bottomMargin);
+
+    final controlPlaneStep = usableHeight / math.max(controlPlanes.length, 1);
+    for (var i = 0; i < controlPlanes.length; i++) {
+      positions[controlPlanes[i].id] = Offset(
+        leftMargin,
+        topMargin + (i * controlPlaneStep),
+      );
+    }
+
+    const workerColumns = 4;
+    final workerRows = math.max(1, (workers.length / workerColumns).ceil());
+    final workerRowStep = usableHeight / workerRows;
+    for (var i = 0; i < workers.length; i++) {
+      final row = i ~/ workerColumns;
+      final column = i % workerColumns;
+      positions[workers[i].id] = Offset(
+        leftMargin + 148 + (column * 80),
+        topMargin + (row * workerRowStep),
+      );
+    }
+
+    const workloadColumns = 2;
+    final workloadRows =
+        math.max(1, (workloads.length / workloadColumns).ceil());
+    final workloadRowStep = usableHeight / workloadRows;
+    for (var i = 0; i < workloads.length; i++) {
+      final row = i ~/ workloadColumns;
+      final column = i % workloadColumns;
+      positions[workloads[i].id] = Offset(
+        workloadLeft + (column * 154),
+        topMargin + (row * workloadRowStep),
+      );
+    }
+
+    final serviceRows = math.max(1, services.length);
+    final serviceRowStep = usableHeight / serviceRows;
+    for (var i = 0; i < services.length; i++) {
+      positions[services[i].id] = Offset(
+        serviceLeft,
+        topMargin + (i * serviceRowStep),
+      );
+    }
+
+    final edges = <_TopologyEdge>[
+      for (final link in snapshot.links)
+        if (positions.containsKey(link.sourceId) &&
+            positions.containsKey(link.targetId))
+          _TopologyEdge(
+            start: _connectionPoint(
+              positions[link.sourceId]!,
+              width: link.sourceId.startsWith('service:')
+                  ? serviceWidth
+                  : nodeWidth,
+            ),
+            end: _connectionPoint(
+              positions[link.targetId]!,
+              width: link.targetId.startsWith('service:')
+                  ? serviceWidth
+                  : workloadWidth,
+              trailing: false,
+            ),
+          ),
+    ];
+
+    return _TopologyLayout(
+      positions: positions,
+      edges: edges,
+      canvasWidth: infrastructureWidth + workloadWidth + serviceLeft,
+      canvasHeight: canvasHeight,
+    );
+  }
+
+  static Offset _connectionPoint(
+    Offset topLeft, {
+    required double width,
+    bool trailing = true,
+  }) {
+    return Offset(topLeft.dx + (trailing ? width : 0), topLeft.dy + 42);
+  }
+}
+
+class _TopologyEdge {
+  const _TopologyEdge({
+    required this.start,
+    required this.end,
+  });
+
+  final Offset start;
+  final Offset end;
 }
