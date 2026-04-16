@@ -34,6 +34,9 @@ dist/
 *.test
 coverage.out
 
+# Worktrees
+.worktrees/
+
 # Logs / misc
 *.log
 tmp/
