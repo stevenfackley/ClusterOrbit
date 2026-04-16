@@ -1266,7 +1266,14 @@ class _EntityDetailPanel extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 12),
-          ..._buildFields(theme),
+          Flexible(
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: _buildFields(theme),
+              ),
+            ),
+          ),
         ],
       ),
     );
@@ -1320,6 +1327,9 @@ class _EntityDetailPanel extends StatelessWidget {
       _DetailRow(label: 'Role', value: n.role.label, theme: theme),
       _DetailRow(label: 'Zone', value: n.zone, theme: theme),
       _DetailRow(label: 'K8s Version', value: n.version, theme: theme),
+      _DetailRow(label: 'OS', value: n.osImage, theme: theme),
+      _DetailRow(label: 'CPU', value: n.cpuCapacity, theme: theme),
+      _DetailRow(label: 'Memory', value: n.memoryCapacity, theme: theme),
       _DetailRow(label: 'Pod Count', value: '${n.podCount}', theme: theme),
       _DetailRow(
           label: 'Schedulable',
@@ -1343,6 +1353,8 @@ class _EntityDetailPanel extends StatelessWidget {
           label: 'Nodes',
           value: '${w.nodeIds.length} placement(s)',
           theme: theme),
+      for (final image in w.images)
+        _DetailRow(label: 'Image', value: image, theme: theme),
       _DetailStatusRow(
           label: 'Health', value: w.health.name, tint: tint, theme: theme),
     ];
@@ -1353,6 +1365,8 @@ class _EntityDetailPanel extends StatelessWidget {
     return [
       _DetailRow(label: 'Namespace', value: s.namespace, theme: theme),
       _DetailRow(label: 'Exposure', value: s.exposure.label, theme: theme),
+      if (s.clusterIp != null)
+        _DetailRow(label: 'Cluster IP', value: s.clusterIp!, theme: theme),
       _DetailRow(
           label: 'Targets',
           value: '${s.targetWorkloadIds.length} workload(s)',
