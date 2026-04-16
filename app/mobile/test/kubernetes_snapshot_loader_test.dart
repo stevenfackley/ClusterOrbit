@@ -18,7 +18,14 @@ void main() {
             },
             'spec': {'unschedulable': false},
             'status': {
-              'nodeInfo': {'kubeletVersion': 'v1.32.3'},
+              'nodeInfo': {
+                'kubeletVersion': 'v1.32.3',
+                'osImage': 'Ubuntu 22.04.3 LTS',
+              },
+              'capacity': {
+                'cpu': '4',
+                'memory': '16Gi',
+              },
               'conditions': [
                 {'type': 'Ready', 'status': 'True'},
               ],
@@ -33,7 +40,14 @@ void main() {
             },
             'spec': {'unschedulable': true},
             'status': {
-              'nodeInfo': {'kubeletVersion': 'v1.32.3'},
+              'nodeInfo': {
+                'kubeletVersion': 'v1.32.3',
+                'osImage': 'Ubuntu 22.04.3 LTS',
+              },
+              'capacity': {
+                'cpu': '8',
+                'memory': '32Gi',
+              },
               'conditions': [
                 {'type': 'Ready', 'status': 'True'},
                 {'type': 'MemoryPressure', 'status': 'True'},
@@ -102,6 +116,7 @@ void main() {
             },
             'spec': {
               'type': 'LoadBalancer',
+              'clusterIP': '10.96.0.100',
               'selector': {'app': 'api'},
               'ports': [
                 {
@@ -131,7 +146,16 @@ void main() {
             _listResponse([
           {
             'metadata': {'name': 'api', 'namespace': 'apps'},
-            'spec': {'replicas': 2},
+            'spec': {
+              'replicas': 2,
+              'template': {
+                'spec': {
+                  'containers': [
+                    {'name': 'api', 'image': 'nginx:1.25'},
+                  ],
+                },
+              },
+            },
             'status': {'readyReplicas': 1},
           },
         ]),
