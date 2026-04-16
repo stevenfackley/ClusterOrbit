@@ -80,16 +80,22 @@ void main() {
       expect(loaded.length, 2);
     });
 
-    test('loadProfiles skips corrupted payload row', () async {
-      // Write a valid profile first via the public API.
+    test('saveProfiles with empty list is a no-op (does not clear existing)',
+        () async {
       await store.saveProfiles([profile]);
-      // Corrupt the payload directly in the DB.
+      await store.saveProfiles([]);
+      final loaded = await store.loadProfiles();
+      // saveProfiles([]) is an upsert no-op — it does NOT delete existing rows.
+      expect(loaded.length, 1);
+    });
+
+    test('loadProfiles skips corrupted payload row', () async {
+      await store.saveProfiles([profile]);
       final db = await store.dbForTest;
       final count = await db.rawUpdate(
         "UPDATE cluster_profiles SET payload = 'not-valid-json' WHERE id = 'p1'",
       );
       expect(count, 1, reason: 'update should have modified exactly one row');
-      // loadProfiles should skip the corrupted row and return empty.
       final loaded = await store.loadProfiles();
       expect(loaded, isEmpty);
     });
@@ -116,6 +122,16 @@ void main() {
           .saveSnapshot(makeSnapshot(generatedAt: DateTime.utc(2026, 4, 17)));
       final loaded = await store.loadSnapshot('p1');
       expect(loaded!.generatedAt, DateTime.utc(2026, 4, 17));
+    });
+
+    test('loadSnapshot returns null for corrupted payload', () async {
+      await store.saveSnapshot(makeSnapshot());
+      final db = await store.dbForTest;
+      final count = await db.rawUpdate(
+        "UPDATE cluster_snapshots SET payload = 'not-valid-json' WHERE profile_id = 'p1'",
+      );
+      expect(count, 1, reason: 'update should have modified exactly one row');
+      expect(await store.loadSnapshot('p1'), isNull);
     });
   });
 }

@@ -20,7 +20,7 @@ Future<void> pumpClusterOrbitApp(
   await tester.pumpWidget(
     ClusterOrbitApp(
       connection: connection ?? TestClusterConnection(),
-      store: const _NoOpSnapshotStore(),
+      store: const NoOpSnapshotStore(),
     ),
   );
   await tester.pumpAndSettle();
@@ -58,8 +58,8 @@ final class TestClusterConnection implements ClusterConnection {
 }
 
 /// No-op store used in widget tests — prevents any SQLite I/O during test runs.
-final class _NoOpSnapshotStore implements SnapshotStore {
-  const _NoOpSnapshotStore();
+final class NoOpSnapshotStore implements SnapshotStore {
+  const NoOpSnapshotStore();
 
   @override
   Future<List<ClusterProfile>> loadProfiles() async => const [];

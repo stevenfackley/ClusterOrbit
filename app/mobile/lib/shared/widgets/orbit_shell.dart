@@ -94,9 +94,12 @@ class _OrbitShellState extends State<OrbitShell> {
 
     try {
       final clusters = await _connection.listClusters();
+      if (clusters.isEmpty) return;
+
       final selectedCluster = clusters.first;
       final snapshot = await _connection.loadSnapshot(selectedCluster.id);
 
+      // Save to cache regardless of mount status — cache is process-scoped.
       await _store.saveProfiles(clusters);
       await _store.saveSnapshot(snapshot);
 
