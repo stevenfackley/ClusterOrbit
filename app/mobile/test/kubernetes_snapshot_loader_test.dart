@@ -233,6 +233,19 @@ void main() {
         isTrue);
     expect(snapshot.alerts.any((alert) => alert.scope == 'Service routing'),
         isTrue);
+
+    // Node enrichment
+    final cp1 = snapshot.nodes.firstWhere((n) => n.id == 'cp-1');
+    expect(cp1.cpuCapacity, '4');
+    expect(cp1.memoryCapacity, '16Gi');
+    expect(cp1.osImage, 'Ubuntu 22.04.3 LTS');
+
+    // Workload images
+    expect(apiWorkload.images, ['nginx:1.25']);
+
+    // Service clusterIp
+    expect(apiService.clusterIp, '10.96.0.100');
+    expect(orphanService.clusterIp, isNull);
   });
 }
 
