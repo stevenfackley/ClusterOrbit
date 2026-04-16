@@ -311,22 +311,31 @@ class _TopologyWorkspace extends StatelessWidget {
                               for (final node in snapshot.nodes)
                                 _CanvasNode(
                                   offset: layout.positions[node.id]!,
-                                  child: _NodeOrb(node: node, palette: palette),
+                                  onTap: () => onEntityTap(node),
+                                  child: _NodeOrb(
+                                    node: node,
+                                    palette: palette,
+                                    selected: selectedEntity == node,
+                                  ),
                                 ),
                               for (final workload in snapshot.workloads)
                                 _CanvasNode(
                                   offset: layout.positions[workload.id]!,
+                                  onTap: () => onEntityTap(workload),
                                   child: _WorkloadOrb(
                                     workload: workload,
                                     palette: palette,
+                                    selected: selectedEntity == workload,
                                   ),
                                 ),
                               for (final service in snapshot.services)
                                 _CanvasNode(
                                   offset: layout.positions[service.id]!,
+                                  onTap: () => onEntityTap(service),
                                   child: _ServiceOrb(
                                     service: service,
                                     palette: palette,
+                                    selected: selectedEntity == service,
                                   ),
                                 ),
                             ],
@@ -342,6 +351,17 @@ class _TopologyWorkspace extends StatelessWidget {
                         right: 16,
                         bottom: 16,
                         child: _MiniStatusCard(snapshot: snapshot)),
+                    if (showPortraitPanel && selectedEntity != null)
+                      Positioned(
+                        bottom: 0,
+                        left: 0,
+                        right: 0,
+                        child: _EntityDetailPanel(
+                          entity: selectedEntity!,
+                          palette: palette,
+                          onDismiss: onDismiss,
+                        ),
+                      ),
                   ],
                 ),
               ),
@@ -606,10 +626,12 @@ class _NodeOrb extends StatelessWidget {
   const _NodeOrb({
     required this.node,
     required this.palette,
+    this.selected = false,
   });
 
   final ClusterNode node;
   final ClusterOrbitPalette palette;
+  final bool selected;
 
   @override
   Widget build(BuildContext context) {
@@ -620,13 +642,16 @@ class _NodeOrb extends StatelessWidget {
       width: 132,
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: tint.withValues(alpha: 0.12),
+        color: tint.withValues(alpha: selected ? 0.20 : 0.12),
         borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: tint.withValues(alpha: 0.24)),
+        border: Border.all(
+          color: tint.withValues(alpha: selected ? 0.80 : 0.24),
+          width: selected ? 2.5 : 1.0,
+        ),
         boxShadow: [
           BoxShadow(
-            color: tint.withValues(alpha: 0.14),
-            blurRadius: 18,
+            color: tint.withValues(alpha: selected ? 0.28 : 0.14),
+            blurRadius: selected ? 28 : 18,
           ),
         ],
       ),
@@ -665,10 +690,12 @@ class _WorkloadOrb extends StatelessWidget {
   const _WorkloadOrb({
     required this.workload,
     required this.palette,
+    this.selected = false,
   });
 
   final ClusterWorkload workload;
   final ClusterOrbitPalette palette;
+  final bool selected;
 
   @override
   Widget build(BuildContext context) {
@@ -679,9 +706,15 @@ class _WorkloadOrb extends StatelessWidget {
       width: 132,
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.04),
+        color: Colors.white.withValues(alpha: selected ? 0.08 : 0.04),
         borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: tint.withValues(alpha: 0.22)),
+        border: Border.all(
+          color: tint.withValues(alpha: selected ? 0.80 : 0.22),
+          width: selected ? 2.5 : 1.0,
+        ),
+        boxShadow: selected
+            ? [BoxShadow(color: tint.withValues(alpha: 0.22), blurRadius: 24)]
+            : null,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -715,10 +748,12 @@ class _ServiceOrb extends StatelessWidget {
   const _ServiceOrb({
     required this.service,
     required this.palette,
+    this.selected = false,
   });
 
   final ClusterService service;
   final ClusterOrbitPalette palette;
+  final bool selected;
 
   @override
   Widget build(BuildContext context) {
@@ -731,12 +766,18 @@ class _ServiceOrb extends StatelessWidget {
       decoration: BoxDecoration(
         gradient: LinearGradient(
           colors: [
-            palette.canvasGlow.withValues(alpha: 0.16),
-            palette.accentCyan.withValues(alpha: 0.08),
+            palette.canvasGlow.withValues(alpha: selected ? 0.26 : 0.16),
+            palette.accentCyan.withValues(alpha: selected ? 0.16 : 0.08),
           ],
         ),
         borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: tint.withValues(alpha: 0.24)),
+        border: Border.all(
+          color: tint.withValues(alpha: selected ? 0.80 : 0.24),
+          width: selected ? 2.5 : 1.0,
+        ),
+        boxShadow: selected
+            ? [BoxShadow(color: tint.withValues(alpha: 0.22), blurRadius: 24)]
+            : null,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
