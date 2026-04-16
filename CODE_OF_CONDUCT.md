@@ -46,9 +46,9 @@ an individual is officially representing the project in public spaces.
 ## Reporting
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported to the project owner at stevenfackley@gmail.com.
+reported to the project owner at <stevenfackley@gmail.com>.
 
 ## Attribution
 
 This Code of Conduct is adapted from the Contributor Covenant, version 2.1,
-available at https://www.contributor-covenant.org/version/2/1/code_of_conduct.html.
+available at <https://www.contributor-covenant.org/version/2/1/code_of_conduct.html>.
