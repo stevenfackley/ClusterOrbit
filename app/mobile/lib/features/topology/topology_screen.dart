@@ -132,10 +132,12 @@ class _TopologyScreenState extends State<TopologyScreen> {
                           width: 260,
                           child: Padding(
                             padding: const EdgeInsets.only(left: 16),
-                            child: _EntityDetailPanel(
-                              entity: _selectedEntity!,
-                              palette: palette,
-                              onDismiss: _clearSelection,
+                            child: SingleChildScrollView(
+                              child: _EntityDetailPanel(
+                                entity: _selectedEntity!,
+                                palette: palette,
+                                onDismiss: _clearSelection,
+                              ),
                             ),
                           ),
                         )
@@ -1285,15 +1287,18 @@ class _EntityDetailPanel extends StatelessWidget {
           ),
         ),
         const SizedBox(width: 8),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-          decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.08),
-            borderRadius: BorderRadius.circular(10),
-          ),
-          child: Text(
-            badge,
-            style: theme.textTheme.bodySmall?.copyWith(color: Colors.white70),
+        Flexible(
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Text(
+              badge,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.bodySmall?.copyWith(color: Colors.white70),
+            ),
           ),
         ),
       ],
