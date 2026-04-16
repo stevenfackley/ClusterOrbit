@@ -5,7 +5,7 @@ import 'package:flutter/material.dart';
 import '../../core/cluster_domain/cluster_models.dart';
 import '../../core/theme/clusterorbit_theme.dart';
 
-class TopologyScreen extends StatelessWidget {
+class TopologyScreen extends StatefulWidget {
   const TopologyScreen({
     super.key,
     required this.snapshot,
@@ -18,16 +18,33 @@ class TopologyScreen extends StatelessWidget {
   final Object? error;
 
   @override
+  State<TopologyScreen> createState() => _TopologyScreenState();
+}
+
+class _TopologyScreenState extends State<TopologyScreen> {
+  Object? _selectedEntity;
+
+  void _onEntityTap(Object entity) {
+    setState(() {
+      _selectedEntity = _selectedEntity == entity ? null : entity;
+    });
+  }
+
+  void _clearSelection() {
+    setState(() => _selectedEntity = null);
+  }
+
+  @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final palette = theme.extension<ClusterOrbitPalette>()!;
-    final clusterSnapshot = snapshot;
+    final clusterSnapshot = widget.snapshot;
 
-    if (isLoading) {
+    if (widget.isLoading) {
       return const Center(child: CircularProgressIndicator());
     }
 
-    if (error != null || clusterSnapshot == null) {
+    if (widget.error != null || clusterSnapshot == null) {
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(24),
@@ -58,50 +75,84 @@ class TopologyScreen extends StatelessWidget {
     return LayoutBuilder(
       builder: (context, constraints) {
         final isWide = constraints.maxWidth >= 1180;
+        final isLandscape =
+            MediaQuery.orientationOf(context) == Orientation.landscape;
         final canvasHeight = math.max(520.0, constraints.maxHeight - 40);
         final layout = _TopologyLayout.build(
           clusterSnapshot,
           canvasHeight: canvasHeight,
         );
 
-        return Padding(
-          padding: const EdgeInsets.all(20),
-          child: isWide
-              ? Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(
-                      flex: 10,
-                      child: _TopologyWorkspace(
-                        snapshot: clusterSnapshot,
-                        layout: layout,
-                        canvasHeight: canvasHeight,
-                        palette: palette,
-                      ),
-                    ),
-                    const SizedBox(width: 20),
-                    SizedBox(
-                      width: 312,
-                      child: _TopologySidebar(
-                        snapshot: clusterSnapshot,
-                        palette: palette,
-                      ),
-                    ),
-                  ],
-                )
-              : Column(
-                  children: [
-                    Expanded(
-                      child: _TopologyWorkspace(
-                        snapshot: clusterSnapshot,
-                        layout: layout,
-                        canvasHeight: canvasHeight,
-                        palette: palette,
-                      ),
-                    ),
-                  ],
-                ),
+        final workspace = _TopologyWorkspace(
+          snapshot: clusterSnapshot,
+          layout: layout,
+          canvasHeight: canvasHeight,
+          palette: palette,
+          selectedEntity: _selectedEntity,
+          onEntityTap: _onEntityTap,
+          onDismiss: _clearSelection,
+          showPortraitPanel: !isWide && !isLandscape,
         );
+
+        if (isWide) {
+          return Padding(
+            padding: const EdgeInsets.all(20),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  flex: 10,
+                  child: workspace,
+                ),
+                const SizedBox(width: 20),
+                SizedBox(
+                  width: 312,
+                  child: _TopologySidebar(
+                    snapshot: clusterSnapshot,
+                    palette: palette,
+                    selectedEntity: _selectedEntity,
+                    onDismiss: _clearSelection,
+                  ),
+                ),
+              ],
+            ),
+          );
+        } else if (isLandscape) {
+          return Padding(
+            padding: const EdgeInsets.all(20),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(child: workspace),
+                AnimatedSize(
+                  duration: const Duration(milliseconds: 250),
+                  curve: Curves.easeInOut,
+                  child: _selectedEntity != null
+                      ? SizedBox(
+                          width: 260,
+                          child: Padding(
+                            padding: const EdgeInsets.only(left: 16),
+                            child: _EntityDetailPanel(
+                              entity: _selectedEntity!,
+                              palette: palette,
+                              onDismiss: _clearSelection,
+                            ),
+                          ),
+                        )
+                      : const SizedBox.shrink(),
+                ),
+              ],
+            ),
+          );
+        } else {
+          // Phone portrait: panel rendered inside _TopologyWorkspace's Stack
+          return Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              children: [Expanded(child: workspace)],
+            ),
+          );
+        }
       },
     );
   }
@@ -113,12 +164,20 @@ class _TopologyWorkspace extends StatelessWidget {
     required this.layout,
     required this.canvasHeight,
     required this.palette,
+    required this.selectedEntity,
+    required this.onEntityTap,
+    required this.onDismiss,
+    required this.showPortraitPanel,
   });
 
   final ClusterSnapshot snapshot;
   final _TopologyLayout layout;
   final double canvasHeight;
   final ClusterOrbitPalette palette;
+  final Object? selectedEntity;
+  final void Function(Object) onEntityTap;
+  final VoidCallback onDismiss;
+  final bool showPortraitPanel;
 
   @override
   Widget build(BuildContext context) {
@@ -298,11 +357,15 @@ class _TopologySidebar extends StatelessWidget {
   const _TopologySidebar({
     required this.snapshot,
     required this.palette,
+    required this.selectedEntity,
+    required this.onDismiss,
     this.compact = false,
   });
 
   final ClusterSnapshot snapshot;
   final ClusterOrbitPalette palette;
+  final Object? selectedEntity;
+  final VoidCallback onDismiss;
   final bool compact;
 
   @override
@@ -1078,4 +1141,22 @@ class _TopologyEdge {
 
   final Offset start;
   final Offset end;
+}
+
+class _EntityDetailPanel extends StatelessWidget {
+  const _EntityDetailPanel({
+    required this.entity,
+    required this.palette,
+    required this.onDismiss,
+  });
+
+  final Object entity;
+  final ClusterOrbitPalette palette;
+  final VoidCallback onDismiss;
+
+  @override
+  Widget build(BuildContext context) {
+    // Stub — content implemented in Task 4
+    return const SizedBox.shrink();
+  }
 }
