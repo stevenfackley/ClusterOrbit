@@ -20,15 +20,26 @@ Implemented so far:
   - fetch read-only data from the Kubernetes API
   - build a `ClusterSnapshot` from live cluster resources
 - `GatewayClusterConnection` still uses sample data and is intentionally a stub.
-- The topology screen is no longer a static placeholder. It now renders an interactive map-like workspace using `InteractiveViewer`, with compact node/workload/service cards and painted links.
+- The topology screen renders an interactive map-like workspace using `InteractiveViewer`, with compact node/workload/service cards and painted links.
+- Entity selection and detail drill-down is implemented:
+  - Tap any node/workload/service card on the map to select it.
+  - Tablet: detail panel appears in the right sidebar column (scrollable, max 320px).
+  - Phone portrait: detail panel slides up from the bottom.
+  - Phone landscape: detail panel appears to the right with a scroll view.
+  - Dismiss via the × button or tap the same entity again.
+- Domain models enriched with additional K8s fields:
+  - `ClusterNode`: `cpuCapacity`, `memoryCapacity`, `osImage`
+  - `ClusterWorkload`: `images` (container image list)
+  - `ClusterService`: `clusterIp` (nullable; null for Ingress-type)
+- `KubernetesSnapshotLoader` extracts all new fields from the K8s API response.
+- `_EntityDetailPanel` surfaces all new fields in the detail view.
 
 Not implemented yet:
 
-- resource detail drill-down from the map
 - SQLite persistence and offline restore
 - mutation flows
 - real gateway backend integration
-- richer topology engine features like clustering, selection state, hit-testing, filtering, or layout levels of detail
+- richer topology engine features: clustering, filtering, viewport-aware LOD, pan/zoom state persistence, force-based layout
 
 ## Important Files
 
@@ -46,9 +57,9 @@ Not implemented yet:
 This file defines the contract the UI is currently built around:
 
 - `ClusterProfile`
-- `ClusterNode`
-- `ClusterWorkload`
-- `ClusterService`
+- `ClusterNode` (includes `cpuCapacity`, `memoryCapacity`, `osImage`)
+- `ClusterWorkload` (includes `images`)
+- `ClusterService` (includes `clusterIp`)
 - `ClusterAlert`
 - `TopologyLink`
 - `ClusterSnapshot`
@@ -75,6 +86,7 @@ Responsibilities:
   - calls the Kubernetes API
   - fetches nodes, pods, services, deployments, daemonsets, statefulsets, jobs, and replicasets
   - reduces them into the existing `ClusterSnapshot` model
+  - extracts `cpuCapacity`, `memoryCapacity`, `osImage`, `images`, `clusterIp`
 - `sample_cluster_data.dart`
   - still used as fallback and for tests
 
@@ -88,13 +100,15 @@ This file currently contains:
 - compact visual nodes for cluster entities
 - painted curved links
 - deterministic lane-based layout
-- sidebar panels for summary and alerts
+- sidebar panels for summary and alerts (tablet)
+- `_EntityDetailPanel` — the drill-down view showing entity fields
+- selection state in `_TopologyScreenState._selectedEntity`
 
 It is intentionally still self-contained. There is no reusable topology engine package yet.
 
 ## Tests
 
-The mobile suite is currently green with:
+The mobile suite is currently green (23 tests) with:
 
 ```powershell
 cd app/mobile
@@ -143,23 +157,18 @@ If it resolves a real context and the Kubernetes API call fails, the failure sho
 
 The current map is useful, but it is not yet the retained-scene topology engine described in `PROJECT_PLAN.md`.
 Layout is deterministic and lane-based, not force-based or hierarchical.
-There is no selection model, no filtering, no viewport-aware LOD, and no pan/zoom state persistence.
+There is no filtering, no viewport-aware LOD, and no pan/zoom state persistence.
 
-### 2. No entity drill-down yet
-
-The map renders entities, but taps do not open a detail pane or bottom sheet.
-This is the most obvious missing capability in the current UI.
-
-### 3. Gateway mode is still fake
+### 2. Gateway mode is still fake
 
 `GatewayClusterConnection` remains a scaffold returning sample-backed snapshots.
 No real auth/session/token/audit/gateway API flow exists yet.
 
-### 4. Local caching is not implemented
+### 3. Local caching is not implemented
 
 There is no SQLite snapshot store yet, despite the architecture and product docs assuming it.
 
-### 5. Some docs are stale
+### 4. Some docs are stale
 
 At least one top-level doc is out of date:
 
@@ -169,37 +178,31 @@ Treat the current code and test results as authoritative over that note.
 
 ## Recommended Next Task
 
-Best next task:
-
-- add entity selection and drill-down from the topology map
+Best next task: **SQLite snapshot caching**
 
 Concrete shape:
 
-1. Add tap handling on node/workload/service cards in `topology_screen.dart`.
-2. Introduce selected-entity state in the topology feature.
-3. Render a detail panel on tablet and a bottom sheet on phone.
-4. Start with read-only fields already available in `ClusterSnapshot` plus basic metadata exposed from the live loader.
+1. Add `drift` (or `sqflite`) as a dependency in `app/mobile/pubspec.yaml`.
+2. Create `app/mobile/lib/core/sync_cache/` with:
+   - a `SnapshotStore` that persists and retrieves `ClusterSnapshot` by profile ID
+   - a schema with a `snapshots` table: `(id TEXT PRIMARY KEY, profile_id TEXT, generated_at INTEGER, payload TEXT)`
+   - serialization: encode `ClusterSnapshot` to/from JSON
+3. Wire `OrbitShell` to: load cached snapshot immediately on startup, then refresh from cluster in the background and update.
+4. Test: unit tests for the store (insert, fetch, stale detection).
 
 Why this next:
 
-- the current map already shows real entities
-- drill-down is the shortest path to making the map operationally useful
-- it builds directly toward the product goal of inspection-first workflows
+- The map and detail drill-down are now the primary value. Caching makes them available offline and makes cold-start instant.
+- The architecture doc explicitly calls for SQLite — this closes the biggest gap between current state and the described design.
+- It requires no UI changes; it slots in below `OrbitShell`.
 
 ## Second-Best Next Task
 
-If you do not want to touch the UI state model next, the other strong option is:
+Add per-entity event stream in the detail panel:
 
-- add a lightweight resource detail adapter for real Kubernetes objects
-
-That would mean extending the direct connection layer with methods like:
-
-- get node by name
-- get service by namespace/name
-- get workload controller by namespace/name/kind
-- fetch events or logs later
-
-This can then power the future drill-down panels cleanly.
+- Fetch `GET /api/v1/namespaces/{ns}/events?fieldSelector=involvedObject.name={name}` for the selected entity.
+- Show the last 5 events in `_EntityDetailPanel` below the existing field rows.
+- This makes the detail panel operationally useful, not just informational.
 
 ## Suggested Implementation Boundaries
 
@@ -211,17 +214,6 @@ If continuing from here, keep these boundaries intact:
 - Avoid pushing more orchestration into `OrbitShell`; it should remain a shell/bootstrap layer.
 - Avoid making widget tests depend on real machine state.
 
-## Repo State Notes
-
-At the time of writing, there are local changes in the mobile app and new untracked files under:
-
-- `app/mobile/lib/core/cluster_domain`
-- `app/mobile/lib/core/connectivity`
-- `app/mobile/test`
-
-Do not assume everything is committed.
-Read the current worktree before rebasing, reorganizing files, or trying to infer history.
-
 ## Quick Resume Checklist
 
 If you are Claude resuming this work:
@@ -231,5 +223,4 @@ If you are Claude resuming this work:
 3. Read [app/mobile/lib/features/topology/topology_screen.dart](C:/Users/steve/projects/ClusterOrbit/app/mobile/lib/features/topology/topology_screen.dart).
 4. Read the connectivity files under [app/mobile/lib/core/connectivity](C:/Users/steve/projects/ClusterOrbit/app/mobile/lib/core/connectivity).
 5. Run `flutter test` in `app/mobile`.
-6. Implement map entity selection and a read-only detail surface.
-
+6. Implement the recommended next task above.
