@@ -390,27 +390,17 @@ class _TopologySidebar extends StatelessWidget {
     required this.palette,
     required this.selectedEntity,
     required this.onDismiss,
-    this.compact = false,
   });
 
   final ClusterSnapshot snapshot;
   final ClusterOrbitPalette palette;
   final Object? selectedEntity;
   final VoidCallback onDismiss;
-  final bool compact;
 
   @override
   Widget build(BuildContext context) {
-    final alerts = snapshot.alerts.take(compact ? 2 : 4).toList();
-    return compact
-        ? Row(
-            children: [
-              Expanded(child: _InsightPanel(snapshot: snapshot)),
-              const SizedBox(width: 16),
-              Expanded(child: _AlertPanel(alerts: alerts)),
-            ],
-          )
-        : Column(
+    final alerts = snapshot.alerts.take(4).toList();
+    return Column(
             children: [
               _InsightPanel(snapshot: snapshot),
               const SizedBox(height: 16),
@@ -866,7 +856,7 @@ class _LegendCard extends StatelessWidget {
             const SizedBox(height: 10),
             _LegendRow(label: 'Healthy', color: palette.accentTeal),
             _LegendRow(label: 'Warning', color: palette.warning),
-            _LegendRow(label: 'Critical', color: const Color(0xFFFF6F7A)),
+            const _LegendRow(label: 'Critical', color: Color(0xFFFF6F7A)),
           ],
         ),
       ),
