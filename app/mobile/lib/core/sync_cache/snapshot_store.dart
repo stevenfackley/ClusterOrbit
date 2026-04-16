@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:path/path.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
@@ -20,6 +21,9 @@ final class SqfliteSnapshotStore implements SnapshotStore {
   Future<Database>? _dbFuture;
 
   Future<Database> get _db => _dbFuture ??= _openDb();
+
+  @visibleForTesting
+  Future<Database> get dbForTest => _db;
 
   Future<Database> _openDb() async {
     final path = dbPath ??
@@ -52,10 +56,17 @@ final class SqfliteSnapshotStore implements SnapshotStore {
   Future<List<ClusterProfile>> loadProfiles() async {
     final db = await _db;
     final rows = await db.query('cluster_profiles');
-    return rows.map((row) {
-      final map = jsonDecode(row['payload'] as String) as Map<String, dynamic>;
-      return ClusterProfile.fromJson(map);
-    }).toList();
+    final profiles = <ClusterProfile>[];
+    for (final row in rows) {
+      try {
+        final map =
+            jsonDecode(row['payload'] as String) as Map<String, dynamic>;
+        profiles.add(ClusterProfile.fromJson(map));
+      } catch (_) {
+        // Corrupt payload — treat as missing, skip this row.
+      }
+    }
+    return profiles;
   }
 
   @override

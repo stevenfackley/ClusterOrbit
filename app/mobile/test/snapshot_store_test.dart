@@ -15,6 +15,11 @@ void main() {
     store = SqfliteSnapshotStore(dbPath: inMemoryDatabasePath);
   });
 
+  tearDown(() async {
+    final db = await store.dbForTest;
+    await db.close();
+  });
+
   const profile = ClusterProfile(
     id: 'p1',
     name: 'Test Cluster',
@@ -73,6 +78,20 @@ void main() {
       await store.saveProfiles([profile, p2]);
       final loaded = await store.loadProfiles();
       expect(loaded.length, 2);
+    });
+
+    test('loadProfiles skips corrupted payload row', () async {
+      // Write a valid profile first via the public API.
+      await store.saveProfiles([profile]);
+      // Corrupt the payload directly in the DB.
+      final db = await store.dbForTest;
+      final count = await db.rawUpdate(
+        "UPDATE cluster_profiles SET payload = 'not-valid-json' WHERE id = 'p1'",
+      );
+      expect(count, 1, reason: 'update should have modified exactly one row');
+      // loadProfiles should skip the corrupted row and return empty.
+      final loaded = await store.loadProfiles();
+      expect(loaded, isEmpty);
     });
   });
 
