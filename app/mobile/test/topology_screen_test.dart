@@ -9,7 +9,7 @@ void main() {
     await pumpClusterOrbitApp(tester, size: const Size(1280, 900));
 
     expect(find.byType(InteractiveViewer), findsOneWidget);
-    expect(find.text('Cluster Map'), findsWidgets);
+    expect(find.text('Cluster Map'), findsNWidgets(3));
     expect(find.text('Map status'), findsOneWidget);
     expect(find.text('Legend'), findsOneWidget);
     expect(find.text('Direct mode'), findsOneWidget);
