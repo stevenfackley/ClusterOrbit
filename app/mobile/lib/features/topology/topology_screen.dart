@@ -409,7 +409,31 @@ class _TopologySidebar extends StatelessWidget {
             children: [
               _InsightPanel(snapshot: snapshot),
               const SizedBox(height: 16),
-              Expanded(child: _AlertPanel(alerts: alerts)),
+              Expanded(
+                child: Column(
+                  children: [
+                    Expanded(child: _AlertPanel(alerts: alerts)),
+                    AnimatedSize(
+                      duration: const Duration(milliseconds: 250),
+                      curve: Curves.easeInOut,
+                      child: selectedEntity != null
+                          ? Padding(
+                              padding: const EdgeInsets.only(top: 16),
+                              child: ConstrainedBox(
+                                constraints:
+                                    const BoxConstraints(maxHeight: 320),
+                                child: _EntityDetailPanel(
+                                  entity: selectedEntity!,
+                                  palette: palette,
+                                  onDismiss: onDismiss,
+                                ),
+                              ),
+                            )
+                          : const SizedBox.shrink(),
+                    ),
+                  ],
+                ),
+              ),
             ],
           );
   }
@@ -471,6 +495,8 @@ class _AlertPanel extends StatelessWidget {
             Text(
               'The canvas stays read-only for now, so this rail is the fast path to what needs attention.',
               style: theme.textTheme.bodyMedium,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
             ),
             const SizedBox(height: 16),
             Expanded(

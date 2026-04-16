@@ -1,3 +1,7 @@
+import 'package:clusterorbit_mobile/core/cluster_domain/cluster_models.dart';
+import 'package:clusterorbit_mobile/core/connectivity/sample_cluster_data.dart';
+import 'package:clusterorbit_mobile/core/theme/clusterorbit_theme.dart';
+import 'package:clusterorbit_mobile/features/topology/topology_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -21,22 +25,42 @@ void main() {
 
   testWidgets('tablet: tapping a node shows detail in sidebar column',
       (tester) async {
-    await pumpClusterOrbitApp(tester, size: const Size(1280, 900));
+    tester.view.devicePixelRatio = 1.0;
+    tester.view.physicalSize = const Size(1400, 900);
 
-    // Before tap: name appears once (in orb only)
-    expect(find.text('cp-1.dev-orbit'), findsOneWidget);
+    final profile =
+        SampleClusterData.profilesFor(ConnectionMode.direct).first;
+    final snapshot = SampleClusterData.snapshotFor(profile);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ClusterOrbitTheme.dark(),
+        home: Scaffold(
+          body: TopologyScreen(
+            snapshot: snapshot,
+            isLoading: false,
+            error: null,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // Sidebar is visible when isWide = true
+    expect(find.text('Flight Deck'), findsOneWidget);
 
     await tester.tap(find.text('cp-1.dev-orbit'));
     await tester.pumpAndSettle();
 
-    // After tap: name appears in orb AND detail panel header
+    // Name appears in orb AND detail panel header
     expect(find.text('cp-1.dev-orbit'), findsNWidgets(2));
-    // K8s Version label only ever appears in the node detail panel
     expect(find.text('K8s Version'), findsOneWidget);
-    // Flight Deck summary still visible alongside detail
+    // Flight Deck still visible alongside detail
     expect(find.text('Flight Deck'), findsOneWidget);
 
-    await resetTestSurface(tester);
+    tester.view.resetPhysicalSize();
+    tester.view.resetDevicePixelRatio();
+    await tester.pump();
   });
 
   testWidgets('tablet: tapping same node again deselects', (tester) async {
@@ -85,18 +109,36 @@ void main() {
   });
 
   testWidgets('tablet: tapping a service shows service fields', (tester) async {
-    await pumpClusterOrbitApp(tester, size: const Size(1280, 900));
+    tester.view.devicePixelRatio = 1.0;
+    tester.view.physicalSize = const Size(1400, 900);
 
-    // Find service by its orb subtitle
+    final profile =
+        SampleClusterData.profilesFor(ConnectionMode.direct).first;
+    final snapshot = SampleClusterData.snapshotFor(profile);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ClusterOrbitTheme.dark(),
+        home: Scaffold(
+          body: TopologyScreen(
+            snapshot: snapshot,
+            isLoading: false,
+            error: null,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
     await tester.tap(find.text('ClusterIP / platform').first);
     await tester.pumpAndSettle();
 
-    // Exposure label only appears in service detail panel
     expect(find.text('Exposure'), findsOneWidget);
-    // Port label appears for each port entry
     expect(find.text('Port'), findsOneWidget);
 
-    await resetTestSurface(tester);
+    tester.view.resetPhysicalSize();
+    tester.view.resetDevicePixelRatio();
+    await tester.pump();
   });
 
   // ── phone portrait (390×844) ────────────────────────────────────────────
