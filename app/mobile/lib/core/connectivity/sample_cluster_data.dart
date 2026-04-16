@@ -138,7 +138,7 @@ final class SampleClusterData {
       },
     );
 
-    final alerts = const [
+    const alerts = [
       ClusterAlert(
         id: 'alert-1',
         title: 'Node drain in progress',

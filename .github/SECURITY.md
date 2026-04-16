@@ -6,7 +6,7 @@ Please do not open public issues for suspected security problems.
 
 Report vulnerabilities to:
 
-- stevenfackley@gmail.com
+- `stevenfackley@gmail.com`
 
 Include:
 
