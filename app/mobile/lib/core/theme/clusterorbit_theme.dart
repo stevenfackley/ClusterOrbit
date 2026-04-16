@@ -123,7 +123,8 @@ class ClusterOrbitPalette extends ThemeExtension<ClusterOrbitPalette> {
   }
 
   @override
-  ClusterOrbitPalette lerp(ThemeExtension<ClusterOrbitPalette>? other, double t) {
+  ClusterOrbitPalette lerp(
+      ThemeExtension<ClusterOrbitPalette>? other, double t) {
     if (other is! ClusterOrbitPalette) {
       return this;
     }

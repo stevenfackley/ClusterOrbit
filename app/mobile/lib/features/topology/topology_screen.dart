@@ -1239,13 +1239,13 @@ class _EntityDetailPanel extends StatelessWidget {
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: palette.panel.withValues(alpha: 0.96),
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+        borderRadius: BorderRadius.circular(20),
         border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.40),
             blurRadius: 24,
-            offset: const Offset(0, -4),
+            offset: const Offset(0, 2),
           ),
         ],
       ),

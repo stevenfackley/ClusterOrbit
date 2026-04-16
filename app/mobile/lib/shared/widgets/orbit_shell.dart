@@ -1,14 +1,22 @@
 import 'package:flutter/material.dart';
 
+import '../../core/cluster_domain/cluster_models.dart';
+import '../../core/connectivity/cluster_connection.dart';
+import '../../core/connectivity/cluster_connection_factory.dart';
+import '../../core/theme/clusterorbit_theme.dart';
 import '../../features/alerts/alerts_screen.dart';
 import '../../features/changes/changes_screen.dart';
 import '../../features/resources/resources_screen.dart';
 import '../../features/settings/settings_screen.dart';
 import '../../features/topology/topology_screen.dart';
-import '../../core/theme/clusterorbit_theme.dart';
 
 class OrbitShell extends StatefulWidget {
-  const OrbitShell({super.key});
+  const OrbitShell({
+    super.key,
+    this.connection,
+  });
+
+  final ClusterConnection? connection;
 
   @override
   State<OrbitShell> createState() => _OrbitShellState();
@@ -16,29 +24,133 @@ class OrbitShell extends StatefulWidget {
 
 class _OrbitShellState extends State<OrbitShell> {
   int _index = 0;
+  late final ClusterConnection _connection;
+  List<ClusterProfile> _clusters = const [];
+  ClusterProfile? _selectedCluster;
+  ClusterSnapshot? _snapshot;
+  Object? _loadError;
+  bool _isLoading = true;
 
   static const _destinations = [
     NavigationDestination(icon: Icon(Icons.blur_on_outlined), label: 'Map'),
-    NavigationDestination(icon: Icon(Icons.inventory_2_outlined), label: 'Resources'),
-    NavigationDestination(icon: Icon(Icons.alt_route_outlined), label: 'Changes'),
-    NavigationDestination(icon: Icon(Icons.warning_amber_outlined), label: 'Alerts'),
-    NavigationDestination(icon: Icon(Icons.settings_outlined), label: 'Settings'),
+    NavigationDestination(
+      icon: Icon(Icons.inventory_2_outlined),
+      label: 'Resources',
+    ),
+    NavigationDestination(
+        icon: Icon(Icons.alt_route_outlined), label: 'Changes'),
+    NavigationDestination(
+      icon: Icon(Icons.warning_amber_outlined),
+      label: 'Alerts',
+    ),
+    NavigationDestination(
+        icon: Icon(Icons.settings_outlined), label: 'Settings'),
   ];
 
-  static const _titles = ['Cluster Map', 'Resources', 'Changes', 'Alerts', 'Settings'];
-
-  final List<Widget> _screens = const [
-    TopologyScreen(),
-    ResourcesScreen(),
-    ChangesScreen(),
-    AlertsScreen(),
-    SettingsScreen(),
+  static const _titles = [
+    'Cluster Map',
+    'Resources',
+    'Changes',
+    'Alerts',
+    'Settings',
   ];
+
+  @override
+  void initState() {
+    super.initState();
+    _connection =
+        widget.connection ?? ClusterConnectionFactory.fromEnvironment();
+    _bootstrap();
+  }
+
+  Future<void> _bootstrap() async {
+    try {
+      final clusters = await _connection.listClusters();
+      final selectedCluster = clusters.first;
+      final snapshot = await _connection.loadSnapshot(selectedCluster.id);
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _clusters = clusters;
+        _selectedCluster = selectedCluster;
+        _snapshot = snapshot;
+        _loadError = null;
+        _isLoading = false;
+      });
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _loadError = error;
+        _isLoading = false;
+      });
+    }
+  }
+
+  Future<void> _cycleCluster() async {
+    if (_clusters.length < 2 || _isLoading || _selectedCluster == null) {
+      return;
+    }
+
+    final currentIndex = _clusters.indexOf(_selectedCluster!);
+    final nextCluster = _clusters[(currentIndex + 1) % _clusters.length];
+
+    setState(() {
+      _isLoading = true;
+      _selectedCluster = nextCluster;
+    });
+
+    try {
+      final snapshot = await _connection.loadSnapshot(nextCluster.id);
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _snapshot = snapshot;
+        _loadError = null;
+        _isLoading = false;
+      });
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _loadError = error;
+        _isLoading = false;
+      });
+    }
+  }
+
+  List<Widget> _buildScreens() {
+    return [
+      TopologyScreen(
+        snapshot: _snapshot,
+        isLoading: _isLoading,
+        error: _loadError,
+      ),
+      const ResourcesScreen(),
+      const ChangesScreen(),
+      const AlertsScreen(),
+      const SettingsScreen(),
+    ];
+  }
 
   @override
   Widget build(BuildContext context) {
     final isTablet = MediaQuery.sizeOf(context).width >= 960;
     final palette = Theme.of(context).extension<ClusterOrbitPalette>()!;
+    final screens = _buildScreens();
+    final subtitle = _selectedCluster == null
+        ? 'Preparing ${_connection.mode.label.toLowerCase()} connection'
+        : '${_selectedCluster!.apiServerHost} / ${_selectedCluster!.environmentLabel}';
 
     return Scaffold(
       appBar: AppBar(
@@ -47,7 +159,7 @@ class _OrbitShellState extends State<OrbitShell> {
           children: [
             Text(_titles[_index]),
             Text(
-              'clusterorbit.local / dev profile',
+              subtitle,
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
                     color: Colors.white.withValues(alpha: 0.68),
                   ),
@@ -56,7 +168,7 @@ class _OrbitShellState extends State<OrbitShell> {
         ),
         actions: [
           TextButton.icon(
-            onPressed: () {},
+            onPressed: _clusters.isEmpty ? null : _cycleCluster,
             icon: const Icon(Icons.hub_outlined),
             label: const Text('Switch Cluster'),
           ),
@@ -76,7 +188,8 @@ class _OrbitShellState extends State<OrbitShell> {
         ),
         child: SafeArea(
           top: false,
-          child: isTablet ? _buildTabletLayout(context) : _screens[_index],
+          child:
+              isTablet ? _buildTabletLayout(context, screens) : screens[_index],
         ),
       ),
       bottomNavigationBar: isTablet
@@ -89,7 +202,7 @@ class _OrbitShellState extends State<OrbitShell> {
     );
   }
 
-  Widget _buildTabletLayout(BuildContext context) {
+  Widget _buildTabletLayout(BuildContext context, List<Widget> screens) {
     return Row(
       children: [
         SizedBox(
@@ -97,13 +210,19 @@ class _OrbitShellState extends State<OrbitShell> {
           child: _SideRail(
             selectedIndex: _index,
             titles: _titles,
+            clusterCount: _clusters.length,
+            nodeCount: _snapshot?.nodes.length ?? 0,
+            alertCount: _snapshot?.alerts.length ?? 0,
             onChanged: (value) => setState(() => _index = value),
           ),
         ),
-        Expanded(child: _screens[_index]),
-        const SizedBox(
+        Expanded(child: screens[_index]),
+        SizedBox(
           width: 360,
-          child: _InspectorPanel(),
+          child: _InspectorPanel(
+            snapshot: _snapshot,
+            isLoading: _isLoading,
+          ),
         ),
       ],
     );
@@ -114,11 +233,17 @@ class _SideRail extends StatelessWidget {
   const _SideRail({
     required this.selectedIndex,
     required this.titles,
+    required this.clusterCount,
+    required this.nodeCount,
+    required this.alertCount,
     required this.onChanged,
   });
 
   final int selectedIndex;
   final List<String> titles;
+  final int clusterCount;
+  final int nodeCount;
+  final int alertCount;
   final ValueChanged<int> onChanged;
 
   @override
@@ -155,13 +280,13 @@ class _SideRail extends StatelessWidget {
                   ),
                 ),
               const Spacer(),
-              const Wrap(
+              Wrap(
                 spacing: 8,
                 runSpacing: 8,
                 children: [
-                  Chip(label: Text('3 clusters')),
-                  Chip(label: Text('42 nodes')),
-                  Chip(label: Text('5 alerts')),
+                  Chip(label: Text('$clusterCount clusters')),
+                  Chip(label: Text('$nodeCount nodes')),
+                  Chip(label: Text('$alertCount alerts')),
                 ],
               ),
             ],
@@ -173,11 +298,21 @@ class _SideRail extends StatelessWidget {
 }
 
 class _InspectorPanel extends StatelessWidget {
-  const _InspectorPanel();
+  const _InspectorPanel({
+    required this.snapshot,
+    required this.isLoading,
+  });
+
+  final ClusterSnapshot? snapshot;
+  final bool isLoading;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final controlPlanes = snapshot?.controlPlaneCount ?? 0;
+    final workers = snapshot?.workerCount ?? 0;
+    final unschedulable = snapshot?.unschedulableNodeCount ?? 0;
+
     return Padding(
       padding: const EdgeInsets.fromLTRB(0, 20, 20, 20),
       child: Card(
@@ -189,13 +324,15 @@ class _InspectorPanel extends StatelessWidget {
               Text('Inspector', style: theme.textTheme.titleLarge),
               const SizedBox(height: 12),
               Text(
-                'This panel is reserved for node details, config diffs, logs, and guarded actions on tablet layouts.',
+                isLoading
+                    ? 'Loading snapshot details for the selected cluster.'
+                    : 'This panel is reserved for node details, config diffs, logs, and guarded actions on tablet layouts.',
                 style: theme.textTheme.bodyMedium,
               ),
               const SizedBox(height: 20),
-              const _MetricTile(label: 'Control planes', value: '3'),
-              const _MetricTile(label: 'Workers', value: '39'),
-              const _MetricTile(label: 'Unschedulable', value: '1'),
+              _MetricTile(label: 'Control planes', value: '$controlPlanes'),
+              _MetricTile(label: 'Workers', value: '$workers'),
+              _MetricTile(label: 'Unschedulable', value: '$unschedulable'),
               const Spacer(),
               FilledButton.icon(
                 onPressed: () {},
