@@ -51,7 +51,7 @@ flutter pub get
 flutter run
 
 # gateway
-cd ../gateway
+cd ../..
 go test ./...
 ```
 

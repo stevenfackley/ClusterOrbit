@@ -16,7 +16,7 @@ Copy-Item .env.example .env
 flutter pub get
 flutter run
 
-cd ../gateway
+cd ../..
 go test ./...
 ```
 
