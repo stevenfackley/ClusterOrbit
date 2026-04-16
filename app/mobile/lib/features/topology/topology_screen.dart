@@ -1244,28 +1244,26 @@ class _EntityDetailPanel extends StatelessWidget {
           ),
         ],
       ),
-      child: SingleChildScrollView(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Row(
-              children: [
-                Expanded(child: _buildTitle(theme)),
-                IconButton(
-                  onPressed: onDismiss,
-                  icon:
-                      const Icon(Icons.close, size: 18, color: Colors.white),
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(),
-                  tooltip: 'Dismiss',
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            ..._buildFields(theme),
-          ],
-        ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              Expanded(child: _buildTitle(theme)),
+              IconButton(
+                onPressed: onDismiss,
+                icon:
+                    const Icon(Icons.close, size: 18, color: Colors.white),
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
+                tooltip: 'Dismiss',
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          ..._buildFields(theme),
+        ],
       ),
     );
   }
@@ -1287,18 +1285,15 @@ class _EntityDetailPanel extends StatelessWidget {
           ),
         ),
         const SizedBox(width: 8),
-        Flexible(
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-            decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.08),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Text(
-              badge,
-              style: theme.textTheme.bodySmall?.copyWith(color: Colors.white70),
-              overflow: TextOverflow.ellipsis,
-            ),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.08),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Text(
+            badge,
+            style: theme.textTheme.bodySmall?.copyWith(color: Colors.white70),
           ),
         ),
       ],
@@ -1433,9 +1428,12 @@ class _DetailStatusRow extends StatelessWidget {
           ),
           _StatusDot(color: tint),
           const SizedBox(width: 6),
-          Text(
-            value,
-            style: theme.textTheme.bodySmall?.copyWith(color: tint),
+          Expanded(
+            child: Text(
+              value,
+              style: theme.textTheme.bodySmall?.copyWith(color: tint),
+              overflow: TextOverflow.ellipsis,
+            ),
           ),
         ],
       ),
