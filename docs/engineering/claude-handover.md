@@ -35,6 +35,11 @@ Implemented so far:
   - Two-table schema: `cluster_profiles` + `cluster_snapshots`
   - Cache-first bootstrap: shows cached data instantly, refreshes live in background
   - All 8 domain model classes have `toJson()` / `fromJson()` for serialization
+- **Per-entity event stream** — `lib/core/connectivity/kubernetes_event_loader.dart`:
+  - `loadEvents` on `ClusterConnection` (Direct / Gateway / Test impls)
+  - Namespaced for workloads/services, cluster-scoped for nodes
+  - `fieldSelector=involvedObject.name={name}`, newest-first, default limit 5
+  - Rendered as a "Recent Events" section in the entity detail panel
 
 ## Important Files
 
@@ -75,6 +80,7 @@ Key implementation details:
 - `app/mobile/lib/core/connectivity/cluster_connection_factory.dart`
 - `app/mobile/lib/core/connectivity/kubeconfig_repository.dart`
 - `app/mobile/lib/core/connectivity/kubernetes_snapshot_loader.dart`
+- `app/mobile/lib/core/connectivity/kubernetes_event_loader.dart`
 - `app/mobile/lib/core/connectivity/sample_cluster_data.dart`
 
 ### Topology UI
@@ -86,7 +92,7 @@ Self-contained. Contains the interactive map, entity cards, painted links, lane 
 
 ## Tests
 
-**51 tests, all passing.** Run with:
+**60 tests, all passing.** Run with:
 
 ```bash
 cd app/mobile
@@ -99,7 +105,9 @@ Test files:
   exhaustive enum coverage (`WorkloadKind`, `ServiceExposure`, `TopologyEntityKind`, etc.)
 - `test/snapshot_store_test.dart` — 10 tests: empty load, save/load, upsert, multi-profile,
   empty `saveProfiles` no-op, corrupted payload for profiles and snapshots
-- `test/topology_screen_test.dart` — entity selection, detail panel, dismiss
+- `test/topology_screen_test.dart` — entity selection, detail panel, dismiss, event stream render
+- `test/kubernetes_event_loader_test.dart` — 5 tests: namespaced vs cluster-scoped URL, sort and
+  truncation, malformed skip, empty response
 - `test/orbit_shell_phone_test.dart`, `test/orbit_shell_tablet_test.dart`
 - `test/clusterorbit_app_test.dart`, `test/cluster_connection_factory_test.dart`,
   `test/kubernetes_snapshot_loader_test.dart`
@@ -136,39 +144,30 @@ revisit if users need freshness feedback.
 **`sqlite3_flutter_libs` in `dev_dependencies`.** Sqflite bundles its own sqlite3 for
 Android/iOS, so this is correct for mobile. Move to `dependencies` if desktop is added.
 
-**DateTime UTC flag.** `toJson` stores epoch ms (timezone-agnostic). `fromJson` restores with
-`isUtc: true`. Numerically correct. Fix: use `DateTime.now().toUtc()` in
-`kubernetes_snapshot_loader.dart` for `generatedAt` to keep flags consistent throughout.
-
 **Gateway mode is fake.** `GatewayClusterConnection` returns sample data. No real auth or
-gateway API flow.
+gateway API flow. `GatewayClusterConnection.loadEvents` also returns sample events.
 
 **Topology is a view, not an engine.** No force layout, no LOD, no filter, no viewport
 persistence.
 
 ## Recommended Next Tasks
 
-1. **Merge this branch** — all tests pass, format and analyze clean, CI Docs Check fixed.
-
-2. **Fix DateTime UTC consistency** — use `DateTime.now().toUtc()` in
-   `kubernetes_snapshot_loader.dart` when setting `generatedAt`. Low-priority cleanup.
-
-3. **Cache TTL / staleness** — `cached_at` column exists but is never read. Add a TTL check
+1. **Cache TTL / staleness** — `cached_at` column exists but is never read. Add a TTL check
    in `_bootstrap()` to decide whether cached data is worth showing before the live fetch.
 
-4. **Cluster switcher UI polish** — `_cycleCluster` shows cached data immediately but gives
+2. **Cluster switcher UI polish** — `_cycleCluster` shows cached data immediately but gives
    no indication a live refresh is running. A subtle "Refreshing…" badge in the app bar would
    help.
 
-5. **Resources / Changes / Alerts screens** — still placeholder screens. The domain model is
+3. **Resources / Changes / Alerts screens** — still placeholder screens. The domain model is
    now fully serialised; these screens have everything they need.
 
-6. **Event stream in detail panel** — fetch
-   `GET /api/v1/namespaces/{ns}/events?fieldSelector=involvedObject.name={name}` for the
-   selected entity and show last 5 events in `_EntityDetailPanel`. High operational value.
+4. **Event stream polling / refresh** — `_EntityDetailPanel` fetches once on selection. Add a
+   pull-to-refresh or periodic auto-refresh (e.g. every 30s while selected) for live-ish feel.
+   Consider caching events per entity in `SnapshotStore` so panel opens instantly on re-select.
 
-7. **Real gateway backend** — `GatewayClusterConnection` and `app/gateway/main.go` are both
-   stubs.
+5. **Real gateway backend** — `GatewayClusterConnection` and `app/gateway/main.go` are both
+   stubs. Gateway must also implement `loadEvents`.
 
 ## Architecture Reminder
 
