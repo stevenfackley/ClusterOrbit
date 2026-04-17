@@ -5,9 +5,7 @@ import '../../core/cluster_domain/saved_connection.dart';
 /// First-run landing. Shown whenever [SavedConnectionStore] is empty.
 ///
 /// The goal is explicit intent: the user must pick how to connect rather
-/// than silently getting sample data. This minimal version offers "Use
-/// sample data" as a one-tap choice; task #18 will add the real Gateway
-/// URL / token form and a paste-kubeconfig path.
+/// than silently getting sample data.
 class OnboardingScreen extends StatelessWidget {
   const OnboardingScreen({super.key, required this.onAddConnection});
 
@@ -46,13 +44,13 @@ class OnboardingScreen extends StatelessWidget {
                     onPressed: _addSample,
                   ),
                   const SizedBox(height: 12),
-                  const _OptionCard(
+                  _OptionCard(
                     icon: Icons.cloud_outlined,
                     title: 'Connect to a Gateway',
                     subtitle:
-                        'Point at a ClusterOrbit gateway URL with a shared token. Coming next.',
+                        'Point at a ClusterOrbit gateway URL with a shared token.',
                     actionLabel: 'Add gateway',
-                    onPressed: null,
+                    onPressed: () => _openGatewayForm(context),
                   ),
                 ],
               ),
@@ -69,6 +67,15 @@ class OnboardingScreen extends StatelessWidget {
         id: 'sample-${DateTime.now().millisecondsSinceEpoch}',
         displayName: 'Sample data',
         kind: SavedConnectionKind.sample,
+      ),
+    );
+  }
+
+  void _openGatewayForm(BuildContext context) {
+    Navigator.push<void>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => AddGatewayScreen(onAddConnection: onAddConnection),
       ),
     );
   }
@@ -112,6 +119,138 @@ class _OptionCard extends StatelessWidget {
             const SizedBox(width: 12),
             FilledButton(onPressed: onPressed, child: Text(actionLabel)),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Form screen for adding a Gateway connection.
+class AddGatewayScreen extends StatefulWidget {
+  const AddGatewayScreen({super.key, required this.onAddConnection});
+
+  final Future<void> Function(SavedConnection) onAddConnection;
+
+  @override
+  State<AddGatewayScreen> createState() => _AddGatewayScreenState();
+}
+
+class _AddGatewayScreenState extends State<AddGatewayScreen> {
+  final _formKey = GlobalKey<FormState>();
+  final _nameController = TextEditingController();
+  final _urlController = TextEditingController();
+  final _tokenController = TextEditingController();
+  bool _submitting = false;
+
+  static final _urlRegex = RegExp(r'^https?://.+', caseSensitive: false);
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _urlController.dispose();
+    _tokenController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (!_formKey.currentState!.validate()) return;
+    setState(() => _submitting = true);
+
+    final connection = SavedConnection(
+      id: 'gateway-${DateTime.now().millisecondsSinceEpoch}',
+      displayName: _nameController.text.trim(),
+      kind: SavedConnectionKind.gateway,
+      gatewayUrl: _urlController.text.trim(),
+      gatewayToken: _tokenController.text.trim().isEmpty
+          ? null
+          : _tokenController.text.trim(),
+    );
+
+    try {
+      await widget.onAddConnection(connection);
+      if (mounted) Navigator.pop(context);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _submitting = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Scaffold(
+      appBar: AppBar(title: const Text('Add Gateway Connection')),
+      body: SafeArea(
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 520),
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(24),
+              child: Form(
+                key: _formKey,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    TextFormField(
+                      controller: _nameController,
+                      decoration: const InputDecoration(
+                        labelText: 'Display name',
+                        hintText: 'Prod Gateway',
+                      ),
+                      textInputAction: TextInputAction.next,
+                      validator: (v) =>
+                          (v == null || v.trim().isEmpty) ? 'Required' : null,
+                    ),
+                    const SizedBox(height: 16),
+                    TextFormField(
+                      controller: _urlController,
+                      decoration: const InputDecoration(
+                        labelText: 'Gateway URL',
+                        hintText: 'https://gateway.example.com',
+                      ),
+                      keyboardType: TextInputType.url,
+                      textInputAction: TextInputAction.next,
+                      autocorrect: false,
+                      validator: (v) {
+                        if (v == null || v.trim().isEmpty) return 'Required';
+                        if (!_urlRegex.hasMatch(v.trim())) {
+                          return 'Must start with http:// or https://';
+                        }
+                        return null;
+                      },
+                    ),
+                    const SizedBox(height: 16),
+                    TextFormField(
+                      controller: _tokenController,
+                      decoration: const InputDecoration(
+                        labelText: 'Token (optional)',
+                        hintText: 'X-ClusterOrbit-Token value',
+                      ),
+                      obscureText: true,
+                      textInputAction: TextInputAction.done,
+                      onFieldSubmitted: (_) => _submit(),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Sent as the X-ClusterOrbit-Token request header.',
+                      style: theme.textTheme.bodySmall,
+                    ),
+                    const SizedBox(height: 32),
+                    FilledButton(
+                      onPressed: _submitting ? null : _submit,
+                      child: const Text('Save connection'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
         ),
       ),
     );

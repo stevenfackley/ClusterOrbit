@@ -47,8 +47,7 @@ void main() {
       expect(await store.listConnections(), isEmpty);
     });
 
-    test('saveConnection then listConnections round-trips all kinds',
-        () async {
+    test('saveConnection then listConnections round-trips all kinds', () async {
       await store.saveConnection(sampleConn);
       await store.saveConnection(gatewayConn);
       await store.saveConnection(directConn);
