@@ -29,8 +29,8 @@ ClusterOrbit uses a restrained galaxy-inspired visual language: deep graphite an
 
 ## Repository Layout
 
-- [`app/mobile`](./app/mobile/README.md): Flutter mobile client scaffold.
-- [`app/gateway`](./app/gateway/README.md): Go gateway scaffold.
+- [`app/mobile`](./app/mobile/README.md): Flutter mobile client (phone + tablet layouts, topology screen, sqflite cache).
+- [`app/gateway`](./app/gateway/README.md): Go gateway (shared-token auth, rate limiting, mTLS, JSON-Lines audit, multi-cluster kube backend).
 - [`docs/product`](./docs/product/vision.md): product vision, roadmap, personas, naming.
 - [`docs/architecture`](./docs/architecture/system-overview.md): technical architecture.
 - [`docs/design`](./docs/design/design-principles.md): UI direction and topology UX.
@@ -39,23 +39,19 @@ ClusterOrbit uses a restrained galaxy-inspired visual language: deep graphite an
 
 ## Getting Started
 
-This repo is currently a scaffold. Flutter, Dart, and Go are not installed in the current local environment, so the initial app and gateway structure are written manually and should be finalized with the platform toolchains before shipping.
-
-Planned local commands:
-
 ```powershell
 # mobile
 cd app/mobile
-Copy-Item .env.example .env
+Copy-Item .env.example .env     # only first time
 flutter pub get
 flutter run
 
-# gateway
-cd ../..
-go test ./...
+# gateway (from repo root)
+go run ./app/gateway/cmd/clusterorbit-gateway
+# or: go test ./...
 ```
 
-The mobile app now expects a local `.env` file for startup configuration. Use `app/mobile/.env.example` as the template and keep the real `.env` out of version control.
+The mobile app expects a local `.env` file for startup configuration. Use `app/mobile/.env.example` as the template; the real `.env` is gitignored.
 
 ## Screenshots
 

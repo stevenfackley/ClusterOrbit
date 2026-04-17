@@ -56,13 +56,23 @@ Mode is set via `CLUSTERORBIT_CONNECTION_MODE` in `app/mobile/.env`. Kubeconfig 
 
 ### Go gateway (`app/gateway/`)
 
-Scaffold only — `main.go` prints a placeholder string. No real implementation.
+Functional HTTP gateway (`go 1.24`, single `yaml.v3` dep, no `client-go`). Layout:
+
+| Path | Responsibility |
+|------|---------------|
+| `cmd/clusterorbit-gateway/main.go` | Wiring: env → backend (sample or kube), token set, rate limiter, TLS/mTLS, JSON-Lines audit sink, graceful shutdown on SIGTERM/SIGINT |
+| `internal/api/handlers.go` | HTTP handlers for `/v1/clusters`, `/{id}/snapshot`, `/{id}/events`, POST `/{id}/workloads/{wid}/scale`; shared-token auth via `X-ClusterOrbit-Token`; audit every mutation |
+| `internal/api/ratelimit.go` | Per-identity token-bucket (per-token when auth on, per-IP otherwise) |
+| `internal/api/samples.go` | Sample backend — same shapes the mobile app ships with |
+| `internal/kubebackend/` | Real k8s backend; hand-rolled HTTP client against K8s API; `MultiClusterBackend` serves every resolvable kubeconfig context |
+| `internal/kubeconfig/` | Kubeconfig loader/resolver (yaml.v3) — contexts, clusters, users, TLS, auth |
+
+Key env vars: `CLUSTERORBIT_GATEWAY_ADDR`, `_MODE` (`sample`|`kube`), `_TOKEN` / `_TOKENS`, `_TLS_CERT`/`_TLS_KEY`/`_CLIENT_CA`, `_RATE_LIMIT_RPS`/`_BURST`, `_AUDIT_LOG`, `_KUBECONFIG` / `KUBECONFIG`, `_KUBE_CONTEXT`.
 
 ## Current limitations (as of last session)
 
 - Topology is a view, not a retained-scene engine — no filtering, LOD, force-based layout, or pan/zoom persistence
-- `GatewayClusterConnection` returns sample data only
-- No mutation flows (read-only)
+- No approval / policy flows on the gateway (token + rate limit only)
 - `README.md` is stale; treat code and tests as authoritative
 
 ## Key docs

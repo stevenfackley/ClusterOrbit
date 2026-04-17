@@ -22,4 +22,4 @@ go test ./...
 
 ## Note
 
-The current scaffold was written without local Flutter or Go SDKs installed. Validate generated platform files with those toolchains before shipping.
+Both Flutter and Go builds run locally and in CI. See `.github/workflows/ci.yml` for the authoritative check set (mobile: format → analyze → test --coverage; gateway: mod tidy → gofmt → vet → test -cover).

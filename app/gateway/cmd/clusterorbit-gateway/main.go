@@ -22,12 +22,12 @@ import (
 	"github.com/stevenfackley/clusterorbit/app/gateway/internal/kubeconfig"
 )
 
-const scaffoldMessage = "ClusterOrbit gateway scaffold"
+const startupBanner = "ClusterOrbit gateway"
 
-// message is retained for the pre-existing smoke test; the real binary now
+// message is retained for the pre-existing smoke test; the real binary
 // starts an HTTP server. See internal/api for request handling.
 func message() string {
-	return scaffoldMessage
+	return startupBanner
 }
 
 func main() {
@@ -66,7 +66,7 @@ func main() {
 	}
 
 	fmt.Printf("%s listening on %s (auth=%s backend=%s tls=%s rate=%s audit=%s)\n",
-		scaffoldMessage, addr, authLabel(tokens), backendLabel, tlsLabel, rateLabel(limiter), auditLabel)
+		startupBanner, addr, authLabel(tokens), backendLabel, tlsLabel, rateLabel(limiter), auditLabel)
 
 	// Serve in a goroutine; main goroutine waits for SIGTERM/SIGINT then
 	// triggers a graceful shutdown so in-flight requests and the audit
