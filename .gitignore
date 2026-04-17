@@ -37,6 +37,10 @@ coverage.out
 # Worktrees
 .worktrees/
 
+# Agent-local workspace (not for commit)
+.claude/
+.superpowers/
+
 # Logs / misc
 *.log
 tmp/
