@@ -65,10 +65,13 @@ func main() {
 	}
 }
 
-// buildBackend resolves the backend the gateway should serve. Mode "kube"
-// reads the kubeconfig referenced by CLUSTERORBIT_GATEWAY_KUBECONFIG /
-// KUBECONFIG and builds a KubeBackend; any failure falls back to sample data
-// with a warning so the gateway still serves something useful during rollout.
+// buildBackend resolves the backend the gateway should serve.
+//
+// Mode "kube" reads the kubeconfig referenced by CLUSTERORBIT_GATEWAY_KUBECONFIG
+// / KUBECONFIG. If CLUSTERORBIT_GATEWAY_KUBE_CONTEXT is set, it pins to that
+// single context. Otherwise every context in the document that resolves
+// successfully becomes a cluster in a MultiClusterBackend, so one gateway
+// serves many clusters. Any resolution failure falls back to sample data.
 func buildBackend(mode string) (api.ClusterBackend, string) {
 	if mode != "kube" {
 		return api.NewSampleBackend(), "sample"
@@ -84,17 +87,38 @@ func buildBackend(mode string) (api.ClusterBackend, string) {
 		log.Printf("gateway: load kubeconfig %q: %v; falling back to sample data", path, err)
 		return api.NewSampleBackend(), "sample (kube fallback: load failed)"
 	}
-	cluster, err := kubeconfig.Resolve(doc, os.Getenv(kubeconfig.EnvVarContext))
-	if err != nil {
-		log.Printf("gateway: resolve kubeconfig context: %v; falling back to sample data", err)
-		return api.NewSampleBackend(), "sample (kube fallback: resolve failed)"
+
+	if ctxName := strings.TrimSpace(os.Getenv(kubeconfig.EnvVarContext)); ctxName != "" {
+		cluster, err := kubeconfig.Resolve(doc, ctxName)
+		if err != nil {
+			log.Printf("gateway: resolve kubeconfig context %q: %v; falling back to sample data", ctxName, err)
+			return api.NewSampleBackend(), "sample (kube fallback: resolve failed)"
+		}
+		backend, err := kubebackend.NewKubeBackend(cluster)
+		if err != nil {
+			log.Printf("gateway: build kube backend: %v; falling back to sample data", err)
+			return api.NewSampleBackend(), "sample (kube fallback: client init failed)"
+		}
+		return backend, fmt.Sprintf("kube (%s @ %s)", cluster.ContextName, cluster.APIServerHost())
 	}
-	backend, err := kubebackend.NewKubeBackend(cluster)
-	if err != nil {
-		log.Printf("gateway: build kube backend: %v; falling back to sample data", err)
-		return api.NewSampleBackend(), "sample (kube fallback: client init failed)"
+
+	clusters, resolveErrs := kubeconfig.ResolveAll(doc)
+	for _, e := range resolveErrs {
+		log.Printf("gateway: skipping kubeconfig context: %v", e)
 	}
-	return backend, fmt.Sprintf("kube (%s @ %s)", cluster.ContextName, cluster.APIServerHost())
+	if len(clusters) == 0 {
+		log.Printf("gateway: no resolvable kubeconfig contexts; falling back to sample data")
+		return api.NewSampleBackend(), "sample (kube fallback: no contexts)"
+	}
+	mb, initErrs := kubebackend.NewMultiClusterBackend(clusters)
+	for _, e := range initErrs {
+		log.Printf("gateway: skipping kube backend init: %v", e)
+	}
+	if mb.Len() == 0 {
+		log.Printf("gateway: all kube backends failed init; falling back to sample data")
+		return api.NewSampleBackend(), "sample (kube fallback: all inits failed)"
+	}
+	return mb, fmt.Sprintf("kube-multi (%d clusters)", mb.Len())
 }
 
 // collectTokens reads both CLUSTERORBIT_GATEWAY_TOKEN (single) and

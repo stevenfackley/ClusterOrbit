@@ -265,6 +265,26 @@ func Resolve(doc *Document, ctxName string) (*ResolvedCluster, error) {
 	return resolved, nil
 }
 
+// ResolveAll walks every context in the document and returns the ones that
+// resolve successfully. Errors on individual contexts are collected and
+// returned so callers can log skipped entries without failing the whole boot.
+func ResolveAll(doc *Document) ([]*ResolvedCluster, []error) {
+	if doc == nil {
+		return nil, []error{errors.New("nil document")}
+	}
+	var out []*ResolvedCluster
+	var errs []error
+	for _, ctx := range doc.Contexts {
+		r, err := Resolve(doc, ctx.Name)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("context %q: %w", ctx.Name, err))
+			continue
+		}
+		out = append(out, r)
+	}
+	return out, errs
+}
+
 // APIServerHost extracts just the host portion of the server URL, matching
 // the mobile app's ClusterProfile.apiServerHost convention.
 func (r *ResolvedCluster) APIServerHost() string {
