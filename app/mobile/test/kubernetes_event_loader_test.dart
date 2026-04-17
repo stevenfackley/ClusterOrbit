@@ -8,8 +8,7 @@ void main() {
   test('hits namespaced events endpoint for workloads', () async {
     final transport = _FakeKubernetesTransport({
       'https://cluster.example.internal:6443/api/v1/namespaces/apps/events'
-              '?fieldSelector=involvedObject.name%3Dapi':
-          _listResponse([
+          '?fieldSelector=involvedObject.name%3Dapi': _listResponse([
         {
           'metadata': {'creationTimestamp': '2026-04-16T20:15:00Z'},
           'type': 'Normal',
@@ -40,8 +39,7 @@ void main() {
   test('hits cluster-scoped events endpoint for nodes', () async {
     final transport = _FakeKubernetesTransport({
       'https://cluster.example.internal:6443/api/v1/events'
-              '?fieldSelector=involvedObject.name%3Dworker-1':
-          _listResponse([
+          '?fieldSelector=involvedObject.name%3Dworker-1': _listResponse([
         {
           'type': 'Warning',
           'reason': 'NodeSysctlChange',
@@ -66,8 +64,7 @@ void main() {
   test('sorts newest first and truncates to limit', () async {
     final transport = _FakeKubernetesTransport({
       'https://cluster.example.internal:6443/api/v1/namespaces/apps/events'
-              '?fieldSelector=involvedObject.name%3Dapi':
-          _listResponse([
+          '?fieldSelector=involvedObject.name%3Dapi': _listResponse([
         {
           'type': 'Normal',
           'reason': 'Old',
@@ -102,8 +99,7 @@ void main() {
   test('skips malformed events without reason or message', () async {
     final transport = _FakeKubernetesTransport({
       'https://cluster.example.internal:6443/api/v1/namespaces/apps/events'
-              '?fieldSelector=involvedObject.name%3Dapi':
-          _listResponse([
+          '?fieldSelector=involvedObject.name%3Dapi': _listResponse([
         {
           'type': 'Normal',
           'message': 'no reason',
@@ -130,8 +126,7 @@ void main() {
   test('returns empty list when response has no items', () async {
     final transport = _FakeKubernetesTransport({
       'https://cluster.example.internal:6443/api/v1/namespaces/apps/events'
-              '?fieldSelector=involvedObject.name%3Dapi':
-          {'kind': 'List'},
+          '?fieldSelector=involvedObject.name%3Dapi': {'kind': 'List'},
     });
 
     final events = await KubernetesEventLoader(transport: transport).loadEvents(

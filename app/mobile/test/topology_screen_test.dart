@@ -190,4 +190,21 @@ void main() {
 
     await resetTestSurface(tester);
   });
+
+  // ── event stream ────────────────────────────────────────────────────────
+
+  testWidgets('tablet: selected node shows Recent Events from connection',
+      (tester) async {
+    await pumpClusterOrbitApp(tester, size: const Size(1280, 900));
+
+    await tester.tap(find.text('cp-1.dev-orbit'));
+    await tester.pumpAndSettle();
+
+    // Header appears in the detail panel
+    expect(find.text('Recent Events'), findsOneWidget);
+    // Sample event for a node (from SampleClusterData.eventsFor)
+    expect(find.text('NodeReady'), findsOneWidget);
+
+    await resetTestSurface(tester);
+  });
 }

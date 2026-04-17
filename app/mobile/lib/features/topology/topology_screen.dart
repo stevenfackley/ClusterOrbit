@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../../core/cluster_domain/cluster_models.dart';
+import '../../core/connectivity/cluster_connection.dart';
 import '../../core/theme/clusterorbit_theme.dart';
 
 class TopologyScreen extends StatefulWidget {
@@ -11,11 +12,15 @@ class TopologyScreen extends StatefulWidget {
     required this.snapshot,
     required this.isLoading,
     required this.error,
+    this.connection,
+    this.clusterId,
   });
 
   final ClusterSnapshot? snapshot;
   final bool isLoading;
   final Object? error;
+  final ClusterConnection? connection;
+  final String? clusterId;
 
   @override
   State<TopologyScreen> createState() => _TopologyScreenState();
@@ -92,6 +97,8 @@ class _TopologyScreenState extends State<TopologyScreen> {
           onEntityTap: _onEntityTap,
           onDismiss: _clearSelection,
           showPortraitPanel: !isWide && !isLandscape,
+          connection: widget.connection,
+          clusterId: widget.clusterId,
         );
 
         if (isWide) {
@@ -112,6 +119,8 @@ class _TopologyScreenState extends State<TopologyScreen> {
                     palette: palette,
                     selectedEntity: _selectedEntity,
                     onDismiss: _clearSelection,
+                    connection: widget.connection,
+                    clusterId: widget.clusterId,
                   ),
                 ),
               ],
@@ -137,6 +146,8 @@ class _TopologyScreenState extends State<TopologyScreen> {
                                 entity: _selectedEntity!,
                                 palette: palette,
                                 onDismiss: _clearSelection,
+                                connection: widget.connection,
+                                clusterId: widget.clusterId,
                               ),
                             ),
                           ),
@@ -170,6 +181,8 @@ class _TopologyWorkspace extends StatelessWidget {
     required this.onEntityTap,
     required this.onDismiss,
     required this.showPortraitPanel,
+    required this.connection,
+    required this.clusterId,
   });
 
   final ClusterSnapshot snapshot;
@@ -180,6 +193,8 @@ class _TopologyWorkspace extends StatelessWidget {
   final void Function(Object) onEntityTap;
   final VoidCallback onDismiss;
   final bool showPortraitPanel;
+  final ClusterConnection? connection;
+  final String? clusterId;
 
   @override
   Widget build(BuildContext context) {
@@ -366,10 +381,19 @@ class _TopologyWorkspace extends StatelessWidget {
                           bottom: 0,
                           left: 0,
                           right: 0,
-                          child: _EntityDetailPanel(
-                            entity: selectedEntity!,
-                            palette: palette,
-                            onDismiss: onDismiss,
+                          child: ConstrainedBox(
+                            constraints: BoxConstraints(
+                              maxHeight: constraints.maxHeight * 0.6,
+                            ),
+                            child: SingleChildScrollView(
+                              child: _EntityDetailPanel(
+                                entity: selectedEntity!,
+                                palette: palette,
+                                onDismiss: onDismiss,
+                                connection: connection,
+                                clusterId: clusterId,
+                              ),
+                            ),
                           ),
                         ),
                     ],
@@ -390,12 +414,16 @@ class _TopologySidebar extends StatelessWidget {
     required this.palette,
     required this.selectedEntity,
     required this.onDismiss,
+    required this.connection,
+    required this.clusterId,
   });
 
   final ClusterSnapshot snapshot;
   final ClusterOrbitPalette palette;
   final Object? selectedEntity;
   final VoidCallback onDismiss;
+  final ClusterConnection? connection;
+  final String? clusterId;
 
   @override
   Widget build(BuildContext context) {
@@ -421,6 +449,8 @@ class _TopologySidebar extends StatelessWidget {
                               entity: selectedEntity!,
                               palette: palette,
                               onDismiss: onDismiss,
+                              connection: connection,
+                              clusterId: clusterId,
                             ),
                           ),
                         ),
@@ -1212,16 +1242,72 @@ class _TopologyEdge {
   final Offset end;
 }
 
-class _EntityDetailPanel extends StatelessWidget {
+class _EntityDetailPanel extends StatefulWidget {
   const _EntityDetailPanel({
     required this.entity,
     required this.palette,
     required this.onDismiss,
+    required this.connection,
+    required this.clusterId,
   });
 
   final Object entity;
   final ClusterOrbitPalette palette;
   final VoidCallback onDismiss;
+  final ClusterConnection? connection;
+  final String? clusterId;
+
+  @override
+  State<_EntityDetailPanel> createState() => _EntityDetailPanelState();
+}
+
+class _EntityDetailPanelState extends State<_EntityDetailPanel> {
+  Future<List<ClusterEvent>>? _eventsFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadEvents();
+  }
+
+  @override
+  void didUpdateWidget(_EntityDetailPanel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.entity, widget.entity) ||
+        oldWidget.connection != widget.connection ||
+        oldWidget.clusterId != widget.clusterId) {
+      _loadEvents();
+    }
+  }
+
+  void _loadEvents() {
+    final connection = widget.connection;
+    final clusterId = widget.clusterId;
+    if (connection == null || clusterId == null) {
+      _eventsFuture = null;
+      return;
+    }
+    final ref = _entityRef(widget.entity);
+    if (ref == null) {
+      _eventsFuture = null;
+      return;
+    }
+    _eventsFuture = connection.loadEvents(
+      clusterId: clusterId,
+      kind: ref.kind,
+      objectName: ref.name,
+      namespace: ref.namespace,
+    );
+  }
+
+  static _EntityRef? _entityRef(Object entity) => switch (entity) {
+        ClusterNode n => _EntityRef(TopologyEntityKind.node, n.name, null),
+        ClusterWorkload w =>
+          _EntityRef(TopologyEntityKind.workload, w.name, w.namespace),
+        ClusterService s =>
+          _EntityRef(TopologyEntityKind.service, s.name, s.namespace),
+        _ => null,
+      };
 
   @override
   Widget build(BuildContext context) {
@@ -1229,7 +1315,7 @@ class _EntityDetailPanel extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: palette.panel.withValues(alpha: 0.96),
+        color: widget.palette.panel.withValues(alpha: 0.96),
         borderRadius: BorderRadius.circular(20),
         border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
         boxShadow: [
@@ -1248,7 +1334,7 @@ class _EntityDetailPanel extends StatelessWidget {
             children: [
               Expanded(child: _buildTitle(theme)),
               IconButton(
-                onPressed: onDismiss,
+                onPressed: widget.onDismiss,
                 icon: const Icon(Icons.close, size: 18, color: Colors.white),
                 padding: EdgeInsets.zero,
                 constraints: const BoxConstraints(),
@@ -1258,13 +1344,24 @@ class _EntityDetailPanel extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           ..._buildFields(theme),
+          if (_eventsFuture != null) ...[
+            const SizedBox(height: 16),
+            Divider(color: Colors.white.withValues(alpha: 0.12), height: 1),
+            const SizedBox(height: 12),
+            Text('Recent Events', style: theme.textTheme.titleSmall),
+            const SizedBox(height: 8),
+            _EventList(
+              future: _eventsFuture!,
+              palette: widget.palette,
+            ),
+          ],
         ],
       ),
     );
   }
 
   Widget _buildTitle(ThemeData theme) {
-    final (name, badge) = switch (entity) {
+    final (name, badge) = switch (widget.entity) {
       ClusterNode n => (n.name, n.role.label),
       ClusterWorkload w => (w.name, w.kind.label),
       ClusterService s => (s.name, s.exposure.label),
@@ -1298,7 +1395,7 @@ class _EntityDetailPanel extends StatelessWidget {
     );
   }
 
-  List<Widget> _buildFields(ThemeData theme) => switch (entity) {
+  List<Widget> _buildFields(ThemeData theme) => switch (widget.entity) {
         ClusterNode n => _nodeFields(n, theme),
         ClusterWorkload w => _workloadFields(w, theme),
         ClusterService s => _serviceFields(s, theme),
@@ -1306,7 +1403,7 @@ class _EntityDetailPanel extends StatelessWidget {
       };
 
   List<Widget> _nodeFields(ClusterNode n, ThemeData theme) {
-    final tint = _healthTint(n.health, palette);
+    final tint = _healthTint(n.health, widget.palette);
     return [
       _DetailRow(label: 'Role', value: n.role.label, theme: theme),
       _DetailRow(label: 'Zone', value: n.zone, theme: theme),
@@ -1325,7 +1422,7 @@ class _EntityDetailPanel extends StatelessWidget {
   }
 
   List<Widget> _workloadFields(ClusterWorkload w, ThemeData theme) {
-    final tint = _healthTint(w.health, palette);
+    final tint = _healthTint(w.health, widget.palette);
     return [
       _DetailRow(label: 'Namespace', value: w.namespace, theme: theme),
       _DetailRow(label: 'Kind', value: w.kind.label, theme: theme),
@@ -1345,7 +1442,7 @@ class _EntityDetailPanel extends StatelessWidget {
   }
 
   List<Widget> _serviceFields(ClusterService s, ThemeData theme) {
-    final tint = _healthTint(s.health, palette);
+    final tint = _healthTint(s.health, widget.palette);
     return [
       _DetailRow(label: 'Namespace', value: s.namespace, theme: theme),
       _DetailRow(label: 'Exposure', value: s.exposure.label, theme: theme),
@@ -1443,5 +1540,131 @@ class _DetailStatusRow extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+class _EntityRef {
+  const _EntityRef(this.kind, this.name, this.namespace);
+  final TopologyEntityKind kind;
+  final String name;
+  final String? namespace;
+}
+
+class _EventList extends StatelessWidget {
+  const _EventList({required this.future, required this.palette});
+
+  final Future<List<ClusterEvent>> future;
+  final ClusterOrbitPalette palette;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return FutureBuilder<List<ClusterEvent>>(
+      future: future,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done) {
+          return const Padding(
+            padding: EdgeInsets.symmetric(vertical: 8),
+            child: SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+          );
+        }
+        if (snapshot.hasError) {
+          return Text(
+            'Could not load events',
+            style: theme.textTheme.bodySmall?.copyWith(color: Colors.white60),
+          );
+        }
+        final events = snapshot.data ?? const [];
+        if (events.isEmpty) {
+          return Text(
+            'No recent events',
+            style: theme.textTheme.bodySmall?.copyWith(color: Colors.white60),
+          );
+        }
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            for (final event in events)
+              _EventRow(event: event, palette: palette, theme: theme),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _EventRow extends StatelessWidget {
+  const _EventRow({
+    required this.event,
+    required this.palette,
+    required this.theme,
+  });
+
+  final ClusterEvent event;
+  final ClusterOrbitPalette palette;
+  final ThemeData theme;
+
+  @override
+  Widget build(BuildContext context) {
+    final tint = event.type == ClusterEventType.warning
+        ? palette.warning
+        : palette.accentTeal;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 5),
+            child: _StatusDot(color: tint),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        event.reason,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.bodySmall
+                            ?.copyWith(color: Colors.white),
+                      ),
+                    ),
+                    Text(
+                      _relativeTime(event.lastTimestamp),
+                      style: theme.textTheme.bodySmall
+                          ?.copyWith(color: Colors.white54),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  event.message,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodySmall
+                      ?.copyWith(color: Colors.white70),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  static String _relativeTime(DateTime ts) {
+    final diff = DateTime.now().toUtc().difference(ts.toUtc());
+    if (diff.inSeconds < 60) return '${diff.inSeconds}s';
+    if (diff.inMinutes < 60) return '${diff.inMinutes}m';
+    if (diff.inHours < 24) return '${diff.inHours}h';
+    return '${diff.inDays}d';
   }
 }

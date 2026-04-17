@@ -62,20 +62,20 @@ final class KubernetesEventLoader {
     }
 
     final rawTimestamp = (item['lastTimestamp'] ??
-            item['eventTime'] ??
-            item['firstTimestamp'] ??
-            _metadataCreationTimestamp(item))
-        as Object?;
+        item['eventTime'] ??
+        item['firstTimestamp'] ??
+        _metadataCreationTimestamp(item)) as Object?;
     final timestamp = _parseTimestamp(rawTimestamp);
     if (timestamp == null) {
       return null;
     }
 
     final source = item['source'];
-    final component =
-        source is Map && source['component'] is String && source['component'] != ''
-            ? source['component'] as String
-            : null;
+    final component = source is Map &&
+            source['component'] is String &&
+            source['component'] != ''
+        ? source['component'] as String
+        : null;
 
     return ClusterEvent(
       type: ClusterEventTypeLabel.fromK8sType(item['type'] as String?),
