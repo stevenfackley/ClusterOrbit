@@ -33,9 +33,14 @@ Future<void> resetTestSurface(WidgetTester tester) async {
 }
 
 final class TestClusterConnection implements ClusterConnection {
-  TestClusterConnection({List<ClusterEvent>? events}) : _events = events;
+  TestClusterConnection({
+    List<ClusterEvent>? events,
+    this.onScale,
+  }) : _events = events;
 
   final List<ClusterEvent>? _events;
+  final void Function(String clusterId, String workloadId, int replicas)?
+      onScale;
   final List<ClusterProfile> _profiles =
       SampleClusterData.profilesFor(ConnectionMode.direct);
 
@@ -73,6 +78,15 @@ final class TestClusterConnection implements ClusterConnection {
     return SampleClusterData.eventsFor(kind: kind, objectName: objectName)
         .take(limit)
         .toList();
+  }
+
+  @override
+  Future<void> scaleWorkload({
+    required String clusterId,
+    required String workloadId,
+    required int replicas,
+  }) async {
+    onScale?.call(clusterId, workloadId, replicas);
   }
 }
 

@@ -291,4 +291,13 @@ final class _FakeKubernetesTransport implements KubernetesTransport {
     }
     return response;
   }
+
+  @override
+  Future<Map<String, dynamic>> patchJson(
+    KubernetesRequest request, {
+    required String contentType,
+    required List<int> body,
+  }) async {
+    throw UnimplementedError();
+  }
 }

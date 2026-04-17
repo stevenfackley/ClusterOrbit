@@ -643,11 +643,35 @@ final class KubernetesRequest {
 
 abstract interface class KubernetesTransport {
   Future<Map<String, dynamic>> getJson(KubernetesRequest request);
+
+  /// Send a JSON-body PATCH. [contentType] is typically
+  /// `application/merge-patch+json` for K8s merge patches.
+  Future<Map<String, dynamic>> patchJson(
+    KubernetesRequest request, {
+    required String contentType,
+    required List<int> body,
+  });
 }
 
 final class HttpKubernetesTransport implements KubernetesTransport {
   @override
-  Future<Map<String, dynamic>> getJson(KubernetesRequest request) async {
+  Future<Map<String, dynamic>> getJson(KubernetesRequest request) =>
+      _send(request, method: 'GET', contentType: null, body: null);
+
+  @override
+  Future<Map<String, dynamic>> patchJson(
+    KubernetesRequest request, {
+    required String contentType,
+    required List<int> body,
+  }) =>
+      _send(request, method: 'PATCH', contentType: contentType, body: body);
+
+  Future<Map<String, dynamic>> _send(
+    KubernetesRequest request, {
+    required String method,
+    required String? contentType,
+    required List<int>? body,
+  }) async {
     final client = HttpClient(
       context: _buildSecurityContext(request.tls, request.auth),
     );
@@ -656,8 +680,11 @@ final class HttpKubernetesTransport implements KubernetesTransport {
     }
 
     try {
-      final httpRequest = await client.getUrl(request.uri);
+      final httpRequest = await client.openUrl(method, request.uri);
       httpRequest.headers.set(HttpHeaders.acceptHeader, 'application/json');
+      if (contentType != null) {
+        httpRequest.headers.set(HttpHeaders.contentTypeHeader, contentType);
+      }
       if (request.auth.bearerToken != null &&
           request.auth.bearerToken!.isNotEmpty) {
         httpRequest.headers.set(
@@ -675,17 +702,23 @@ final class HttpKubernetesTransport implements KubernetesTransport {
           'Basic $token',
         );
       }
+      if (body != null) {
+        httpRequest.add(body);
+      }
 
       final response = await httpRequest.close();
-      final body = await response.transform(utf8.decoder).join();
+      final responseBody = await response.transform(utf8.decoder).join();
       if (response.statusCode >= 400) {
         throw HttpException(
-          'Kubernetes API request failed with status ${response.statusCode}: $body',
+          'Kubernetes API request failed with status ${response.statusCode}: $responseBody',
           uri: request.uri,
         );
       }
 
-      final decoded = jsonDecode(body);
+      if (responseBody.isEmpty) {
+        return const {};
+      }
+      final decoded = jsonDecode(responseBody);
       if (decoded is! Map) {
         throw const FormatException(
             'Kubernetes API response was not an object');

@@ -212,6 +212,13 @@ final class _RecordingConnection implements ClusterConnection {
     if (_onLoadEvents != null) return _onLoadEvents();
     return _liveEventsFuture!;
   }
+
+  @override
+  Future<void> scaleWorkload({
+    required String clusterId,
+    required String workloadId,
+    required int replicas,
+  }) async {}
 }
 
 final class _MemoryStore implements SnapshotStore {

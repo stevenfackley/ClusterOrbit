@@ -21,4 +21,26 @@ abstract interface class ClusterConnection {
     String? namespace,
     int limit = 5,
   });
+
+  /// Scale a workload to the requested replica count.
+  ///
+  /// [workloadId] is the topology workload id (`{kind}:{namespace}/{name}`).
+  /// Only `deployment` and `statefulSet` kinds are scalable; other kinds
+  /// throw [UnsupportedWorkloadKindException]. Implementations throw on
+  /// backend failure so the caller can surface the error.
+  Future<void> scaleWorkload({
+    required String clusterId,
+    required String workloadId,
+    required int replicas,
+  });
+}
+
+/// Thrown when `scaleWorkload` is called on a workload kind the backend does
+/// not support (e.g. DaemonSet, Job).
+class UnsupportedWorkloadKindException implements Exception {
+  UnsupportedWorkloadKindException(this.kind);
+  final String kind;
+
+  @override
+  String toString() => 'UnsupportedWorkloadKindException: $kind';
 }

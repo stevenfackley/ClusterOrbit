@@ -1598,6 +1598,8 @@ class _EntityDetailPanelState extends State<_EntityDetailPanel> {
 
   List<Widget> _workloadFields(ClusterWorkload w, ThemeData theme) {
     final tint = _healthTint(w.health, widget.palette);
+    final isScalable =
+        w.kind == WorkloadKind.deployment || w.kind == WorkloadKind.statefulSet;
     return [
       _DetailRow(label: 'Namespace', value: w.namespace, theme: theme),
       _DetailRow(label: 'Kind', value: w.kind.label, theme: theme),
@@ -1613,7 +1615,60 @@ class _EntityDetailPanelState extends State<_EntityDetailPanel> {
         _DetailRow(label: 'Image', value: image, theme: theme),
       _DetailStatusRow(
           label: 'Health', value: w.health.name, tint: tint, theme: theme),
+      if (isScalable &&
+          widget.connection != null &&
+          widget.clusterId != null) ...[
+        const SizedBox(height: 4),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton.icon(
+            onPressed: () => _onScalePressed(w),
+            icon: const Icon(Icons.tune, size: 16),
+            label: const Text('Scale'),
+            style: TextButton.styleFrom(
+              foregroundColor: Colors.white,
+              visualDensity: VisualDensity.compact,
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              backgroundColor: Colors.white.withValues(alpha: 0.08),
+            ),
+          ),
+        ),
+      ],
     ];
+  }
+
+  Future<void> _onScalePressed(ClusterWorkload w) async {
+    final connection = widget.connection;
+    final clusterId = widget.clusterId;
+    if (connection == null || clusterId == null) return;
+
+    final replicas = await showDialog<int>(
+      context: context,
+      builder: (ctx) => _ScaleDialog(
+        workloadName: w.name,
+        currentReplicas: w.desiredReplicas,
+      ),
+    );
+    if (replicas == null || !mounted) return;
+
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    try {
+      await connection.scaleWorkload(
+        clusterId: clusterId,
+        workloadId: w.id,
+        replicas: replicas,
+      );
+      messenger?.showSnackBar(
+        SnackBar(
+          content: Text(
+              'Requested scale of ${w.name} to $replicas replica(s). Refresh to see applied state.'),
+        ),
+      );
+    } catch (e) {
+      messenger?.showSnackBar(
+        SnackBar(content: Text('Scale failed: $e')),
+      );
+    }
   }
 
   List<Widget> _serviceFields(ClusterService s, ThemeData theme) {
@@ -1843,5 +1898,76 @@ class _EventRow extends StatelessWidget {
     if (diff.inMinutes < 60) return '${diff.inMinutes}m';
     if (diff.inHours < 24) return '${diff.inHours}h';
     return '${diff.inDays}d';
+  }
+}
+
+class _ScaleDialog extends StatefulWidget {
+  const _ScaleDialog({
+    required this.workloadName,
+    required this.currentReplicas,
+  });
+
+  final String workloadName;
+  final int currentReplicas;
+
+  @override
+  State<_ScaleDialog> createState() => _ScaleDialogState();
+}
+
+class _ScaleDialogState extends State<_ScaleDialog> {
+  late final TextEditingController _controller = TextEditingController(
+    text: '${widget.currentReplicas}',
+  );
+  String? _error;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final parsed = int.tryParse(_controller.text.trim());
+    if (parsed == null || parsed < 0) {
+      setState(() => _error = 'Enter a non-negative integer');
+      return;
+    }
+    Navigator.of(context).pop(parsed);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text('Scale ${widget.workloadName}'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Current replicas: ${widget.currentReplicas}'),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _controller,
+            keyboardType: TextInputType.number,
+            autofocus: true,
+            decoration: InputDecoration(
+              labelText: 'Desired replicas',
+              errorText: _error,
+              border: const OutlineInputBorder(),
+            ),
+            onSubmitted: (_) => _submit(),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _submit,
+          child: const Text('Apply'),
+        ),
+      ],
+    );
   }
 }

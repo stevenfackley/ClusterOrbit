@@ -1,9 +1,12 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:clusterorbit_mobile/core/cluster_domain/cluster_models.dart';
+import 'package:clusterorbit_mobile/core/connectivity/cluster_connection.dart';
 import 'package:clusterorbit_mobile/core/connectivity/cluster_connection_factory.dart';
 import 'package:clusterorbit_mobile/core/connectivity/kubeconfig_repository.dart';
 import 'package:clusterorbit_mobile/core/connectivity/kubernetes_snapshot_loader.dart';
+import 'package:clusterorbit_mobile/core/connectivity/kubernetes_workload_scaler.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -238,6 +241,123 @@ current-context: prod-admin
     expect(events, hasLength(1));
     expect(events.single.reason, 'Synced');
   });
+
+  test('gateway scaleWorkload POSTs to correct URL with replicas body',
+      () async {
+    final fake = _FakeGatewayHttpClient(const {});
+    final connection = GatewayClusterConnection(
+      gatewayBaseUrl: 'https://gateway.example.internal/',
+      token: 's3cret',
+      httpClient: fake,
+    );
+
+    await connection.scaleWorkload(
+      clusterId: 'remote-alpha',
+      workloadId: 'deployment:platform/api',
+      replicas: 4,
+    );
+
+    expect(
+      fake.lastPostUrl.toString(),
+      'https://gateway.example.internal/v1/clusters/remote-alpha/workloads/deployment:platform%2Fapi/scale',
+    );
+    expect(fake.lastPostBody, {'replicas': 4});
+    expect(fake.lastHeaders['X-ClusterOrbit-Token'], 's3cret');
+  });
+
+  test('gateway scaleWorkload rejects negative replicas locally', () async {
+    final connection = GatewayClusterConnection(
+      gatewayBaseUrl: 'https://gateway.example.internal/',
+      httpClient: _FakeGatewayHttpClient(const {}),
+    );
+
+    expect(
+      () => connection.scaleWorkload(
+        clusterId: 'x',
+        workloadId: 'deployment:ns/name',
+        replicas: -1,
+      ),
+      throwsA(isA<ArgumentError>()),
+    );
+  });
+
+  test(
+      'direct scaleWorkload PATCHes apps/v1 scale subresource with merge-patch body',
+      () async {
+    final tempDir = await Directory.systemTemp.createTemp('clusterorbit_test');
+    addTearDown(() async => tempDir.delete(recursive: true));
+    final kubeconfig = File('${tempDir.path}${Platform.pathSeparator}config');
+    await kubeconfig.writeAsString('''
+apiVersion: v1
+clusters:
+  - cluster:
+      server: https://prod.example.internal:6443
+    name: prod-cluster
+contexts:
+  - context:
+      cluster: prod-cluster
+      user: prod-user
+    name: prod-admin
+users:
+  - name: prod-user
+    user:
+      token: abc123
+current-context: prod-admin
+''');
+    final transport = _RecordingTransport();
+    final connection = DirectClusterConnection(
+      repository: KubeconfigRepository(environment: {
+        'CLUSTERORBIT_KUBECONFIG': kubeconfig.path,
+      }),
+      workloadScaler: KubernetesWorkloadScaler(transport: transport),
+    );
+
+    await connection.scaleWorkload(
+      clusterId: 'prod-admin',
+      workloadId: 'deployment:platform/api',
+      replicas: 5,
+    );
+
+    expect(transport.lastUri.toString(),
+        'https://prod.example.internal:6443/apis/apps/v1/namespaces/platform/deployments/api/scale');
+    expect(transport.lastContentType, 'application/merge-patch+json');
+    expect(jsonDecode(utf8.decode(transport.lastBody!)), {
+      'spec': {'replicas': 5}
+    });
+  });
+
+  test('direct scaleWorkload rejects unsupported kind', () async {
+    final scaler = KubernetesWorkloadScaler(transport: _RecordingTransport());
+    expect(
+      () => scaler.scaleWorkload(
+        cluster: const KubeconfigResolvedCluster(
+          profile: ClusterProfile(
+            id: 'x',
+            name: 'x',
+            apiServerHost: 'x',
+            environmentLabel: 'x',
+            connectionMode: ConnectionMode.direct,
+          ),
+          server: 'https://x',
+          namespace: null,
+          auth: KubeconfigAuth(
+            bearerToken: null,
+            basicUsername: null,
+            basicPassword: null,
+            clientCertificateData: null,
+            clientKeyData: null,
+          ),
+          tls: KubeconfigTlsConfig(
+            insecureSkipTlsVerify: false,
+            certificateAuthorityData: null,
+          ),
+        ),
+        workloadId: 'daemonSet:kube-system/fluentd',
+        replicas: 3,
+      ),
+      throwsA(isA<UnsupportedWorkloadKindException>()),
+    );
+  });
 }
 
 Map<String, dynamic> _listResponse(List<Map<String, dynamic>> items) => {
@@ -258,6 +378,37 @@ final class _FakeKubernetesTransport implements KubernetesTransport {
     }
     return response;
   }
+
+  @override
+  Future<Map<String, dynamic>> patchJson(
+    KubernetesRequest request, {
+    required String contentType,
+    required List<int> body,
+  }) async {
+    throw UnimplementedError();
+  }
+}
+
+final class _RecordingTransport implements KubernetesTransport {
+  Uri? lastUri;
+  String? lastContentType;
+  List<int>? lastBody;
+
+  @override
+  Future<Map<String, dynamic>> getJson(KubernetesRequest request) async =>
+      const {};
+
+  @override
+  Future<Map<String, dynamic>> patchJson(
+    KubernetesRequest request, {
+    required String contentType,
+    required List<int> body,
+  }) async {
+    lastUri = request.uri;
+    lastContentType = contentType;
+    lastBody = body;
+    return const {};
+  }
 }
 
 final class _FakeGatewayHttpClient implements GatewayHttpClient {
@@ -265,6 +416,8 @@ final class _FakeGatewayHttpClient implements GatewayHttpClient {
 
   final Map<String, dynamic> _responses;
   Map<String, String> lastHeaders = const {};
+  Uri? lastPostUrl;
+  Map<String, dynamic>? lastPostBody;
 
   @override
   Future<dynamic> getJson(Uri url,
@@ -275,5 +428,17 @@ final class _FakeGatewayHttpClient implements GatewayHttpClient {
       throw StateError('Missing fake response for $key');
     }
     return _responses[key];
+  }
+
+  @override
+  Future<dynamic> postJson(
+    Uri url, {
+    Map<String, String> headers = const {},
+    required Map<String, dynamic> body,
+  }) async {
+    lastHeaders = Map.of(headers);
+    lastPostUrl = url;
+    lastPostBody = Map.of(body);
+    return _responses[url.toString()];
   }
 }

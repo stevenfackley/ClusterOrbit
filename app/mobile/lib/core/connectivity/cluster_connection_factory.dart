@@ -8,6 +8,7 @@ import 'cluster_connection.dart';
 import 'kubeconfig_repository.dart';
 import 'kubernetes_event_loader.dart';
 import 'kubernetes_snapshot_loader.dart';
+import 'kubernetes_workload_scaler.dart';
 import 'sample_cluster_data.dart';
 
 final class ClusterConnectionFactory {
@@ -44,13 +45,16 @@ final class DirectClusterConnection implements ClusterConnection {
     KubeconfigRepository? repository,
     KubernetesSnapshotLoader? snapshotLoader,
     KubernetesEventLoader? eventLoader,
+    KubernetesWorkloadScaler? workloadScaler,
   })  : _repository = repository ?? KubeconfigRepository(),
         _snapshotLoader = snapshotLoader ?? KubernetesSnapshotLoader(),
-        _eventLoader = eventLoader ?? KubernetesEventLoader();
+        _eventLoader = eventLoader ?? KubernetesEventLoader(),
+        _workloadScaler = workloadScaler ?? KubernetesWorkloadScaler();
 
   final KubeconfigRepository _repository;
   final KubernetesSnapshotLoader _snapshotLoader;
   final KubernetesEventLoader _eventLoader;
+  final KubernetesWorkloadScaler _workloadScaler;
 
   @override
   ConnectionMode get mode => ConnectionMode.direct;
@@ -101,6 +105,25 @@ final class DirectClusterConnection implements ClusterConnection {
       objectName: objectName,
       namespace: kind == TopologyEntityKind.node ? null : namespace,
       limit: limit,
+    );
+  }
+
+  @override
+  Future<void> scaleWorkload({
+    required String clusterId,
+    required String workloadId,
+    required int replicas,
+  }) async {
+    final resolvedCluster = await _repository.loadResolvedCluster(clusterId);
+    if (resolvedCluster == null) {
+      throw StateError(
+        'No resolvable kubeconfig for cluster $clusterId — scale is unsupported in sample-only mode.',
+      );
+    }
+    await _workloadScaler.scaleWorkload(
+      cluster: resolvedCluster,
+      workloadId: workloadId,
+      replicas: replicas,
     );
   }
 
@@ -201,6 +224,42 @@ final class GatewayClusterConnection implements ClusterConnection {
         .toList();
   }
 
+  @override
+  Future<void> scaleWorkload({
+    required String clusterId,
+    required String workloadId,
+    required int replicas,
+  }) async {
+    if (replicas < 0) {
+      throw ArgumentError.value(
+          replicas, 'replicas', 'must be a non-negative integer');
+    }
+    final base = _parseBase();
+    if (base == null) {
+      throw StateError(
+        'Gateway base URL is not configured — scale is unsupported in sample-only mode.',
+      );
+    }
+    // workloadId contains `/` so we can't use Uri.resolve after encoding.
+    // Build the URI directly from path segments.
+    final target = base.replace(
+      pathSegments: [
+        ...base.pathSegments.where((s) => s.isNotEmpty),
+        'v1',
+        'clusters',
+        clusterId,
+        'workloads',
+        workloadId,
+        'scale',
+      ],
+    );
+    await _httpClient.postJson(
+      target,
+      headers: _headers(),
+      body: {'replicas': replicas},
+    );
+  }
+
   Uri? _parseBase() {
     if (gatewayBaseUrl.isEmpty) return null;
     final trimmed =
@@ -225,30 +284,57 @@ final class GatewayClusterConnection implements ClusterConnection {
   }
 }
 
-/// Abstraction over HTTP GETs so tests can inject deterministic responses
-/// without standing up a real server.
+/// Abstraction over HTTP GETs/POSTs so tests can inject deterministic
+/// responses without standing up a real server.
 abstract interface class GatewayHttpClient {
   Future<dynamic> getJson(Uri url, {Map<String, String> headers});
+
+  Future<dynamic> postJson(
+    Uri url, {
+    Map<String, String> headers,
+    required Map<String, dynamic> body,
+  });
 }
 
 final class _DartIoGatewayHttpClient implements GatewayHttpClient {
   const _DartIoGatewayHttpClient();
 
   @override
-  Future<dynamic> getJson(Uri url,
-      {Map<String, String> headers = const {}}) async {
+  Future<dynamic> getJson(Uri url, {Map<String, String> headers = const {}}) =>
+      _send(url, method: 'GET', headers: headers, body: null);
+
+  @override
+  Future<dynamic> postJson(
+    Uri url, {
+    Map<String, String> headers = const {},
+    required Map<String, dynamic> body,
+  }) =>
+      _send(url, method: 'POST', headers: headers, body: body);
+
+  Future<dynamic> _send(
+    Uri url, {
+    required String method,
+    required Map<String, String> headers,
+    required Map<String, dynamic>? body,
+  }) async {
     final client = HttpClient();
     try {
-      final request = await client.getUrl(url);
+      final request = await client.openUrl(method, url);
       headers.forEach(request.headers.set);
+      if (body != null) {
+        request.headers.set(
+            HttpHeaders.contentTypeHeader, 'application/json; charset=utf-8');
+        request.add(utf8.encode(jsonEncode(body)));
+      }
       final response = await request.close();
       if (response.statusCode < 200 || response.statusCode >= 300) {
+        final errBody = await response.transform(utf8.decoder).join();
         throw GatewayException(
-          'Gateway request failed (${response.statusCode}) for $url',
+          'Gateway request failed (${response.statusCode}) for $url: $errBody',
         );
       }
-      final body = await response.transform(utf8.decoder).join();
-      return body.isEmpty ? null : jsonDecode(body);
+      final responseBody = await response.transform(utf8.decoder).join();
+      return responseBody.isEmpty ? null : jsonDecode(responseBody);
     } finally {
       client.close(force: true);
     }

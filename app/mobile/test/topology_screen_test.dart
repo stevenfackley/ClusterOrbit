@@ -207,4 +207,41 @@ void main() {
 
     await resetTestSurface(tester);
   });
+
+  // ── scale mutation ──────────────────────────────────────────────────────
+
+  testWidgets(
+      'tablet: scale button on deployment opens dialog and calls connection',
+      (tester) async {
+    final calls = <List<Object>>[];
+    final connection = TestClusterConnection(
+      onScale: (clusterId, workloadId, replicas) =>
+          calls.add([clusterId, workloadId, replicas]),
+    );
+
+    await pumpClusterOrbitApp(
+      tester,
+      size: const Size(1280, 900),
+      connection: connection,
+    );
+
+    // Tap a Deployment (service-1 via its kind/namespace subtitle)
+    await tester.tap(find.text('Deployment / platform').first);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Scale'), findsOneWidget);
+    await tester.tap(find.text('Scale'));
+    await tester.pumpAndSettle();
+
+    // Dialog open — change value to 7 and apply
+    expect(find.text('Desired replicas'), findsOneWidget);
+    await tester.enterText(find.byType(TextField), '7');
+    await tester.tap(find.text('Apply'));
+    await tester.pumpAndSettle();
+
+    expect(calls, hasLength(1));
+    expect(calls.single[2], 7);
+
+    await resetTestSurface(tester);
+  });
 }

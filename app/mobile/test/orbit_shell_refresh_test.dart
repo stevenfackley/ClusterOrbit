@@ -81,6 +81,13 @@ final class _ControllableConnection implements ClusterConnection {
     int limit = 5,
   }) async =>
       const [];
+
+  @override
+  Future<void> scaleWorkload({
+    required String clusterId,
+    required String workloadId,
+    required int replicas,
+  }) async {}
 }
 
 final class _CachedStore implements SnapshotStore {
