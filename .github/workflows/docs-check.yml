@@ -14,3 +14,5 @@ jobs:
         with:
           globs: |
             **/*.md
+            !docs/superpowers/**
+            !app/mobile/ios/Runner/Assets.xcassets/**
