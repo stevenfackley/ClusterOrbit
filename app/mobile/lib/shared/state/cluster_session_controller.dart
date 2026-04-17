@@ -82,6 +82,7 @@ class ClusterSessionController extends ChangeNotifier {
       final clusters = await _connection.listClusters();
       if (clusters.isEmpty) {
         if (!_disposed) {
+          _isLoading = false;
           _isRefreshing = false;
           notifyListeners();
         }

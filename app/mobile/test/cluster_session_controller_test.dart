@@ -122,6 +122,8 @@ void main() {
       expect(controller.selectedCluster, isNull);
       expect(controller.snapshot, isNull);
       expect(controller.isRefreshing, isFalse);
+      expect(controller.isLoading, isFalse,
+          reason: 'must clear loading when there is nothing to load');
     });
   });
 
