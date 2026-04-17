@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../core/cluster_domain/cluster_models.dart';
@@ -37,6 +39,8 @@ class _OrbitShellState extends State<OrbitShell> {
   Object? _loadError;
   bool _isLoading = true;
   bool _isRefreshing = false;
+  DateTime? _lastRefreshedAt;
+  Timer? _relativeTimeTicker;
 
   static const _destinations = [
     NavigationDestination(icon: Icon(Icons.blur_on_outlined), label: 'Map'),
@@ -68,7 +72,19 @@ class _OrbitShellState extends State<OrbitShell> {
     _connection =
         widget.connection ?? ClusterConnectionFactory.fromEnvironment();
     _store = widget.store ?? SqfliteSnapshotStore();
+    _relativeTimeTicker = Timer.periodic(
+      const Duration(seconds: 30),
+      (_) {
+        if (mounted && _lastRefreshedAt != null) setState(() {});
+      },
+    );
     _bootstrap();
+  }
+
+  @override
+  void dispose() {
+    _relativeTimeTicker?.cancel();
+    super.dispose();
   }
 
   Future<void> _bootstrap() async {
@@ -121,6 +137,7 @@ class _OrbitShellState extends State<OrbitShell> {
         _loadError = null;
         _isLoading = false;
         _isRefreshing = false;
+        _lastRefreshedAt = DateTime.now();
       });
     } catch (error) {
       if (!mounted) return;
@@ -136,6 +153,32 @@ class _OrbitShellState extends State<OrbitShell> {
         _isLoading = false;
         _isRefreshing = false;
       });
+    }
+  }
+
+  Future<void> _refreshCurrent() async {
+    final cluster = _selectedCluster;
+    if (cluster == null || _isRefreshing) return;
+
+    setState(() => _isRefreshing = true);
+
+    try {
+      final snapshot = await _connection.loadSnapshot(cluster.id);
+      await _store.saveSnapshot(snapshot);
+
+      if (!mounted) return;
+      setState(() {
+        _snapshot = snapshot;
+        _loadError = null;
+        _isRefreshing = false;
+        _lastRefreshedAt = DateTime.now();
+      });
+    } catch (error) {
+      if (!mounted) return;
+      final messenger = ScaffoldMessenger.maybeOf(context);
+      setState(() => _isRefreshing = false);
+      messenger
+          ?.showSnackBar(SnackBar(content: Text('Refresh failed: $error')));
     }
   }
 
@@ -183,6 +226,7 @@ class _OrbitShellState extends State<OrbitShell> {
         _loadError = null;
         _isLoading = false;
         _isRefreshing = false;
+        _lastRefreshedAt = DateTime.now();
       });
     } catch (error) {
       if (!mounted) return;
@@ -219,7 +263,9 @@ class _OrbitShellState extends State<OrbitShell> {
 
   @override
   Widget build(BuildContext context) {
-    final isTablet = MediaQuery.sizeOf(context).width >= 960;
+    final screenWidth = MediaQuery.sizeOf(context).width;
+    final isTablet = screenWidth >= 960;
+    final isCompact = screenWidth < 600;
     final palette = Theme.of(context).extension<ClusterOrbitPalette>()!;
     final screens = _buildScreens();
     final subtitle = _selectedCluster == null
@@ -242,11 +288,24 @@ class _OrbitShellState extends State<OrbitShell> {
         ),
         actions: [
           if (_isRefreshing) const _RefreshingBadge(),
-          TextButton.icon(
-            onPressed: _clusters.isEmpty ? null : _cycleCluster,
-            icon: const Icon(Icons.hub_outlined),
-            label: const Text('Switch Cluster'),
-          ),
+          if (_lastRefreshedAt != null && !_isRefreshing)
+            _LastRefreshedIndicator(
+              refreshedAt: _lastRefreshedAt!,
+              onRefresh: _selectedCluster == null ? null : _refreshCurrent,
+              compact: isCompact,
+            ),
+          if (isCompact)
+            IconButton(
+              tooltip: 'Switch cluster',
+              onPressed: _clusters.isEmpty ? null : _cycleCluster,
+              icon: const Icon(Icons.hub_outlined),
+            )
+          else
+            TextButton.icon(
+              onPressed: _clusters.isEmpty ? null : _cycleCluster,
+              icon: const Icon(Icons.hub_outlined),
+              label: const Text('Switch Cluster'),
+            ),
           const SizedBox(width: 8),
         ],
       ),
@@ -335,6 +394,58 @@ class _RefreshingBadge extends StatelessWidget {
       ),
     );
   }
+}
+
+class _LastRefreshedIndicator extends StatelessWidget {
+  const _LastRefreshedIndicator({
+    required this.refreshedAt,
+    required this.onRefresh,
+    this.compact = false,
+  });
+
+  final DateTime refreshedAt;
+  final VoidCallback? onRefresh;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final relative = _formatRelative(refreshedAt);
+    final tooltip = 'Updated $relative · tap to refresh';
+    if (compact) {
+      return IconButton(
+        tooltip: tooltip,
+        onPressed: onRefresh,
+        icon: const Icon(Icons.refresh, size: 18),
+      );
+    }
+    return Tooltip(
+      message: tooltip,
+      child: TextButton.icon(
+        onPressed: onRefresh,
+        icon: const Icon(Icons.refresh, size: 16),
+        label: Text(
+          'Updated $relative',
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: Colors.white.withValues(alpha: 0.82),
+          ),
+        ),
+        style: TextButton.styleFrom(
+          foregroundColor: Colors.white.withValues(alpha: 0.82),
+          visualDensity: VisualDensity.compact,
+        ),
+      ),
+    );
+  }
+}
+
+String _formatRelative(DateTime past) {
+  final delta = DateTime.now().difference(past);
+  if (delta.inSeconds < 10) return 'just now';
+  if (delta.inSeconds < 60) return '${delta.inSeconds}s ago';
+  if (delta.inMinutes < 60) return '${delta.inMinutes}m ago';
+  if (delta.inHours < 24) return '${delta.inHours}h ago';
+  return '${delta.inDays}d ago';
 }
 
 class _SideRail extends StatelessWidget {

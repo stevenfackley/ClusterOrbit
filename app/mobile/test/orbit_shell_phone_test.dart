@@ -8,7 +8,7 @@ void main() {
       (tester) async {
     await pumpClusterOrbitApp(tester, size: const Size(390, 844));
 
-    expect(find.text('Switch Cluster'), findsOneWidget);
+    expect(find.byTooltip('Switch cluster'), findsOneWidget);
     expect(find.text('Map'), findsOneWidget);
     expect(find.text('Resources'), findsOneWidget);
     expect(find.text('Settings'), findsOneWidget);
