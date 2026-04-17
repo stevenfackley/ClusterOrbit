@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 import '../cluster_domain/cluster_models.dart';
+import '../cluster_domain/saved_connection.dart';
 import 'cluster_connection.dart';
 import 'kubeconfig_repository.dart';
 import 'kubernetes_event_loader.dart';
@@ -27,6 +28,30 @@ final class ClusterConnectionFactory {
       ConnectionMode.gateway => GatewayClusterConnection(
           gatewayBaseUrl: environment['CLUSTERORBIT_GATEWAY_URL'] ?? '',
           token: environment['CLUSTERORBIT_GATEWAY_TOKEN'] ?? '',
+        ),
+    };
+  }
+
+  /// Build a [ClusterConnection] from a user-saved entry. Used by the app
+  /// gate to wire the active connection for the shell.
+  ///
+  /// - `sample`: in-process fake data; no I/O.
+  /// - `gateway`: HTTP-backed, sample-fallback when URL is empty/unparseable.
+  /// - `direct`: kubeconfig provided by the saved entry (or env if null).
+  static ClusterConnection fromSavedConnection(SavedConnection saved) {
+    return switch (saved.kind) {
+      SavedConnectionKind.sample => const SampleClusterConnection(),
+      SavedConnectionKind.gateway => GatewayClusterConnection(
+          gatewayBaseUrl: saved.gatewayUrl ?? '',
+          token: saved.gatewayToken ?? '',
+        ),
+      SavedConnectionKind.direct => DirectClusterConnection(
+          repository: KubeconfigRepository(
+            environment: {
+              if (saved.kubeconfigContext != null)
+                'CLUSTERORBIT_CONTEXT': saved.kubeconfigContext!,
+            },
+          ),
         ),
     };
   }
@@ -132,6 +157,59 @@ final class DirectClusterConnection implements ClusterConnection {
     return profiles.firstWhere(
       (profile) => profile.id == clusterId,
       orElse: () => profiles.first,
+    );
+  }
+}
+
+/// Sample-only connection. Returns the bundled demo cluster data with no
+/// network I/O. Used when the user explicitly picks "Sample data" in
+/// onboarding, so the app remains fully functional offline and a new user
+/// can see what the UI looks like before wiring a real cluster.
+final class SampleClusterConnection implements ClusterConnection {
+  const SampleClusterConnection();
+
+  @override
+  ConnectionMode get mode => ConnectionMode.direct;
+
+  @override
+  Future<List<ClusterProfile>> listClusters() async =>
+      SampleClusterData.profilesFor(mode);
+
+  @override
+  Future<ClusterSnapshot> loadSnapshot(String clusterId) async {
+    final profiles = SampleClusterData.profilesFor(mode);
+    final profile = profiles.firstWhere(
+      (p) => p.id == clusterId,
+      orElse: () => profiles.first,
+    );
+    return SampleClusterData.snapshotFor(profile);
+  }
+
+  @override
+  Stream<ClusterSnapshot> watchSnapshot(String clusterId) async* {
+    yield await loadSnapshot(clusterId);
+  }
+
+  @override
+  Future<List<ClusterEvent>> loadEvents({
+    required String clusterId,
+    required TopologyEntityKind kind,
+    required String objectName,
+    String? namespace,
+    int limit = 5,
+  }) async =>
+      SampleClusterData.eventsFor(kind: kind, objectName: objectName)
+          .take(limit)
+          .toList();
+
+  @override
+  Future<void> scaleWorkload({
+    required String clusterId,
+    required String workloadId,
+    required int replicas,
+  }) async {
+    throw StateError(
+      'Sample connection does not support mutations — add a real connection to scale workloads.',
     );
   }
 }
