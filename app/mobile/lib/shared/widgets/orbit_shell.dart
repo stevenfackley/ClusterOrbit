@@ -209,9 +209,9 @@ class _OrbitShellState extends State<OrbitShell> {
         connection: _connection,
         clusterId: _selectedCluster?.id,
       ),
-      const ResourcesScreen(),
-      const ChangesScreen(),
-      const AlertsScreen(),
+      ResourcesScreen(snapshot: _snapshot, isLoading: _isLoading),
+      ChangesScreen(snapshot: _snapshot, isLoading: _isLoading),
+      AlertsScreen(snapshot: _snapshot, isLoading: _isLoading),
       const SettingsScreen(),
     ];
   }

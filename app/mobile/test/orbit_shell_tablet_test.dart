@@ -25,19 +25,14 @@ void main() {
 
     await tester.tap(find.widgetWithText(FilledButton, 'Resources'));
     await tester.pumpAndSettle();
-    expect(find.text('Resources'), findsWidgets);
-    expect(
-        find.text(
-            'Resource details, config views, events, logs, and future diff-aware editing flows will live here.'),
-        findsOneWidget);
+    // Resources now renders tabs over the real snapshot data.
+    expect(find.textContaining('Nodes ('), findsOneWidget);
+    expect(find.textContaining('Workloads ('), findsOneWidget);
 
     await tester.tap(find.widgetWithText(FilledButton, 'Alerts'));
     await tester.pumpAndSettle();
-    expect(find.text('Alerts'), findsWidgets);
-    expect(
-        find.text(
-            'Operational health summaries, node pressure, and prioritized issue overlays will be summarized in this area.'),
-        findsOneWidget);
+    // Sample snapshot provides alerts; verify one rendered.
+    expect(find.text('API latency elevated'), findsOneWidget);
 
     await resetTestSurface(tester);
   });

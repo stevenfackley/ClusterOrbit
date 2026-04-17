@@ -24,24 +24,15 @@ void main() {
 
     await tester.tap(find.text('Resources'));
     await tester.pumpAndSettle();
-    expect(
-        find.text(
-            'Resource details, config views, events, logs, and future diff-aware editing flows will live here.'),
-        findsOneWidget);
+    expect(find.textContaining('Nodes ('), findsOneWidget);
 
     await tester.tap(find.text('Changes'));
     await tester.pumpAndSettle();
-    expect(
-        find.text(
-            'The changes view will track drafts, recent mutations, approvals, and rollback-friendly previews.'),
-        findsOneWidget);
+    expect(find.textContaining('Workload drift'), findsOneWidget);
 
     await tester.tap(find.text('Alerts'));
     await tester.pumpAndSettle();
-    expect(
-        find.text(
-            'Operational health summaries, node pressure, and prioritized issue overlays will be summarized in this area.'),
-        findsOneWidget);
+    expect(find.text('API latency elevated'), findsOneWidget);
 
     await tester.tap(find.text('Settings'));
     await tester.pumpAndSettle();
