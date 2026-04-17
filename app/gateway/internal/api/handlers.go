@@ -17,12 +17,22 @@ const (
 	pathRoot = "/v1/clusters"
 )
 
-// Server wires a ClusterBackend and a required auth token into an http.Handler.
+// Server wires a ClusterBackend into an http.Handler. Tokens (if non-empty)
+// gate every request via the AuthHeader; any token in the set is accepted so
+// rotation is "add new token → roll clients → drop old token". RateLimiter
+// (if non-nil) applies per-token, or per-IP if auth is disabled.
 type Server struct {
 	Backend ClusterBackend
-	// Token is the shared secret clients must present in the AuthHeader.
-	// An empty token disables auth and should only be used in tests.
+	// Tokens is the set of shared secrets clients may present in AuthHeader.
+	// An empty or nil slice disables auth (tests, local-only demos).
+	Tokens []string
+	// Token is a convenience field equivalent to Tokens=[]string{Token}.
+	// Applied only when Tokens is empty. Kept so single-token callers and
+	// existing tests don't need to change.
 	Token string
+	// Limiter, if set, rate-limits each token (or client IP when auth is
+	// disabled). Requests that exceed the limit return 429.
+	Limiter *RateLimiter
 }
 
 // Handler returns the root http.Handler for the gateway API.
@@ -33,17 +43,65 @@ func (s *Server) Handler() http.Handler {
 	return mux
 }
 
+func (s *Server) acceptedTokens() []string {
+	if len(s.Tokens) > 0 {
+		return s.Tokens
+	}
+	if s.Token != "" {
+		return []string{s.Token}
+	}
+	return nil
+}
+
 func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if s.Token != "" {
+		identity := clientIP(r)
+		accepted := s.acceptedTokens()
+		if len(accepted) > 0 {
 			got := r.Header.Get(AuthHeader)
-			if got == "" || got != s.Token {
+			if got == "" || !tokenAccepted(got, accepted) {
 				writeError(w, http.StatusUnauthorized, "missing or invalid token")
 				return
 			}
+			identity = got
+		}
+		if !s.Limiter.Allow(identity) {
+			writeError(w, http.StatusTooManyRequests, "rate limit exceeded")
+			return
 		}
 		next(w, r)
 	}
+}
+
+// tokenAccepted does a constant-time-ish comparison against each candidate.
+// The set is typically 1–3 entries so a linear scan is fine; the compare is
+// not crypto-timing-safe because HTTP header handling isn't either — treat
+// the shared token as a password, not a session key.
+func tokenAccepted(got string, accepted []string) bool {
+	for _, t := range accepted {
+		if got == t {
+			return true
+		}
+	}
+	return false
+}
+
+// clientIP best-effort extracts a caller identity. RemoteAddr is host:port;
+// we drop the port. X-Forwarded-For is trusted only when set by an explicit
+// reverse proxy in front — see docs/handover for deployment guidance.
+func clientIP(r *http.Request) string {
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		// First IP in the list is the original client per RFC 7239 convention.
+		if i := strings.IndexByte(xff, ','); i >= 0 {
+			return strings.TrimSpace(xff[:i])
+		}
+		return strings.TrimSpace(xff)
+	}
+	addr := r.RemoteAddr
+	if i := strings.LastIndexByte(addr, ':'); i >= 0 {
+		return addr[:i]
+	}
+	return addr
 }
 
 // handleRoot serves GET /v1/clusters.

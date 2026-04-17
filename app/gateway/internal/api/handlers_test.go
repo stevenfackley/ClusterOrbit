@@ -147,3 +147,70 @@ func TestMethodNotAllowed(t *testing.T) {
 		t.Fatalf("status = %d, want 405", resp.StatusCode)
 	}
 }
+
+func TestServerAcceptsAnyOfMultipleTokens(t *testing.T) {
+	s := &Server{
+		Backend: NewSampleBackend(),
+		Tokens:  []string{"new-token", "old-token"},
+	}
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	for _, tok := range []string{"new-token", "old-token"} {
+		req, _ := http.NewRequest(http.MethodGet, ts.URL+"/v1/clusters", nil)
+		req.Header.Set(AuthHeader, tok)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("token %q: %v", tok, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("token %q status = %d, want 200", tok, resp.StatusCode)
+		}
+	}
+}
+
+func TestServerRejectsUnknownToken(t *testing.T) {
+	s := &Server{
+		Backend: NewSampleBackend(),
+		Tokens:  []string{"valid"},
+	}
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/v1/clusters", nil)
+	req.Header.Set(AuthHeader, "bogus")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", resp.StatusCode)
+	}
+}
+
+func TestServerRateLimits(t *testing.T) {
+	s := &Server{
+		Backend: NewSampleBackend(),
+		Tokens:  []string{"t"},
+		Limiter: NewRateLimiter(0.001, 2), // burst 2, effectively no refill during test
+	}
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	var last int
+	for i := 0; i < 3; i++ {
+		req, _ := http.NewRequest(http.MethodGet, ts.URL+"/v1/clusters", nil)
+		req.Header.Set(AuthHeader, "t")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("request %d: %v", i, err)
+		}
+		resp.Body.Close()
+		last = resp.StatusCode
+	}
+	if last != http.StatusTooManyRequests {
+		t.Fatalf("3rd request status = %d, want 429", last)
+	}
+}
