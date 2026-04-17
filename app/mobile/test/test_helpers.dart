@@ -33,6 +33,9 @@ Future<void> resetTestSurface(WidgetTester tester) async {
 }
 
 final class TestClusterConnection implements ClusterConnection {
+  TestClusterConnection({List<ClusterEvent>? events}) : _events = events;
+
+  final List<ClusterEvent>? _events;
   final List<ClusterProfile> _profiles =
       SampleClusterData.profilesFor(ConnectionMode.direct);
 
@@ -54,6 +57,22 @@ final class TestClusterConnection implements ClusterConnection {
   @override
   Stream<ClusterSnapshot> watchSnapshot(String clusterId) async* {
     yield await loadSnapshot(clusterId);
+  }
+
+  @override
+  Future<List<ClusterEvent>> loadEvents({
+    required String clusterId,
+    required TopologyEntityKind kind,
+    required String objectName,
+    String? namespace,
+    int limit = 5,
+  }) async {
+    if (_events != null) {
+      return _events.take(limit).toList();
+    }
+    return SampleClusterData.eventsFor(kind: kind, objectName: objectName)
+        .take(limit)
+        .toList();
   }
 }
 

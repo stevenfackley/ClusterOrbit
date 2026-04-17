@@ -3,6 +3,7 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 import '../cluster_domain/cluster_models.dart';
 import 'cluster_connection.dart';
 import 'kubeconfig_repository.dart';
+import 'kubernetes_event_loader.dart';
 import 'kubernetes_snapshot_loader.dart';
 import 'sample_cluster_data.dart';
 
@@ -39,11 +40,14 @@ final class DirectClusterConnection implements ClusterConnection {
   DirectClusterConnection({
     KubeconfigRepository? repository,
     KubernetesSnapshotLoader? snapshotLoader,
+    KubernetesEventLoader? eventLoader,
   })  : _repository = repository ?? KubeconfigRepository(),
-        _snapshotLoader = snapshotLoader ?? KubernetesSnapshotLoader();
+        _snapshotLoader = snapshotLoader ?? KubernetesSnapshotLoader(),
+        _eventLoader = eventLoader ?? KubernetesEventLoader();
 
   final KubeconfigRepository _repository;
   final KubernetesSnapshotLoader _snapshotLoader;
+  final KubernetesEventLoader _eventLoader;
 
   @override
   ConnectionMode get mode => ConnectionMode.direct;
@@ -72,6 +76,29 @@ final class DirectClusterConnection implements ClusterConnection {
   @override
   Stream<ClusterSnapshot> watchSnapshot(String clusterId) async* {
     yield await loadSnapshot(clusterId);
+  }
+
+  @override
+  Future<List<ClusterEvent>> loadEvents({
+    required String clusterId,
+    required TopologyEntityKind kind,
+    required String objectName,
+    String? namespace,
+    int limit = 5,
+  }) async {
+    final resolvedCluster = await _repository.loadResolvedCluster(clusterId);
+    if (resolvedCluster == null) {
+      return SampleClusterData.eventsFor(kind: kind, objectName: objectName)
+          .take(limit)
+          .toList();
+    }
+
+    return _eventLoader.loadEvents(
+      cluster: resolvedCluster,
+      objectName: objectName,
+      namespace: kind == TopologyEntityKind.node ? null : namespace,
+      limit: limit,
+    );
   }
 
   Future<ClusterProfile> _resolveCluster(String clusterId) async {
@@ -115,6 +142,18 @@ final class GatewayClusterConnection implements ClusterConnection {
   Stream<ClusterSnapshot> watchSnapshot(String clusterId) async* {
     yield await loadSnapshot(clusterId);
   }
+
+  @override
+  Future<List<ClusterEvent>> loadEvents({
+    required String clusterId,
+    required TopologyEntityKind kind,
+    required String objectName,
+    String? namespace,
+    int limit = 5,
+  }) async =>
+      SampleClusterData.eventsFor(kind: kind, objectName: objectName)
+          .take(limit)
+          .toList();
 
   Future<ClusterProfile> _resolveCluster(String clusterId) async {
     final profiles = await listClusters();

@@ -204,4 +204,59 @@ final class SampleClusterData {
       links: links,
     );
   }
+
+  static List<ClusterEvent> eventsFor({
+    required TopologyEntityKind kind,
+    required String objectName,
+  }) {
+    final base = DateTime.utc(2026, 4, 16, 20, 15);
+    return switch (kind) {
+      TopologyEntityKind.node => [
+          ClusterEvent(
+            type: ClusterEventType.normal,
+            reason: 'NodeReady',
+            message: 'Node $objectName status is now Ready',
+            lastTimestamp: base,
+            count: 1,
+            sourceComponent: 'kubelet',
+          ),
+          ClusterEvent(
+            type: ClusterEventType.warning,
+            reason: 'NodeSysctlChange',
+            message: 'Sysctl changes applied to $objectName',
+            lastTimestamp: base.subtract(const Duration(minutes: 8)),
+            count: 2,
+            sourceComponent: 'kubelet',
+          ),
+        ],
+      TopologyEntityKind.workload => [
+          ClusterEvent(
+            type: ClusterEventType.normal,
+            reason: 'ScalingReplicaSet',
+            message: 'Scaled up replica set $objectName to 3',
+            lastTimestamp: base,
+            count: 1,
+            sourceComponent: 'deployment-controller',
+          ),
+          ClusterEvent(
+            type: ClusterEventType.normal,
+            reason: 'SuccessfulCreate',
+            message: 'Created pod for $objectName',
+            lastTimestamp: base.subtract(const Duration(minutes: 2)),
+            count: 3,
+            sourceComponent: 'replicaset-controller',
+          ),
+        ],
+      TopologyEntityKind.service => [
+          ClusterEvent(
+            type: ClusterEventType.normal,
+            reason: 'EnsuringLoadBalancer',
+            message: 'Ensuring load balancer for $objectName',
+            lastTimestamp: base,
+            count: 1,
+            sourceComponent: 'service-controller',
+          ),
+        ],
+    };
+  }
 }
