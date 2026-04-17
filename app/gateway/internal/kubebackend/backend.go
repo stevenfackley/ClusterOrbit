@@ -218,6 +218,60 @@ func sortEventsDesc(events []api.ClusterEvent) {
 	}
 }
 
+// ScaleWorkload updates the replica count of a Deployment or StatefulSet.
+// DaemonSets and Jobs don't have a meaningful "replicas" scale; callers get
+// ErrBadRequest there so the mobile side doesn't let users attempt it.
+func (b *KubeBackend) ScaleWorkload(
+	ctx context.Context,
+	clusterID, workloadID string,
+	replicas int,
+) error {
+	if clusterID != "" && clusterID != b.profile.ID {
+		return api.ErrNotFound
+	}
+	if replicas < 0 {
+		return fmt.Errorf("%w: replicas must be >=0", api.ErrBadRequest)
+	}
+	kind, namespace, name, err := parseWorkloadID(workloadID)
+	if err != nil {
+		return err
+	}
+	resource, ok := scaleResourceFor(kind)
+	if !ok {
+		return fmt.Errorf("%w: kind %q cannot be scaled", api.ErrBadRequest, kind)
+	}
+
+	path := fmt.Sprintf("/apis/apps/v1/namespaces/%s/%s/%s/scale", namespace, resource, name)
+	body := []byte(fmt.Sprintf(`{"spec":{"replicas":%d}}`, replicas))
+	_, err = b.client.Patch(ctx, path, "application/merge-patch+json", body)
+	if err != nil {
+		return fmt.Errorf("scale %s %s/%s: %w", kind, namespace, name, err)
+	}
+	return nil
+}
+
+func scaleResourceFor(kind string) (string, bool) {
+	switch kind {
+	case workloadKindDeployment:
+		return "deployments", true
+	case workloadKindStatefulSet:
+		return "statefulsets", true
+	default:
+		return "", false
+	}
+}
+
+// parseWorkloadID splits "{kind}:{namespace}/{name}" back into its parts.
+// Returns api.ErrBadRequest for any malformation so handlers map to 400.
+func parseWorkloadID(id string) (kind, namespace, name string, err error) {
+	colon := strings.IndexByte(id, ':')
+	slash := strings.IndexByte(id, '/')
+	if colon <= 0 || slash <= colon+1 || slash == len(id)-1 {
+		return "", "", "", fmt.Errorf("%w: workloadID %q must be kind:namespace/name", api.ErrBadRequest, id)
+	}
+	return id[:colon], id[colon+1 : slash], id[slash+1:], nil
+}
+
 // kubernetesKind maps the mobile-side workload kind strings back to the
 // Kubernetes API kind value used in fieldSelector (involvedObject.kind).
 func kubernetesKind(kind string) string {

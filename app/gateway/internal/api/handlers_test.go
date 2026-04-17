@@ -1,10 +1,14 @@
 package api
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 )
 
@@ -187,6 +191,134 @@ func TestServerRejectsUnknownToken(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401", resp.StatusCode)
+	}
+}
+
+type recordingBackend struct {
+	ClusterBackend
+	mu          sync.Mutex
+	scaleCalls  int
+	gotCluster  string
+	gotWorkload string
+	gotReplicas int
+	returnErr   error
+}
+
+func (r *recordingBackend) ScaleWorkload(_ context.Context, clusterID, workloadID string, replicas int) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.scaleCalls++
+	r.gotCluster = clusterID
+	r.gotWorkload = workloadID
+	r.gotReplicas = replicas
+	return r.returnErr
+}
+
+func TestScaleWorkloadSuccessAndAudit(t *testing.T) {
+	sample := NewSampleBackend()
+	rb := &recordingBackend{ClusterBackend: sample}
+	var entries []AuditEntry
+	s := &Server{
+		Backend: rb,
+		AuditSink: func(e AuditEntry) {
+			entries = append(entries, e)
+		},
+	}
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	body := bytes.NewBufferString(`{"replicas":5}`)
+	resp, err := http.Post(ts.URL+"/v1/clusters/demo/workloads/deployment:platform/api/scale",
+		"application/json", body)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d body = %s", resp.StatusCode, raw)
+	}
+	if rb.scaleCalls != 1 || rb.gotReplicas != 5 || rb.gotWorkload != "deployment:platform/api" {
+		t.Fatalf("scale args wrong: %+v", rb)
+	}
+	if rb.gotCluster != "demo" {
+		t.Fatalf("cluster id = %q", rb.gotCluster)
+	}
+	if len(entries) != 1 || entries[0].Status != http.StatusOK {
+		t.Fatalf("audit entries = %+v", entries)
+	}
+	if entries[0].Replicas == nil || *entries[0].Replicas != 5 {
+		t.Fatalf("audit replicas = %+v", entries[0].Replicas)
+	}
+}
+
+func TestScaleWorkloadBadBody(t *testing.T) {
+	s := &Server{Backend: NewSampleBackend()}
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	resp, err := http.Post(ts.URL+"/v1/clusters/demo/workloads/deployment:ns/name/scale",
+		"application/json", bytes.NewBufferString(`not json`))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestScaleWorkloadNegativeReplicas(t *testing.T) {
+	s := &Server{Backend: NewSampleBackend()}
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	resp, err := http.Post(ts.URL+"/v1/clusters/demo/workloads/deployment:ns/name/scale",
+		"application/json", bytes.NewBufferString(`{"replicas":-1}`))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestScaleWorkloadUnsupportedBackend(t *testing.T) {
+	rb := &recordingBackend{ClusterBackend: NewSampleBackend(), returnErr: ErrUnsupported}
+	s := &Server{Backend: rb}
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	resp, err := http.Post(ts.URL+"/v1/clusters/demo/workloads/deployment:ns/name/scale",
+		"application/json", bytes.NewBufferString(`{"replicas":2}`))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotImplemented {
+		t.Fatalf("status = %d, want 501", resp.StatusCode)
+	}
+}
+
+func TestScaleWorkloadPathValidation(t *testing.T) {
+	s := &Server{Backend: NewSampleBackend()}
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	// Wrong subpath — should 404.
+	resp, _ := http.Post(ts.URL+"/v1/clusters/demo/workloads/deployment:ns/name/frobnicate",
+		"application/json", bytes.NewBufferString(`{}`))
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
+func TestSampleBackendScaleReturnsUnsupported(t *testing.T) {
+	sb := NewSampleBackend()
+	if err := sb.ScaleWorkload(context.Background(), "", "deployment:ns/name", 1); !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("expected ErrUnsupported, got %v", err)
 	}
 }
 

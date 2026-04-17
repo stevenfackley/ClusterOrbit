@@ -1,6 +1,7 @@
 package kubebackend
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -106,4 +107,37 @@ func (c *RestClient) GetJSON(ctx context.Context, path string, query url.Values)
 // BaseURL returns the API server base URL (for logging and error context).
 func (c *RestClient) BaseURL() string {
 	return c.baseURL.String()
+}
+
+// Patch issues a PATCH against path with the given body + Content-Type. The
+// response body is returned raw so callers can decide whether to decode it;
+// non-2xx responses return an error with the server's message embedded.
+func (c *RestClient) Patch(ctx context.Context, path, contentType string, body []byte) ([]byte, error) {
+	u := *c.baseURL
+	u.Path = path
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, u.String(), bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", contentType)
+	if c.bearerToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.bearerToken)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("kube api request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read response body: %w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("kube api %s returned %d: %s", u.Path, resp.StatusCode, string(respBody))
+	}
+	return respBody, nil
 }

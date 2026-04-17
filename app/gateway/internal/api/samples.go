@@ -18,7 +18,19 @@ type ClusterBackend interface {
 	ListClusters(ctx context.Context) ([]ClusterProfile, error)
 	LoadSnapshot(ctx context.Context, clusterID string) (ClusterSnapshot, error)
 	LoadEvents(ctx context.Context, clusterID, kind, objectName, namespace string, limit int) ([]ClusterEvent, error)
+	// ScaleWorkload updates a Deployment or StatefulSet's replica count.
+	// workloadID is "{kind}:{namespace}/{name}" per the snapshot schema.
+	// Backends that don't support mutations may return ErrUnsupported.
+	ScaleWorkload(ctx context.Context, clusterID, workloadID string, replicas int) error
 }
+
+// ErrUnsupported indicates a backend cannot perform a requested mutation
+// (e.g. sample mode). Handlers map it to 501.
+var ErrUnsupported = errors.New("operation not supported by this backend")
+
+// ErrBadRequest is a sentinel for malformed caller input surfaced from a
+// backend (bad workload ID, negative replicas, etc). Handlers map it to 400.
+var ErrBadRequest = errors.New("invalid request")
 
 // SampleBackend is an in-memory backend that returns deterministic fixture
 // data. It is intended for development, integration testing, and demo mode.
@@ -40,6 +52,19 @@ func (s *SampleBackend) LoadSnapshot(_ context.Context, clusterID string) (Clust
 		return ClusterSnapshot{}, ErrNotFound
 	}
 	return sampleSnapshot(profile, s.now()), nil
+}
+
+// ScaleWorkload is a no-op on the sample backend — scale requests against
+// fixture data have nowhere to land. We still validate the arguments so
+// integration tests catch malformed clients without spinning up real kube.
+func (s *SampleBackend) ScaleWorkload(_ context.Context, _, workloadID string, replicas int) error {
+	if workloadID == "" {
+		return ErrBadRequest
+	}
+	if replicas < 0 {
+		return ErrBadRequest
+	}
+	return ErrUnsupported
 }
 
 func (s *SampleBackend) LoadEvents(_ context.Context, _, kind, objectName, _ string, limit int) ([]ClusterEvent, error) {

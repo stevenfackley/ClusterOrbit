@@ -3,12 +3,14 @@ package main
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/stevenfackley/clusterorbit/app/gateway/internal/api"
@@ -32,10 +34,16 @@ func main() {
 	tokens := collectTokens()
 	limiter := buildLimiter()
 
+	auditSink, auditLabel, auditCloser := buildAuditSink()
+	if auditCloser != nil {
+		defer auditCloser()
+	}
+
 	server := &api.Server{
-		Backend: backend,
-		Tokens:  tokens,
-		Limiter: limiter,
+		Backend:   backend,
+		Tokens:    tokens,
+		Limiter:   limiter,
+		AuditSink: auditSink,
 	}
 
 	tlsCfg, tlsLabel, err := buildTLS()
@@ -50,8 +58,8 @@ func main() {
 		TLSConfig:         tlsCfg,
 	}
 
-	fmt.Printf("%s listening on %s (auth=%s backend=%s tls=%s rate=%s)\n",
-		scaffoldMessage, addr, authLabel(tokens), backendLabel, tlsLabel, rateLabel(limiter))
+	fmt.Printf("%s listening on %s (auth=%s backend=%s tls=%s rate=%s audit=%s)\n",
+		scaffoldMessage, addr, authLabel(tokens), backendLabel, tlsLabel, rateLabel(limiter), auditLabel)
 
 	if tlsCfg != nil {
 		// ListenAndServeTLS with empty cert/key uses the config's certificates.
@@ -183,6 +191,39 @@ func buildTLS() (*tls.Config, string, error) {
 		label = "mtls"
 	}
 	return cfg, label, nil
+}
+
+// buildAuditSink returns an AuditSink plus a human-readable label and an
+// optional closer. CLUSTERORBIT_GATEWAY_AUDIT_LOG=path appends JSON lines to
+// that file; unset → stdout; value "off" disables audit entirely.
+func buildAuditSink() (func(api.AuditEntry), string, func()) {
+	dest := strings.TrimSpace(os.Getenv("CLUSTERORBIT_GATEWAY_AUDIT_LOG"))
+	if dest == "off" {
+		return nil, "off", nil
+	}
+	if dest == "" {
+		return jsonSink(os.Stdout), "stdout", nil
+	}
+	f, err := os.OpenFile(dest, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		log.Printf("gateway: open audit log %q: %v; falling back to stdout", dest, err)
+		return jsonSink(os.Stdout), "stdout (file open failed)", nil
+	}
+	return jsonSink(f), "file:" + dest, func() { _ = f.Close() }
+}
+
+// jsonSink serialises entries as JSON Lines. A single mutex serialises the
+// writes so concurrent mutations don't interleave their log rows.
+func jsonSink(w interface {
+	Write(p []byte) (n int, err error)
+}) func(api.AuditEntry) {
+	var mu sync.Mutex
+	enc := json.NewEncoder(w)
+	return func(e api.AuditEntry) {
+		mu.Lock()
+		defer mu.Unlock()
+		_ = enc.Encode(e)
+	}
 }
 
 func authLabel(tokens []string) string {

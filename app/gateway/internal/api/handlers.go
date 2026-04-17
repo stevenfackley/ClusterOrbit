@@ -6,7 +6,12 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 )
+
+// timeNow is the package's clock source, overridable in tests for deterministic
+// audit timestamps.
+var timeNow = time.Now
 
 const (
 	// AuthHeader is the shared-token header clients must set on every
@@ -33,6 +38,24 @@ type Server struct {
 	// Limiter, if set, rate-limits each token (or client IP when auth is
 	// disabled). Requests that exceed the limit return 429.
 	Limiter *RateLimiter
+	// AuditSink, if set, records every mutation request (success or failure).
+	// Passed as a func so callers can plug in a file, stdout, or a channel
+	// without this package depending on io.
+	AuditSink func(AuditEntry)
+}
+
+// AuditEntry is one row of the mutation log. Captured fields intentionally
+// avoid the token value — only a truncated identity marker is logged.
+type AuditEntry struct {
+	Timestamp  string `json:"timestamp"`
+	Identity   string `json:"identity"`
+	Method     string `json:"method"`
+	Path       string `json:"path"`
+	ClusterID  string `json:"clusterId,omitempty"`
+	WorkloadID string `json:"workloadId,omitempty"`
+	Replicas   *int   `json:"replicas,omitempty"`
+	Status     int    `json:"status"`
+	Error      string `json:"error,omitempty"`
 }
 
 // Handler returns the root http.Handler for the gateway API.
@@ -120,11 +143,6 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 
 // handleClusterScoped dispatches /v1/clusters/{id}/{subpath}.
 func (s *Server) handleClusterScoped(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-
 	rest := strings.TrimPrefix(r.URL.Path, pathRoot+"/")
 	if rest == "" {
 		writeError(w, http.StatusNotFound, "not found")
@@ -135,6 +153,16 @@ func (s *Server) handleClusterScoped(w http.ResponseWriter, r *http.Request) {
 	subpath := ""
 	if len(parts) == 2 {
 		subpath = parts[1]
+	}
+
+	// Mutations (POST) are routed before the GET guard.
+	if r.Method == http.MethodPost {
+		s.handleMutation(w, r, clusterID, subpath)
+		return
+	}
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
 	}
 
 	switch subpath {
@@ -171,14 +199,112 @@ func (s *Server) handleClusterScoped(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// writeBackendError translates a ClusterBackend error into an HTTP status.
-// ErrNotFound → 404, anything else → 502 (upstream failure).
-func writeBackendError(w http.ResponseWriter, err error) {
-	if errors.Is(err, ErrNotFound) {
-		writeError(w, http.StatusNotFound, "cluster not found")
+// handleMutation dispatches POST /v1/clusters/{id}/workloads/{wid}/scale.
+// Every attempt — success, bad input, backend failure — is pushed to the
+// audit sink so callers can reconstruct who did what, even when nothing
+// changed.
+func (s *Server) handleMutation(w http.ResponseWriter, r *http.Request, clusterID, subpath string) {
+	// workloadID is "{kind}:{namespace}/{name}", which contains a literal
+	// "/" — so we can't split the whole subpath by slash. Peel prefix/suffix.
+	const prefix = "workloads/"
+	const suffix = "/scale"
+	if !strings.HasPrefix(subpath, prefix) || !strings.HasSuffix(subpath, suffix) {
+		writeError(w, http.StatusNotFound, "not found")
 		return
 	}
-	writeError(w, http.StatusBadGateway, "backend error: "+err.Error())
+	workloadID := strings.TrimSuffix(strings.TrimPrefix(subpath, prefix), suffix)
+	if workloadID == "" {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+
+	var body struct {
+		Replicas *int `json:"replicas"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		s.audit(r, clusterID, workloadID, nil, http.StatusBadRequest, "decode body: "+err.Error())
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if body.Replicas == nil || *body.Replicas < 0 {
+		s.audit(r, clusterID, workloadID, body.Replicas, http.StatusBadRequest, "replicas must be >=0")
+		writeError(w, http.StatusBadRequest, "replicas must be a non-negative integer")
+		return
+	}
+
+	err := s.Backend.ScaleWorkload(r.Context(), clusterID, workloadID, *body.Replicas)
+	status, msg := scaleStatus(err)
+	s.audit(r, clusterID, workloadID, body.Replicas, status, msg)
+	if err != nil {
+		writeBackendError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"clusterId":  clusterID,
+		"workloadId": workloadID,
+		"replicas":   *body.Replicas,
+	})
+}
+
+func scaleStatus(err error) (int, string) {
+	switch {
+	case err == nil:
+		return http.StatusOK, ""
+	case errors.Is(err, ErrNotFound):
+		return http.StatusNotFound, err.Error()
+	case errors.Is(err, ErrUnsupported):
+		return http.StatusNotImplemented, err.Error()
+	case errors.Is(err, ErrBadRequest):
+		return http.StatusBadRequest, err.Error()
+	default:
+		return http.StatusBadGateway, err.Error()
+	}
+}
+
+func (s *Server) audit(r *http.Request, clusterID, workloadID string, replicas *int, status int, errMsg string) {
+	if s.AuditSink == nil {
+		return
+	}
+	identity := clientIP(r)
+	if got := r.Header.Get(AuthHeader); got != "" {
+		identity = truncateToken(got)
+	}
+	s.AuditSink(AuditEntry{
+		Timestamp:  timeNow().UTC().Format("2006-01-02T15:04:05Z07:00"),
+		Identity:   identity,
+		Method:     r.Method,
+		Path:       r.URL.Path,
+		ClusterID:  clusterID,
+		WorkloadID: workloadID,
+		Replicas:   replicas,
+		Status:     status,
+		Error:      errMsg,
+	})
+}
+
+// truncateToken keeps only the first 6 chars of a shared token so audit
+// entries don't leak the secret. 6 chars = ~2^36 collision space, enough to
+// disambiguate a small token set.
+func truncateToken(t string) string {
+	const max = 6
+	if len(t) <= max {
+		return t
+	}
+	return t[:max] + "…"
+}
+
+// writeBackendError translates a ClusterBackend error into an HTTP status.
+func writeBackendError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, ErrNotFound):
+		writeError(w, http.StatusNotFound, "not found")
+	case errors.Is(err, ErrBadRequest):
+		writeError(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, ErrUnsupported):
+		writeError(w, http.StatusNotImplemented, err.Error())
+	default:
+		writeError(w, http.StatusBadGateway, "backend error: "+err.Error())
+	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {

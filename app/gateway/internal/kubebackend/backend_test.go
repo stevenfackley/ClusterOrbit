@@ -246,6 +246,62 @@ func TestKubeBackendLoadEventsRequiresObjectName(t *testing.T) {
 	}
 }
 
+func TestKubeBackendScaleDeploymentPatchesScaleSubresource(t *testing.T) {
+	var gotMethod, gotPath, gotContentType, gotBody string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		gotContentType = r.Header.Get("Content-Type")
+		buf := make([]byte, 256)
+		n, _ := r.Body.Read(buf)
+		gotBody = string(buf[:n])
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"kind":"Scale"}`))
+	}))
+	defer ts.Close()
+
+	backend, err := NewKubeBackend(&kubeconfig.ResolvedCluster{
+		Server: ts.URL, ContextName: "test",
+	})
+	if err != nil {
+		t.Fatalf("new backend: %v", err)
+	}
+
+	if err := backend.ScaleWorkload(context.Background(), "test", "deployment:platform/api", 5); err != nil {
+		t.Fatalf("ScaleWorkload: %v", err)
+	}
+	if gotMethod != "PATCH" {
+		t.Fatalf("method = %q", gotMethod)
+	}
+	if gotPath != "/apis/apps/v1/namespaces/platform/deployments/api/scale" {
+		t.Fatalf("path = %q", gotPath)
+	}
+	if gotContentType != "application/merge-patch+json" {
+		t.Fatalf("content-type = %q", gotContentType)
+	}
+	if !strings.Contains(gotBody, `"replicas":5`) {
+		t.Fatalf("body = %q", gotBody)
+	}
+}
+
+func TestKubeBackendScaleRejectsBadID(t *testing.T) {
+	backend, err := NewKubeBackend(&kubeconfig.ResolvedCluster{
+		Server: "http://example.com", ContextName: "test",
+	})
+	if err != nil {
+		t.Fatalf("new backend: %v", err)
+	}
+	if err := backend.ScaleWorkload(context.Background(), "test", "bogus-id", 1); !errors.Is(err, api.ErrBadRequest) {
+		t.Fatalf("expected ErrBadRequest for bad id, got %v", err)
+	}
+	if err := backend.ScaleWorkload(context.Background(), "test", "daemonSet:ns/name", 1); !errors.Is(err, api.ErrBadRequest) {
+		t.Fatalf("expected ErrBadRequest for non-scalable kind, got %v", err)
+	}
+	if err := backend.ScaleWorkload(context.Background(), "test", "deployment:ns/name", -1); !errors.Is(err, api.ErrBadRequest) {
+		t.Fatalf("expected ErrBadRequest for negative replicas, got %v", err)
+	}
+}
+
 func TestKubeBackendListClustersReturnsProfile(t *testing.T) {
 	backend, err := NewKubeBackend(&kubeconfig.ResolvedCluster{
 		Server:           "https://example.com",
