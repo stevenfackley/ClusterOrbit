@@ -134,4 +134,63 @@ void main() {
       expect(await store.loadSnapshot('p1'), isNull);
     });
   });
+
+  group('cache TTL', () {
+    test('loadSnapshot returns snapshot when within maxAge', () async {
+      await store.saveSnapshot(makeSnapshot());
+      final loaded = await store.loadSnapshot(
+        'p1',
+        maxAge: const Duration(minutes: 10),
+      );
+      expect(loaded, isNotNull);
+    });
+
+    test('loadSnapshot returns null when cached_at older than maxAge',
+        () async {
+      await store.saveSnapshot(makeSnapshot());
+      final db = await store.dbForTest;
+      // Backdate cached_at to one hour ago.
+      final oneHourAgo = DateTime.now()
+          .subtract(const Duration(hours: 1))
+          .millisecondsSinceEpoch;
+      await db.rawUpdate(
+        'UPDATE cluster_snapshots SET cached_at = ? WHERE profile_id = ?',
+        [oneHourAgo, 'p1'],
+      );
+      final loaded = await store.loadSnapshot(
+        'p1',
+        maxAge: const Duration(minutes: 10),
+      );
+      expect(loaded, isNull);
+    });
+
+    test('loadProfiles filters rows older than maxAge', () async {
+      await store.saveProfiles([profile]);
+      final db = await store.dbForTest;
+      final oneHourAgo = DateTime.now()
+          .subtract(const Duration(hours: 1))
+          .millisecondsSinceEpoch;
+      await db.rawUpdate(
+        'UPDATE cluster_profiles SET cached_at = ? WHERE id = ?',
+        [oneHourAgo, 'p1'],
+      );
+      final loaded =
+          await store.loadProfiles(maxAge: const Duration(minutes: 10));
+      expect(loaded, isEmpty);
+    });
+
+    test('loadProfiles returns all rows when maxAge is null', () async {
+      await store.saveProfiles([profile]);
+      final db = await store.dbForTest;
+      final oneHourAgo = DateTime.now()
+          .subtract(const Duration(hours: 1))
+          .millisecondsSinceEpoch;
+      await db.rawUpdate(
+        'UPDATE cluster_profiles SET cached_at = ? WHERE id = ?',
+        [oneHourAgo, 'p1'],
+      );
+      final loaded = await store.loadProfiles();
+      expect(loaded.length, 1);
+    });
+  });
 }

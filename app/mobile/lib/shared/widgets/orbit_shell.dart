@@ -26,6 +26,8 @@ class OrbitShell extends StatefulWidget {
 }
 
 class _OrbitShellState extends State<OrbitShell> {
+  static const _cacheMaxAge = Duration(minutes: 10);
+
   int _index = 0;
   late final ClusterConnection _connection;
   late final SnapshotStore _store;
@@ -73,10 +75,12 @@ class _OrbitShellState extends State<OrbitShell> {
     bool cacheShown = false;
 
     try {
-      final cachedProfiles = await _store.loadProfiles();
+      final cachedProfiles = await _store.loadProfiles(maxAge: _cacheMaxAge);
       if (cachedProfiles.isNotEmpty) {
-        final cachedSnapshot =
-            await _store.loadSnapshot(cachedProfiles.first.id);
+        final cachedSnapshot = await _store.loadSnapshot(
+          cachedProfiles.first.id,
+          maxAge: _cacheMaxAge,
+        );
         if (cachedSnapshot != null && mounted) {
           setState(() {
             _clusters = cachedProfiles;
@@ -143,7 +147,10 @@ class _OrbitShellState extends State<OrbitShell> {
     // Show cached snapshot for the target cluster immediately if available.
     bool cacheShown = false;
     try {
-      final cachedSnapshot = await _store.loadSnapshot(nextCluster.id);
+      final cachedSnapshot = await _store.loadSnapshot(
+        nextCluster.id,
+        maxAge: _cacheMaxAge,
+      );
       if (cachedSnapshot != null && mounted) {
         setState(() {
           _snapshot = cachedSnapshot;

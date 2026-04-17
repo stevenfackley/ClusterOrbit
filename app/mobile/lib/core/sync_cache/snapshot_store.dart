@@ -8,9 +8,14 @@ import 'package:sqflite/sqflite.dart';
 import '../cluster_domain/cluster_models.dart';
 
 abstract interface class SnapshotStore {
-  Future<List<ClusterProfile>> loadProfiles();
+  /// Loads cached profiles. If [maxAge] is non-null, rows whose `cached_at`
+  /// is older than `now - maxAge` are treated as missing.
+  Future<List<ClusterProfile>> loadProfiles({Duration? maxAge});
   Future<void> saveProfiles(List<ClusterProfile> profiles);
-  Future<ClusterSnapshot?> loadSnapshot(String profileId);
+
+  /// Loads the cached snapshot for [profileId]. If [maxAge] is non-null and
+  /// the cached row is older than `now - maxAge`, returns null.
+  Future<ClusterSnapshot?> loadSnapshot(String profileId, {Duration? maxAge});
   Future<void> saveSnapshot(ClusterSnapshot snapshot);
 }
 
@@ -53,9 +58,17 @@ final class SqfliteSnapshotStore implements SnapshotStore {
   }
 
   @override
-  Future<List<ClusterProfile>> loadProfiles() async {
+  Future<List<ClusterProfile>> loadProfiles({Duration? maxAge}) async {
     final db = await _db;
-    final rows = await db.query('cluster_profiles');
+    final rows = maxAge == null
+        ? await db.query('cluster_profiles')
+        : await db.query(
+            'cluster_profiles',
+            where: 'cached_at >= ?',
+            whereArgs: [
+              DateTime.now().millisecondsSinceEpoch - maxAge.inMilliseconds,
+            ],
+          );
     final profiles = <ClusterProfile>[];
     for (final row in rows) {
       try {
@@ -89,12 +102,23 @@ final class SqfliteSnapshotStore implements SnapshotStore {
   }
 
   @override
-  Future<ClusterSnapshot?> loadSnapshot(String profileId) async {
+  Future<ClusterSnapshot?> loadSnapshot(
+    String profileId, {
+    Duration? maxAge,
+  }) async {
     final db = await _db;
+    final where =
+        maxAge == null ? 'profile_id = ?' : 'profile_id = ? AND cached_at >= ?';
+    final whereArgs = maxAge == null
+        ? [profileId]
+        : [
+            profileId,
+            DateTime.now().millisecondsSinceEpoch - maxAge.inMilliseconds,
+          ];
     final rows = await db.query(
       'cluster_snapshots',
-      where: 'profile_id = ?',
-      whereArgs: [profileId],
+      where: where,
+      whereArgs: whereArgs,
     );
     if (rows.isEmpty) return null;
     try {

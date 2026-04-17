@@ -81,13 +81,18 @@ final class NoOpSnapshotStore implements SnapshotStore {
   const NoOpSnapshotStore();
 
   @override
-  Future<List<ClusterProfile>> loadProfiles() async => const [];
+  Future<List<ClusterProfile>> loadProfiles({Duration? maxAge}) async =>
+      const [];
 
   @override
   Future<void> saveProfiles(List<ClusterProfile> profiles) async {}
 
   @override
-  Future<ClusterSnapshot?> loadSnapshot(String profileId) async => null;
+  Future<ClusterSnapshot?> loadSnapshot(
+    String profileId, {
+    Duration? maxAge,
+  }) async =>
+      null;
 
   @override
   Future<void> saveSnapshot(ClusterSnapshot snapshot) async {}
