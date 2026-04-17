@@ -19,7 +19,8 @@ Implemented so far:
   - resolve contexts, clusters, users, auth material, and TLS settings
   - fetch read-only data from the Kubernetes API
   - build a `ClusterSnapshot` from live cluster resources
-- `GatewayClusterConnection` still uses sample data and is intentionally a stub.
+- `GatewayClusterConnection` now speaks the real gateway HTTP contract
+  (`X-ClusterOrbit-Token` header; falls back to sample data when no URL configured).
 - Topology screen renders an interactive map-like workspace with `InteractiveViewer`, compact
   node/workload/service cards, painted links, deterministic lane-based layout.
 - Entity selection and detail drill-down implemented:
@@ -92,7 +93,7 @@ Self-contained. Contains the interactive map, entity cards, painted links, lane 
 
 ## Tests
 
-**60 tests, all passing.** Run with:
+**74 tests, all passing.** Run with:
 
 ```bash
 cd app/mobile
@@ -144,30 +145,33 @@ revisit if users need freshness feedback.
 **`sqlite3_flutter_libs` in `dev_dependencies`.** Sqflite bundles its own sqlite3 for
 Android/iOS, so this is correct for mobile. Move to `dependencies` if desktop is added.
 
-**Gateway mode is fake.** `GatewayClusterConnection` returns sample data. No real auth or
-gateway API flow. `GatewayClusterConnection.loadEvents` also returns sample events.
+**Gateway backend is scaffold-only.** `app/gateway/cmd/clusterorbit-gateway/main.go` serves
+the read-only HTTP contract (clusters / snapshot / events) with shared-token auth, but the
+data source is `SampleBackend` — there is no real Kubernetes client behind it yet. Swap in
+a real `ClusterBackend` implementation to connect to a live cluster.
 
 **Topology is a view, not an engine.** No force layout, no LOD, no filter, no viewport
 persistence.
 
 ## Recommended Next Tasks
 
-1. **Cache TTL / staleness** — `cached_at` column exists but is never read. Add a TTL check
-   in `_bootstrap()` to decide whether cached data is worth showing before the live fetch.
+Prior items 1–5 are done. New priorities:
 
-2. **Cluster switcher UI polish** — `_cycleCluster` shows cached data immediately but gives
-   no indication a live refresh is running. A subtle "Refreshing…" badge in the app bar would
-   help.
+1. **Real Kubernetes backend in the gateway** — replace `SampleBackend` with a client that
+   reuses the same kubeconfig parsing + snapshot/event loaders as the mobile direct path.
+   Currently the gateway returns a hard-coded single-cluster demo.
 
-3. **Resources / Changes / Alerts screens** — still placeholder screens. The domain model is
-   now fully serialised; these screens have everything they need.
+2. **Gateway auth hardening** — shared-token is minimum viable. Add rate limiting, rotate
+   support, and optional mTLS before exposing to anything non-local.
 
-4. **Event stream polling / refresh** — `_EntityDetailPanel` fetches once on selection. Add a
-   pull-to-refresh or periodic auto-refresh (e.g. every 30s while selected) for live-ish feel.
-   Consider caching events per entity in `SnapshotStore` so panel opens instantly on re-select.
+3. **Mutation flows** — everything is read-only. Design and add the first write path
+   (e.g. scale a deployment, cordon a node) with an explicit confirmation + audit log.
 
-5. **Real gateway backend** — `GatewayClusterConnection` and `app/gateway/main.go` are both
-   stubs. Gateway must also implement `loadEvents`.
+4. **Topology engine extraction** — pan/zoom, filtering, LOD, viewport persistence. The
+   topology screen is still a single self-contained widget.
+
+5. **Cache invalidation UX** — `cached_at` TTL shows stale data silently past 5 minutes.
+   Surface a "last refreshed" timestamp somewhere visible.
 
 ## Architecture Reminder
 
@@ -185,7 +189,12 @@ SnapshotStore (interface)
 
 ClusterConnection (interface)
   ├── DirectClusterConnection  (real kubeconfig)
-  └── GatewayClusterConnection (stub)
+  └── GatewayClusterConnection (real HTTP; sample fallback on empty URL)
+
+Gateway server (app/gateway/)
+  └── api.Server (mux, shared-token auth)
+        └── api.ClusterBackend (interface)
+              └── SampleBackend (in-memory demo data)
 ```
 
 `OrbitShell` is the only widget that should call `SnapshotStore`. No other layer should

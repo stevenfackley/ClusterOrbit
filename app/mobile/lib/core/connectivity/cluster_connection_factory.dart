@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 import '../cluster_domain/cluster_models.dart';
@@ -21,8 +24,8 @@ final class ClusterConnectionFactory {
           repository: KubeconfigRepository(environment: environment),
         ),
       ConnectionMode.gateway => GatewayClusterConnection(
-          gatewayBaseUrl: environment['CLUSTERORBIT_GATEWAY_URL'] ??
-              'https://gateway.local',
+          gatewayBaseUrl: environment['CLUSTERORBIT_GATEWAY_URL'] ?? '',
+          token: environment['CLUSTERORBIT_GATEWAY_TOKEN'] ?? '',
         ),
     };
   }
@@ -110,32 +113,55 @@ final class DirectClusterConnection implements ClusterConnection {
   }
 }
 
+/// HTTP-backed gateway connection.
+///
+/// When [gatewayBaseUrl] is empty or unparseable the connection falls back
+/// to sample data so the app remains usable without a live gateway. A
+/// configured base URL triggers real HTTP calls that add the token header
+/// when [token] is non-empty.
 final class GatewayClusterConnection implements ClusterConnection {
   GatewayClusterConnection({
     required this.gatewayBaseUrl,
-  });
+    this.token = '',
+    GatewayHttpClient? httpClient,
+  }) : _httpClient = httpClient ?? const _DartIoGatewayHttpClient();
+
+  static const _tokenHeader = 'X-ClusterOrbit-Token';
 
   final String gatewayBaseUrl;
+  final String token;
+  final GatewayHttpClient _httpClient;
 
   @override
   ConnectionMode get mode => ConnectionMode.gateway;
 
   @override
-  Future<List<ClusterProfile>> listClusters() async =>
-      SampleClusterData.profilesFor(mode);
+  Future<List<ClusterProfile>> listClusters() async {
+    final base = _parseBase();
+    if (base == null) return SampleClusterData.profilesFor(mode);
+
+    final body = await _httpClient.getJson(
+      base.resolve('v1/clusters'),
+      headers: _headers(),
+    );
+    final list = body as List<dynamic>;
+    return list
+        .map((p) => ClusterProfile.fromJson(p as Map<String, dynamic>))
+        .toList();
+  }
 
   @override
   Future<ClusterSnapshot> loadSnapshot(String clusterId) async {
-    final profile = await _resolveCluster(clusterId);
-    return SampleClusterData.snapshotFor(
-      ClusterProfile(
-        id: profile.id,
-        name: profile.name,
-        apiServerHost: gatewayBaseUrl,
-        environmentLabel: profile.environmentLabel,
-        connectionMode: profile.connectionMode,
-      ),
+    final base = _parseBase();
+    if (base == null) {
+      final profile = await _resolveSampleCluster(clusterId);
+      return SampleClusterData.snapshotFor(profile);
+    }
+    final body = await _httpClient.getJson(
+      base.resolve('v1/clusters/$clusterId/snapshot'),
+      headers: _headers(),
     );
+    return ClusterSnapshot.fromJson(body as Map<String, dynamic>);
   }
 
   @override
@@ -150,16 +176,89 @@ final class GatewayClusterConnection implements ClusterConnection {
     required String objectName,
     String? namespace,
     int limit = 5,
-  }) async =>
-      SampleClusterData.eventsFor(kind: kind, objectName: objectName)
+  }) async {
+    final base = _parseBase();
+    if (base == null) {
+      return SampleClusterData.eventsFor(kind: kind, objectName: objectName)
           .take(limit)
           .toList();
+    }
+    final query = <String, String>{
+      'kind': kind.name,
+      'objectName': objectName,
+      'limit': '$limit',
+      if (namespace != null && namespace.isNotEmpty) 'namespace': namespace,
+    };
+    final body = await _httpClient.getJson(
+      base.resolve('v1/clusters/$clusterId/events').replace(
+            queryParameters: query,
+          ),
+      headers: _headers(),
+    );
+    final list = body as List<dynamic>;
+    return list
+        .map((e) => ClusterEvent.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
 
-  Future<ClusterProfile> _resolveCluster(String clusterId) async {
-    final profiles = await listClusters();
+  Uri? _parseBase() {
+    if (gatewayBaseUrl.isEmpty) return null;
+    final trimmed =
+        gatewayBaseUrl.endsWith('/') ? gatewayBaseUrl : '$gatewayBaseUrl/';
+    try {
+      return Uri.parse(trimmed);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Map<String, String> _headers() => {
+        if (token.isNotEmpty) _tokenHeader: token,
+      };
+
+  Future<ClusterProfile> _resolveSampleCluster(String clusterId) async {
+    final profiles = SampleClusterData.profilesFor(mode);
     return profiles.firstWhere(
       (profile) => profile.id == clusterId,
       orElse: () => profiles.first,
     );
   }
+}
+
+/// Abstraction over HTTP GETs so tests can inject deterministic responses
+/// without standing up a real server.
+abstract interface class GatewayHttpClient {
+  Future<dynamic> getJson(Uri url, {Map<String, String> headers});
+}
+
+final class _DartIoGatewayHttpClient implements GatewayHttpClient {
+  const _DartIoGatewayHttpClient();
+
+  @override
+  Future<dynamic> getJson(Uri url,
+      {Map<String, String> headers = const {}}) async {
+    final client = HttpClient();
+    try {
+      final request = await client.getUrl(url);
+      headers.forEach(request.headers.set);
+      final response = await request.close();
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw GatewayException(
+          'Gateway request failed (${response.statusCode}) for $url',
+        );
+      }
+      final body = await response.transform(utf8.decoder).join();
+      return body.isEmpty ? null : jsonDecode(body);
+    } finally {
+      client.close(force: true);
+    }
+  }
+}
+
+class GatewayException implements Exception {
+  GatewayException(this.message);
+  final String message;
+
+  @override
+  String toString() => 'GatewayException: $message';
 }

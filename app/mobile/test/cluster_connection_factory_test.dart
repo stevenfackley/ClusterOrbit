@@ -132,10 +132,10 @@ current-context: prod-admin
     expect(snapshot.nodes.first.role, ClusterNodeRole.controlPlane);
   });
 
-  test('builds gateway connection from environment', () async {
+  test('gateway connection falls back to sample data when url is empty',
+      () async {
     final connection = ClusterConnectionFactory.fromEnvironment(const {
       'CLUSTERORBIT_CONNECTION_MODE': 'gateway',
-      'CLUSTERORBIT_GATEWAY_URL': 'https://gateway.example.internal',
     });
 
     expect(connection, isA<GatewayClusterConnection>());
@@ -144,10 +144,99 @@ current-context: prod-admin
     final snapshot = await connection.loadSnapshot(clusters.first.id);
 
     expect(snapshot.profile.connectionMode, ConnectionMode.gateway);
-    expect(snapshot.profile.apiServerHost, 'https://gateway.example.internal');
-    expect(snapshot.controlPlaneCount, 3);
-    expect(snapshot.workerCount, 39);
-    expect(snapshot.alerts.length, 5);
+    expect(snapshot.nodes, isNotEmpty);
+  });
+
+  test('gateway connection fetches clusters over HTTP with token header',
+      () async {
+    final fake = _FakeGatewayHttpClient({
+      'https://gateway.example.internal/v1/clusters': [
+        {
+          'id': 'remote-alpha',
+          'name': 'Alpha',
+          'apiServerHost': 'https://gateway.example.internal',
+          'environmentLabel': 'Production',
+          'connectionMode': 'gateway',
+        },
+      ],
+    });
+
+    final connection = GatewayClusterConnection(
+      gatewayBaseUrl: 'https://gateway.example.internal',
+      token: 's3cret',
+      httpClient: fake,
+    );
+
+    final clusters = await connection.listClusters();
+
+    expect(clusters, hasLength(1));
+    expect(clusters.first.id, 'remote-alpha');
+    expect(fake.lastHeaders['X-ClusterOrbit-Token'], 's3cret');
+  });
+
+  test('gateway connection decodes snapshot and events responses', () async {
+    final profileJson = {
+      'id': 'remote-alpha',
+      'name': 'Alpha',
+      'apiServerHost': 'https://gateway.example.internal',
+      'environmentLabel': 'Production',
+      'connectionMode': 'gateway',
+    };
+    final nodeJson = {
+      'id': 'node-1',
+      'name': 'worker-1',
+      'role': 'worker',
+      'version': 'v1.30.0',
+      'zone': 'us-east-1a',
+      'podCount': 12,
+      'schedulable': true,
+      'health': 'healthy',
+      'cpuCapacity': '8 cores',
+      'memoryCapacity': '32 GiB',
+      'osImage': 'Ubuntu 22.04',
+    };
+    final snapshotJson = {
+      'profile': profileJson,
+      'generatedAt': 1700000000000,
+      'nodes': [nodeJson],
+      'workloads': <Map<String, dynamic>>[],
+      'services': <Map<String, dynamic>>[],
+      'alerts': <Map<String, dynamic>>[],
+      'links': <Map<String, dynamic>>[],
+    };
+    final eventJson = {
+      'type': 'normal',
+      'reason': 'Synced',
+      'message': 'Reconciliation complete for worker-1',
+      'lastTimestamp': 1700000000000,
+      'count': 1,
+      'sourceComponent': null,
+    };
+    final fake = _FakeGatewayHttpClient({
+      'https://gateway.example.internal/v1/clusters/remote-alpha/snapshot':
+          snapshotJson,
+      'https://gateway.example.internal/v1/clusters/remote-alpha/events?kind=node&objectName=worker-1&limit=5':
+          [eventJson],
+    });
+
+    final connection = GatewayClusterConnection(
+      gatewayBaseUrl: 'https://gateway.example.internal/',
+      token: '',
+      httpClient: fake,
+    );
+
+    final snapshot = await connection.loadSnapshot('remote-alpha');
+    expect(snapshot.profile.id, 'remote-alpha');
+    expect(snapshot.nodes.single.name, 'worker-1');
+    expect(fake.lastHeaders.containsKey('X-ClusterOrbit-Token'), isFalse);
+
+    final events = await connection.loadEvents(
+      clusterId: 'remote-alpha',
+      kind: TopologyEntityKind.node,
+      objectName: 'worker-1',
+    );
+    expect(events, hasLength(1));
+    expect(events.single.reason, 'Synced');
   });
 }
 
@@ -168,5 +257,23 @@ final class _FakeKubernetesTransport implements KubernetesTransport {
       throw StateError('Missing fake response for ${request.uri}');
     }
     return response;
+  }
+}
+
+final class _FakeGatewayHttpClient implements GatewayHttpClient {
+  _FakeGatewayHttpClient(this._responses);
+
+  final Map<String, dynamic> _responses;
+  Map<String, String> lastHeaders = const {};
+
+  @override
+  Future<dynamic> getJson(Uri url,
+      {Map<String, String> headers = const {}}) async {
+    lastHeaders = Map.of(headers);
+    final key = url.toString();
+    if (!_responses.containsKey(key)) {
+      throw StateError('Missing fake response for $key');
+    }
+    return _responses[key];
   }
 }
