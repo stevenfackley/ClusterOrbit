@@ -1,16 +1,20 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/stevenfackley/clusterorbit/app/gateway/internal/api"
@@ -55,21 +59,43 @@ func main() {
 		Addr:              addr,
 		Handler:           server.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
 		TLSConfig:         tlsCfg,
 	}
 
 	fmt.Printf("%s listening on %s (auth=%s backend=%s tls=%s rate=%s audit=%s)\n",
 		scaffoldMessage, addr, authLabel(tokens), backendLabel, tlsLabel, rateLabel(limiter), auditLabel)
 
-	if tlsCfg != nil {
-		// ListenAndServeTLS with empty cert/key uses the config's certificates.
-		if err := httpServer.ListenAndServeTLS("", ""); err != nil {
+	// Serve in a goroutine; main goroutine waits for SIGTERM/SIGINT then
+	// triggers a graceful shutdown so in-flight requests and the audit
+	// writer get to finish.
+	serveErr := make(chan error, 1)
+	go func() {
+		if tlsCfg != nil {
+			// ListenAndServeTLS with empty cert/key uses the config's certificates.
+			serveErr <- httpServer.ListenAndServeTLS("", "")
+			return
+		}
+		serveErr <- httpServer.ListenAndServe()
+	}()
+
+	sigCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	select {
+	case err := <-serveErr:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatal(err)
 		}
-		return
-	}
-	if err := httpServer.ListenAndServe(); err != nil {
-		log.Fatal(err)
+	case <-sigCtx.Done():
+		log.Printf("gateway: signal received, shutting down")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		if err := httpServer.Shutdown(shutdownCtx); err != nil {
+			log.Printf("gateway: graceful shutdown failed: %v", err)
+		}
 	}
 }
 
