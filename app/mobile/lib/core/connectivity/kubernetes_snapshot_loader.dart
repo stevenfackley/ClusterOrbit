@@ -740,7 +740,7 @@ final class HttpKubernetesTransport implements KubernetesTransport {
       return null;
     }
 
-    final context = SecurityContext.defaultContext;
+    final context = SecurityContext();
     if (tls.certificateAuthorityData != null) {
       context.setTrustedCertificatesBytes(tls.certificateAuthorityData!);
     }
