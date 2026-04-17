@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 
 import '../../core/cluster_domain/cluster_models.dart';
@@ -12,6 +10,7 @@ import '../../features/changes/changes_screen.dart';
 import '../../features/resources/resources_screen.dart';
 import '../../features/settings/settings_screen.dart';
 import '../../features/topology/topology_screen.dart';
+import '../state/cluster_session_controller.dart';
 
 class OrbitShell extends StatefulWidget {
   const OrbitShell({
@@ -28,19 +27,8 @@ class OrbitShell extends StatefulWidget {
 }
 
 class _OrbitShellState extends State<OrbitShell> {
-  static const _cacheMaxAge = Duration(minutes: 10);
-
   int _index = 0;
-  late final ClusterConnection _connection;
-  late final SnapshotStore _store;
-  List<ClusterProfile> _clusters = const [];
-  ClusterProfile? _selectedCluster;
-  ClusterSnapshot? _snapshot;
-  Object? _loadError;
-  bool _isLoading = true;
-  bool _isRefreshing = false;
-  DateTime? _lastRefreshedAt;
-  Timer? _relativeTimeTicker;
+  late final ClusterSessionController _session;
 
   static const _destinations = [
     NavigationDestination(icon: Icon(Icons.blur_on_outlined), label: 'Map'),
@@ -69,270 +57,127 @@ class _OrbitShellState extends State<OrbitShell> {
   @override
   void initState() {
     super.initState();
-    _connection =
-        widget.connection ?? ClusterConnectionFactory.fromEnvironment();
-    _store = widget.store ?? SqfliteSnapshotStore();
-    _relativeTimeTicker = Timer.periodic(
-      const Duration(seconds: 30),
-      (_) {
-        if (mounted && _lastRefreshedAt != null) setState(() {});
-      },
+    _session = ClusterSessionController(
+      connection:
+          widget.connection ?? ClusterConnectionFactory.fromEnvironment(),
+      store: widget.store ?? SqfliteSnapshotStore(),
     );
-    _bootstrap();
+    _session.bootstrap();
   }
 
   @override
   void dispose() {
-    _relativeTimeTicker?.cancel();
+    _session.dispose();
     super.dispose();
   }
 
-  Future<void> _bootstrap() async {
-    // Show cached data immediately, then fetch live in the background.
-    bool cacheShown = false;
-
-    try {
-      final cachedProfiles = await _store.loadProfiles(maxAge: _cacheMaxAge);
-      if (cachedProfiles.isNotEmpty) {
-        final cachedSnapshot = await _store.loadSnapshot(
-          cachedProfiles.first.id,
-          maxAge: _cacheMaxAge,
-        );
-        if (cachedSnapshot != null && mounted) {
-          setState(() {
-            _clusters = cachedProfiles;
-            _selectedCluster = cachedProfiles.first;
-            _snapshot = cachedSnapshot;
-            _loadError = null;
-            _isLoading = false;
-            _isRefreshing = true;
-          });
-          cacheShown = true;
-        }
-      }
-    } catch (_) {
-      // Cache read failure is non-fatal — fall through to live fetch.
-    }
-
-    try {
-      final clusters = await _connection.listClusters();
-      if (clusters.isEmpty) {
-        if (mounted) setState(() => _isRefreshing = false);
-        return;
-      }
-
-      final selectedCluster = clusters.first;
-      final snapshot = await _connection.loadSnapshot(selectedCluster.id);
-
-      // Save to cache regardless of mount status — cache is process-scoped.
-      await _store.saveProfiles(clusters);
-      await _store.saveSnapshot(snapshot);
-
-      if (!mounted) return;
-
-      setState(() {
-        _clusters = clusters;
-        _selectedCluster = selectedCluster;
-        _snapshot = snapshot;
-        _loadError = null;
-        _isLoading = false;
-        _isRefreshing = false;
-        _lastRefreshedAt = DateTime.now();
-      });
-    } catch (error) {
-      if (!mounted) return;
-
-      if (cacheShown) {
-        // Cache is visible; swallow the live-fetch error silently.
-        setState(() => _isRefreshing = false);
-        return;
-      }
-
-      setState(() {
-        _loadError = error;
-        _isLoading = false;
-        _isRefreshing = false;
-      });
-    }
-  }
-
-  Future<void> _refreshCurrent() async {
-    final cluster = _selectedCluster;
-    if (cluster == null || _isRefreshing) return;
-
-    setState(() => _isRefreshing = true);
-
-    try {
-      final snapshot = await _connection.loadSnapshot(cluster.id);
-      await _store.saveSnapshot(snapshot);
-
-      if (!mounted) return;
-      setState(() {
-        _snapshot = snapshot;
-        _loadError = null;
-        _isRefreshing = false;
-        _lastRefreshedAt = DateTime.now();
-      });
-    } catch (error) {
-      if (!mounted) return;
-      final messenger = ScaffoldMessenger.maybeOf(context);
-      setState(() => _isRefreshing = false);
-      messenger
-          ?.showSnackBar(SnackBar(content: Text('Refresh failed: $error')));
-    }
-  }
-
-  Future<void> _cycleCluster() async {
-    if (_clusters.length < 2 || _isLoading || _selectedCluster == null) {
-      return;
-    }
-
-    final currentIndex = _clusters.indexOf(_selectedCluster!);
-    final nextCluster = _clusters[(currentIndex + 1) % _clusters.length];
-
-    setState(() {
-      _isLoading = true;
-      _selectedCluster = nextCluster;
-    });
-
-    // Show cached snapshot for the target cluster immediately if available.
-    bool cacheShown = false;
-    try {
-      final cachedSnapshot = await _store.loadSnapshot(
-        nextCluster.id,
-        maxAge: _cacheMaxAge,
-      );
-      if (cachedSnapshot != null && mounted) {
-        setState(() {
-          _snapshot = cachedSnapshot;
-          _loadError = null;
-          _isLoading = false;
-          _isRefreshing = true;
-        });
-        cacheShown = true;
-      }
-    } catch (_) {
-      // Non-fatal — fall through to live fetch.
-    }
-
-    try {
-      final snapshot = await _connection.loadSnapshot(nextCluster.id);
-      await _store.saveSnapshot(snapshot);
-
-      if (!mounted) return;
-
-      setState(() {
-        _snapshot = snapshot;
-        _loadError = null;
-        _isLoading = false;
-        _isRefreshing = false;
-        _lastRefreshedAt = DateTime.now();
-      });
-    } catch (error) {
-      if (!mounted) return;
-
-      if (cacheShown) {
-        setState(() => _isRefreshing = false);
-        return;
-      }
-
-      setState(() {
-        _loadError = error;
-        _isLoading = false;
-        _isRefreshing = false;
-      });
-    }
+  Future<void> _onRefresh() async {
+    final error = await _session.refresh();
+    if (!mounted || error == null) return;
+    ScaffoldMessenger.maybeOf(context)
+        ?.showSnackBar(SnackBar(content: Text(error)));
   }
 
   List<Widget> _buildScreens() {
     return [
       TopologyScreen(
-        snapshot: _snapshot,
-        isLoading: _isLoading,
-        error: _loadError,
-        connection: _connection,
-        clusterId: _selectedCluster?.id,
-        store: _store,
+        snapshot: _session.snapshot,
+        isLoading: _session.isLoading,
+        error: _session.loadError,
+        connection: _session.connection,
+        clusterId: _session.selectedCluster?.id,
+        store: _session.store,
       ),
-      ResourcesScreen(snapshot: _snapshot, isLoading: _isLoading),
-      ChangesScreen(snapshot: _snapshot, isLoading: _isLoading),
-      AlertsScreen(snapshot: _snapshot, isLoading: _isLoading),
+      ResourcesScreen(
+          snapshot: _session.snapshot, isLoading: _session.isLoading),
+      ChangesScreen(snapshot: _session.snapshot, isLoading: _session.isLoading),
+      AlertsScreen(snapshot: _session.snapshot, isLoading: _session.isLoading),
       const SettingsScreen(),
     ];
   }
 
   @override
   Widget build(BuildContext context) {
-    final screenWidth = MediaQuery.sizeOf(context).width;
-    final isTablet = screenWidth >= 960;
-    final isCompact = screenWidth < 600;
-    final palette = Theme.of(context).extension<ClusterOrbitPalette>()!;
-    final screens = _buildScreens();
-    final subtitle = _selectedCluster == null
-        ? 'Preparing ${_connection.mode.label.toLowerCase()} connection'
-        : '${_selectedCluster!.apiServerHost} / ${_selectedCluster!.environmentLabel}';
+    return ListenableBuilder(
+      listenable: _session,
+      builder: (context, _) {
+        final screenWidth = MediaQuery.sizeOf(context).width;
+        final isTablet = screenWidth >= 960;
+        final isCompact = screenWidth < 600;
+        final palette = Theme.of(context).extension<ClusterOrbitPalette>()!;
+        final screens = _buildScreens();
+        final selectedCluster = _session.selectedCluster;
+        final subtitle = selectedCluster == null
+            ? 'Preparing ${_session.connection.mode.label.toLowerCase()} connection'
+            : '${selectedCluster.apiServerHost} / ${selectedCluster.environmentLabel}';
 
-    return Scaffold(
-      appBar: AppBar(
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(_titles[_index]),
-            Text(
-              subtitle,
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: Colors.white.withValues(alpha: 0.68),
-                  ),
+        return Scaffold(
+          appBar: AppBar(
+            title: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(_titles[_index]),
+                Text(
+                  subtitle,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Colors.white.withValues(alpha: 0.68),
+                      ),
+                ),
+              ],
             ),
-          ],
-        ),
-        actions: [
-          if (_isRefreshing) const _RefreshingBadge(),
-          if (_lastRefreshedAt != null && !_isRefreshing)
-            _LastRefreshedIndicator(
-              refreshedAt: _lastRefreshedAt!,
-              onRefresh: _selectedCluster == null ? null : _refreshCurrent,
-              compact: isCompact,
-            ),
-          if (isCompact)
-            IconButton(
-              tooltip: 'Switch cluster',
-              onPressed: _clusters.isEmpty ? null : _cycleCluster,
-              icon: const Icon(Icons.hub_outlined),
-            )
-          else
-            TextButton.icon(
-              onPressed: _clusters.isEmpty ? null : _cycleCluster,
-              icon: const Icon(Icons.hub_outlined),
-              label: const Text('Switch Cluster'),
-            ),
-          const SizedBox(width: 8),
-        ],
-      ),
-      body: DecoratedBox(
-        decoration: BoxDecoration(
-          gradient: RadialGradient(
-            center: const Alignment(0.8, -0.9),
-            radius: 1.5,
-            colors: [
-              palette.canvasGlow.withValues(alpha: 0.18),
-              Colors.transparent,
+            actions: [
+              if (_session.isRefreshing) const _RefreshingBadge(),
+              if (_session.lastRefreshedAt != null && !_session.isRefreshing)
+                _LastRefreshedIndicator(
+                  refreshedAt: _session.lastRefreshedAt!,
+                  onRefresh: selectedCluster == null ? null : _onRefresh,
+                  compact: isCompact,
+                ),
+              if (isCompact)
+                IconButton(
+                  tooltip: 'Switch cluster',
+                  onPressed:
+                      _session.clusters.isEmpty ? null : _session.cycleCluster,
+                  icon: const Icon(Icons.hub_outlined),
+                )
+              else
+                TextButton.icon(
+                  onPressed:
+                      _session.clusters.isEmpty ? null : _session.cycleCluster,
+                  icon: const Icon(Icons.hub_outlined),
+                  label: const Text('Switch Cluster'),
+                ),
+              const SizedBox(width: 8),
             ],
           ),
-        ),
-        child: SafeArea(
-          top: false,
-          child:
-              isTablet ? _buildTabletLayout(context, screens) : screens[_index],
-        ),
-      ),
-      bottomNavigationBar: isTablet
-          ? null
-          : NavigationBar(
-              selectedIndex: _index,
-              destinations: _destinations,
-              onDestinationSelected: (value) => setState(() => _index = value),
+          body: DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: RadialGradient(
+                center: const Alignment(0.8, -0.9),
+                radius: 1.5,
+                colors: [
+                  palette.canvasGlow.withValues(alpha: 0.18),
+                  Colors.transparent,
+                ],
+              ),
             ),
+            child: SafeArea(
+              top: false,
+              child: isTablet
+                  ? _buildTabletLayout(context, screens)
+                  : screens[_index],
+            ),
+          ),
+          bottomNavigationBar: isTablet
+              ? null
+              : NavigationBar(
+                  selectedIndex: _index,
+                  destinations: _destinations,
+                  onDestinationSelected: (value) =>
+                      setState(() => _index = value),
+                ),
+        );
+      },
     );
   }
 
@@ -344,9 +189,9 @@ class _OrbitShellState extends State<OrbitShell> {
           child: _SideRail(
             selectedIndex: _index,
             titles: _titles,
-            clusterCount: _clusters.length,
-            nodeCount: _snapshot?.nodes.length ?? 0,
-            alertCount: _snapshot?.alerts.length ?? 0,
+            clusterCount: _session.clusters.length,
+            nodeCount: _session.snapshot?.nodes.length ?? 0,
+            alertCount: _session.snapshot?.alerts.length ?? 0,
             onChanged: (value) => setState(() => _index = value),
           ),
         ),
@@ -354,8 +199,8 @@ class _OrbitShellState extends State<OrbitShell> {
         SizedBox(
           width: 360,
           child: _InspectorPanel(
-            snapshot: _snapshot,
-            isLoading: _isLoading,
+            snapshot: _session.snapshot,
+            isLoading: _session.isLoading,
           ),
         ),
       ],
