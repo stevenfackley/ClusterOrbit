@@ -3,11 +3,16 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 )
+
+// maxScaleBodyBytes caps the scale request body. Payload is a trivial JSON
+// object `{"replicas": N}`; 1 KiB leaves a generous margin for whitespace.
+const maxScaleBodyBytes = 1 << 10
 
 // timeNow is the package's clock source, overridable in tests for deterministic
 // audit timestamps.
@@ -218,6 +223,7 @@ func (s *Server) handleMutation(w http.ResponseWriter, r *http.Request, clusterI
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, maxScaleBodyBytes)
 	var body struct {
 		Replicas *int `json:"replicas"`
 	}
@@ -294,6 +300,8 @@ func truncateToken(t string) string {
 }
 
 // writeBackendError translates a ClusterBackend error into an HTTP status.
+// Unknown backend errors log server-side but return a generic message so
+// kubernetes internals don't leak to clients.
 func writeBackendError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrNotFound):
@@ -303,7 +311,8 @@ func writeBackendError(w http.ResponseWriter, err error) {
 	case errors.Is(err, ErrUnsupported):
 		writeError(w, http.StatusNotImplemented, err.Error())
 	default:
-		writeError(w, http.StatusBadGateway, "backend error: "+err.Error())
+		log.Printf("gateway: backend error: %v", err)
+		writeError(w, http.StatusBadGateway, "backend error")
 	}
 }
 
