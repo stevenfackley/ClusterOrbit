@@ -6,6 +6,15 @@ import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
 
 import '../cluster_domain/cluster_models.dart';
+import '../cluster_domain/saved_connection.dart';
+
+/// User-configured connection persistence. Distinct from [SnapshotStore]:
+/// this is "what the user added", that is "what we cached from live".
+abstract interface class SavedConnectionStore {
+  Future<List<SavedConnection>> listConnections();
+  Future<void> saveConnection(SavedConnection connection);
+  Future<void> deleteConnection(String id);
+}
 
 abstract interface class SnapshotStore {
   /// Loads cached profiles. If [maxAge] is non-null, rows whose `cached_at`
@@ -37,7 +46,8 @@ abstract interface class SnapshotStore {
   });
 }
 
-final class SqfliteSnapshotStore implements SnapshotStore {
+final class SqfliteSnapshotStore
+    implements SnapshotStore, SavedConnectionStore {
   SqfliteSnapshotStore({this.dbPath});
 
   final String? dbPath;
@@ -54,7 +64,7 @@ final class SqfliteSnapshotStore implements SnapshotStore {
             (await getApplicationDocumentsDirectory()).path, 'clusterorbit.db');
     return openDatabase(
       path,
-      version: 2,
+      version: 3,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE cluster_profiles (
@@ -72,10 +82,14 @@ final class SqfliteSnapshotStore implements SnapshotStore {
           )
         ''');
         await db.execute(_createEventsTableSql);
+        await db.execute(_createSavedConnectionsTableSql);
       },
       onUpgrade: (db, oldVersion, newVersion) async {
         if (oldVersion < 2) {
           await db.execute(_createEventsTableSql);
+        }
+        if (oldVersion < 3) {
+          await db.execute(_createSavedConnectionsTableSql);
         }
       },
     );
@@ -90,6 +104,14 @@ final class SqfliteSnapshotStore implements SnapshotStore {
       payload     TEXT NOT NULL,
       cached_at   INTEGER NOT NULL,
       PRIMARY KEY (profile_id, kind, namespace, object_name)
+    )
+  ''';
+
+  static const _createSavedConnectionsTableSql = '''
+    CREATE TABLE saved_connections (
+      id         TEXT PRIMARY KEY,
+      payload    TEXT NOT NULL,
+      created_at INTEGER NOT NULL
     )
   ''';
 
@@ -240,5 +262,45 @@ final class SqfliteSnapshotStore implements SnapshotStore {
       },
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
+  }
+
+  @override
+  Future<List<SavedConnection>> listConnections() async {
+    final db = await _db;
+    final rows = await db.query(
+      'saved_connections',
+      orderBy: 'created_at ASC',
+    );
+    final out = <SavedConnection>[];
+    for (final row in rows) {
+      try {
+        final map =
+            jsonDecode(row['payload'] as String) as Map<String, dynamic>;
+        out.add(SavedConnection.fromJson(map));
+      } catch (_) {
+        // Corrupt payload — skip.
+      }
+    }
+    return out;
+  }
+
+  @override
+  Future<void> saveConnection(SavedConnection connection) async {
+    final db = await _db;
+    await db.insert(
+      'saved_connections',
+      {
+        'id': connection.id,
+        'payload': jsonEncode(connection.toJson()),
+        'created_at': DateTime.now().millisecondsSinceEpoch,
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  @override
+  Future<void> deleteConnection(String id) async {
+    final db = await _db;
+    await db.delete('saved_connections', where: 'id = ?', whereArgs: [id]);
   }
 }
