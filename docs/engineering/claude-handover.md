@@ -33,13 +33,22 @@ Implemented so far:
   - `ClusterService`: `clusterIp` (nullable; null for Ingress-type)
 - `KubernetesSnapshotLoader` extracts all new fields from the K8s API response.
 - `_EntityDetailPanel` surfaces all new fields in the detail view.
+- SQLite snapshot cache — **implementation plan written, not yet executed.**
+  - Design spec: `docs/superpowers/specs/2026-04-16-sqlite-snapshot-cache-design.md`
+  - Implementation plan: `docs/superpowers/plans/2026-04-16-sqlite-snapshot-cache.md`
+  - Plan is 4 tasks with full code for each step. Ready to execute.
 
 Not implemented yet:
 
-- SQLite persistence and offline restore
+- SQLite persistence and offline restore (plan is written — see above)
 - mutation flows
 - real gateway backend integration
 - richer topology engine features: clustering, filtering, viewport-aware LOD, pan/zoom state persistence, force-based layout
+
+## CI Status
+
+- **CI (Flutter + Go):** passing on `main`
+- **Docs Check (markdownlint):** was broken; fixed in this session by adding negation globs to `.github/workflows/docs-check.yml` to exclude `docs/superpowers/**` and `app/mobile/ios/Runner/Assets.xcassets/**`
 
 ## Important Files
 
@@ -164,9 +173,10 @@ There is no filtering, no viewport-aware LOD, and no pan/zoom state persistence.
 `GatewayClusterConnection` remains a scaffold returning sample-backed snapshots.
 No real auth/session/token/audit/gateway API flow exists yet.
 
-### 3. Local caching is not implemented
+### 3. Local caching is not implemented yet
 
-There is no SQLite snapshot store yet, despite the architecture and product docs assuming it.
+The plan is written and ready to execute.
+See `docs/superpowers/plans/2026-04-16-sqlite-snapshot-cache.md` for the full 4-task TDD plan.
 
 ### 4. Some docs are stale
 
@@ -178,23 +188,16 @@ Treat the current code and test results as authoritative over that note.
 
 ## Recommended Next Task
 
-Best next task: **SQLite snapshot caching**
+**Execute the SQLite snapshot cache plan.**
 
-Concrete shape:
+The plan is complete and saved at `docs/superpowers/plans/2026-04-16-sqlite-snapshot-cache.md`.
 
-1. Add `drift` (or `sqflite`) as a dependency in `app/mobile/pubspec.yaml`.
-2. Create `app/mobile/lib/core/sync_cache/` with:
-   - a `SnapshotStore` that persists and retrieves `ClusterSnapshot` by profile ID
-   - a schema with a `snapshots` table: `(id TEXT PRIMARY KEY, profile_id TEXT, generated_at INTEGER, payload TEXT)`
-   - serialization: encode `ClusterSnapshot` to/from JSON
-3. Wire `OrbitShell` to: load cached snapshot immediately on startup, then refresh from cluster in the background and update.
-4. Test: unit tests for the store (insert, fetch, stale detection).
+Use the `superpowers:executing-plans` or `superpowers:subagent-driven-development` skill to execute it task-by-task. The 4 tasks are:
 
-Why this next:
-
-- The map and detail drill-down are now the primary value. Caching makes them available offline and makes cold-start instant.
-- The architecture doc explicitly calls for SQLite — this closes the biggest gap between current state and the described design.
-- It requires no UI changes; it slots in below `OrbitShell`.
+1. Add dependencies (`sqflite`, `path_provider`, `path`, `sqflite_common_ffi`)
+2. Add `toJson`/`fromJson` to all domain model classes (TDD)
+3. Create `lib/core/sync_cache/snapshot_store.dart` — `SnapshotStore` interface + `SqfliteSnapshotStore` (TDD)
+4. Wire `OrbitShell` with cache-first bootstrap and update `main.dart`
 
 ## Second-Best Next Task
 
@@ -211,6 +214,7 @@ If continuing from here, keep these boundaries intact:
 - Keep kubeconfig parsing in `kubeconfig_repository.dart`.
 - Keep HTTP Kubernetes fetch logic in `kubernetes_snapshot_loader.dart` or a sibling transport-focused file.
 - Keep `ClusterSnapshot` as the UI-facing read model for the map.
+- Keep cache logic inside `OrbitShell._bootstrap()` and `_cycleCluster()` — no other layer touches the store.
 - Avoid pushing more orchestration into `OrbitShell`; it should remain a shell/bootstrap layer.
 - Avoid making widget tests depend on real machine state.
 
@@ -218,9 +222,7 @@ If continuing from here, keep these boundaries intact:
 
 If you are Claude resuming this work:
 
-1. Read [PROJECT_PLAN.md](C:/Users/steve/projects/ClusterOrbit/PROJECT_PLAN.md).
-2. Read [app/mobile/lib/shared/widgets/orbit_shell.dart](C:/Users/steve/projects/ClusterOrbit/app/mobile/lib/shared/widgets/orbit_shell.dart).
-3. Read [app/mobile/lib/features/topology/topology_screen.dart](C:/Users/steve/projects/ClusterOrbit/app/mobile/lib/features/topology/topology_screen.dart).
-4. Read the connectivity files under [app/mobile/lib/core/connectivity](C:/Users/steve/projects/ClusterOrbit/app/mobile/lib/core/connectivity).
-5. Run `flutter test` in `app/mobile`.
-6. Implement the recommended next task above.
+1. Read this file.
+2. Read [docs/superpowers/plans/2026-04-16-sqlite-snapshot-cache.md](C:/Users/steve/projects/ClusterOrbit/docs/superpowers/plans/2026-04-16-sqlite-snapshot-cache.md).
+3. Run `flutter test` in `app/mobile` to confirm baseline is green.
+4. Execute the SQLite cache plan using `superpowers:executing-plans`.
