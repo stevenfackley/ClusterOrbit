@@ -378,52 +378,66 @@ class _TopologyWorkspace extends StatelessWidget {
                           child: SizedBox(
                             width: layout.canvasWidth,
                             height: layout.canvasHeight,
-                            child: Stack(
-                              children: [
-                                Positioned.fill(
-                                  child: CustomPaint(
-                                    painter: TopologyLinkPainter(
-                                      layout: layout,
-                                      accent: palette.accentCyan,
-                                    ),
-                                  ),
-                                ),
-                                for (final node in snapshot.nodes)
-                                  if (layout.visibleNodeIds.contains(node.id))
-                                    CanvasNode(
-                                      offset: layout.positions[node.id]!,
-                                      onTap: () => onEntityTap(node),
-                                      child: NodeOrb(
-                                        node: node,
-                                        palette: palette,
-                                        selected: selectedEntity == node,
+                            child: ListenableBuilder(
+                              listenable: viewport,
+                              builder: (context, _) {
+                                final scale =
+                                    viewport.value.getMaxScaleOnAxis();
+                                final showLabels = scale >= 0.9;
+                                return Stack(
+                                  children: [
+                                    Positioned.fill(
+                                      child: CustomPaint(
+                                        painter: TopologyLinkPainter(
+                                          layout: layout,
+                                          accent: palette.accentCyan,
+                                        ),
                                       ),
                                     ),
-                                for (final workload in snapshot.workloads)
-                                  if (layout.visibleWorkloadIds
-                                      .contains(workload.id))
-                                    CanvasNode(
-                                      offset: layout.positions[workload.id]!,
-                                      onTap: () => onEntityTap(workload),
-                                      child: WorkloadOrb(
-                                        workload: workload,
-                                        palette: palette,
-                                        selected: selectedEntity == workload,
-                                      ),
-                                    ),
-                                for (final service in snapshot.services)
-                                  if (layout.visibleServiceIds
-                                      .contains(service.id))
-                                    CanvasNode(
-                                      offset: layout.positions[service.id]!,
-                                      onTap: () => onEntityTap(service),
-                                      child: ServiceOrb(
-                                        service: service,
-                                        palette: palette,
-                                        selected: selectedEntity == service,
-                                      ),
-                                    ),
-                              ],
+                                    for (final node in snapshot.nodes)
+                                      if (layout.visibleNodeIds
+                                          .contains(node.id))
+                                        CanvasNode(
+                                          offset: layout.positions[node.id]!,
+                                          onTap: () => onEntityTap(node),
+                                          child: NodeOrb(
+                                            node: node,
+                                            palette: palette,
+                                            selected: selectedEntity == node,
+                                            showLabels: showLabels,
+                                          ),
+                                        ),
+                                    for (final workload in snapshot.workloads)
+                                      if (layout.visibleWorkloadIds
+                                          .contains(workload.id))
+                                        CanvasNode(
+                                          offset:
+                                              layout.positions[workload.id]!,
+                                          onTap: () => onEntityTap(workload),
+                                          child: WorkloadOrb(
+                                            workload: workload,
+                                            palette: palette,
+                                            selected:
+                                                selectedEntity == workload,
+                                            showLabels: showLabels,
+                                          ),
+                                        ),
+                                    for (final service in snapshot.services)
+                                      if (layout.visibleServiceIds
+                                          .contains(service.id))
+                                        CanvasNode(
+                                          offset: layout.positions[service.id]!,
+                                          onTap: () => onEntityTap(service),
+                                          child: ServiceOrb(
+                                            service: service,
+                                            palette: palette,
+                                            selected: selectedEntity == service,
+                                            showLabels: showLabels,
+                                          ),
+                                        ),
+                                  ],
+                                );
+                              },
                             ),
                           ),
                         ),

@@ -48,11 +48,13 @@ class NodeOrb extends StatelessWidget {
     required this.node,
     required this.palette,
     this.selected = false,
+    this.showLabels = true,
   });
 
   final ClusterNode node;
   final ClusterOrbitPalette palette;
   final bool selected;
+  final bool showLabels;
 
   @override
   Widget build(BuildContext context) {
@@ -80,27 +82,33 @@ class NodeOrb extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(node.name, style: theme.textTheme.titleMedium),
-          const SizedBox(height: 6),
-          Text('${node.role.label} / ${node.zone}',
-              style: theme.textTheme.bodyMedium),
-          const SizedBox(height: 12),
-          Wrap(
-            spacing: 8,
-            runSpacing: 6,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: [
-              StatusDot(color: tint),
-              Text(
-                '${node.podCount} pods',
-                style: theme.textTheme.bodySmall?.copyWith(color: Colors.white),
-              ),
-              if (!node.schedulable)
+          if (showLabels) ...[
+            const SizedBox(height: 6),
+            Text('${node.role.label} / ${node.zone}',
+                style: theme.textTheme.bodyMedium),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 6,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                StatusDot(color: tint),
                 Text(
-                  'Cordoned',
-                  style: theme.textTheme.bodySmall?.copyWith(color: tint),
+                  '${node.podCount} pods',
+                  style:
+                      theme.textTheme.bodySmall?.copyWith(color: Colors.white),
                 ),
-            ],
-          ),
+                if (!node.schedulable)
+                  Text(
+                    'Cordoned',
+                    style: theme.textTheme.bodySmall?.copyWith(color: tint),
+                  ),
+              ],
+            ),
+          ] else ...[
+            const SizedBox(height: 8),
+            StatusDot(color: tint),
+          ],
         ],
       ),
     );
@@ -113,11 +121,13 @@ class WorkloadOrb extends StatelessWidget {
     required this.workload,
     required this.palette,
     this.selected = false,
+    this.showLabels = true,
   });
 
   final ClusterWorkload workload;
   final ClusterOrbitPalette palette;
   final bool selected;
+  final bool showLabels;
 
   @override
   Widget build(BuildContext context) {
@@ -142,24 +152,30 @@ class WorkloadOrb extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(workload.name, style: theme.textTheme.titleMedium),
-          const SizedBox(height: 6),
-          Text(
-            '${workload.kind.label} / ${workload.namespace}',
-            style: theme.textTheme.bodyMedium,
-          ),
-          const SizedBox(height: 10),
-          Wrap(
-            spacing: 8,
-            runSpacing: 6,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: [
-              StatusDot(color: tint),
-              Text(
-                '${workload.readyReplicas}/${workload.desiredReplicas} ready',
-                style: theme.textTheme.bodySmall?.copyWith(color: Colors.white),
-              ),
-            ],
-          ),
+          if (showLabels) ...[
+            const SizedBox(height: 6),
+            Text(
+              '${workload.kind.label} / ${workload.namespace}',
+              style: theme.textTheme.bodyMedium,
+            ),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 6,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                StatusDot(color: tint),
+                Text(
+                  '${workload.readyReplicas}/${workload.desiredReplicas} ready',
+                  style:
+                      theme.textTheme.bodySmall?.copyWith(color: Colors.white),
+                ),
+              ],
+            ),
+          ] else ...[
+            const SizedBox(height: 8),
+            StatusDot(color: tint),
+          ],
         ],
       ),
     );
@@ -172,11 +188,13 @@ class ServiceOrb extends StatelessWidget {
     required this.service,
     required this.palette,
     this.selected = false,
+    this.showLabels = true,
   });
 
   final ClusterService service;
   final ClusterOrbitPalette palette;
   final bool selected;
+  final bool showLabels;
 
   @override
   Widget build(BuildContext context) {
@@ -206,16 +224,21 @@ class ServiceOrb extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(service.name, style: theme.textTheme.titleMedium),
-          const SizedBox(height: 6),
-          Text(
-            '${service.exposure.label} / ${service.namespace}',
-            style: theme.textTheme.bodyMedium,
-          ),
-          const SizedBox(height: 10),
-          Text(
-            '${service.targetWorkloadIds.length} workload targets',
-            style: theme.textTheme.bodySmall?.copyWith(color: Colors.white),
-          ),
+          if (showLabels) ...[
+            const SizedBox(height: 6),
+            Text(
+              '${service.exposure.label} / ${service.namespace}',
+              style: theme.textTheme.bodyMedium,
+            ),
+            const SizedBox(height: 10),
+            Text(
+              '${service.targetWorkloadIds.length} workload targets',
+              style: theme.textTheme.bodySmall?.copyWith(color: Colors.white),
+            ),
+          ] else ...[
+            const SizedBox(height: 8),
+            StatusDot(color: tint),
+          ],
         ],
       ),
     );
