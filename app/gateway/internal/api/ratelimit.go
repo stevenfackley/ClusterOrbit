@@ -19,7 +19,15 @@ type RateLimiter struct {
 	// evictAfter: prune buckets unused for this long on each Allow call.
 	evictAfter time.Duration
 	lastEvict  time.Time
+	// maxBuckets caps memory. When the map hits this, we force an eviction
+	// pass regardless of the time-based schedule; if it's still over we drop
+	// the oldest bucket. Prevents unbounded growth from adversarial keys.
+	maxBuckets int
 }
+
+// defaultMaxBuckets bounds memory for the rate-limiter map. ~10 KiB per
+// entry order-of-magnitude, so 10k = ~100 MiB worst case.
+const defaultMaxBuckets = 10_000
 
 type bucket struct {
 	tokens   float64
@@ -39,6 +47,7 @@ func NewRateLimiter(rps, burst float64) *RateLimiter {
 		capacity:   burst,
 		now:        time.Now,
 		evictAfter: 10 * time.Minute,
+		maxBuckets: defaultMaxBuckets,
 	}
 }
 
@@ -55,6 +64,9 @@ func (r *RateLimiter) Allow(key string) bool {
 
 	b, ok := r.buckets[key]
 	if !ok {
+		if r.maxBuckets > 0 && len(r.buckets) >= r.maxBuckets {
+			r.forceEvict(now)
+		}
 		b = &bucket{tokens: r.capacity, lastSeen: now}
 		r.buckets[key] = b
 	}
@@ -81,5 +93,35 @@ func (r *RateLimiter) maybeEvict(now time.Time) {
 		if b.lastSeen.Before(cutoff) {
 			delete(r.buckets, k)
 		}
+	}
+}
+
+// forceEvict runs when the bucket count hits maxBuckets. First pass: drop
+// anything past evictAfter. If we're still at cap, drop the single oldest
+// entry so the new key can be inserted. O(n) but only runs when the map is
+// saturated.
+func (r *RateLimiter) forceEvict(now time.Time) {
+	r.lastEvict = now
+	cutoff := now.Add(-r.evictAfter)
+	for k, b := range r.buckets {
+		if b.lastSeen.Before(cutoff) {
+			delete(r.buckets, k)
+		}
+	}
+	if r.maxBuckets <= 0 || len(r.buckets) < r.maxBuckets {
+		return
+	}
+	var oldestKey string
+	var oldestTime time.Time
+	first := true
+	for k, b := range r.buckets {
+		if first || b.lastSeen.Before(oldestTime) {
+			oldestKey = k
+			oldestTime = b.lastSeen
+			first = false
+		}
+	}
+	if !first {
+		delete(r.buckets, oldestKey)
 	}
 }
