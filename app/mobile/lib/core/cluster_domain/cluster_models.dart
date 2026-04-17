@@ -76,6 +76,67 @@ enum TopologyEntityKind {
   service,
 }
 
+enum ClusterEventType {
+  normal,
+  warning,
+}
+
+extension ClusterEventTypeLabel on ClusterEventType {
+  String get label => switch (this) {
+        ClusterEventType.normal => 'Normal',
+        ClusterEventType.warning => 'Warning',
+      };
+
+  static ClusterEventType fromK8sType(String? raw) {
+    switch (raw) {
+      case 'Warning':
+        return ClusterEventType.warning;
+      case 'Normal':
+      default:
+        return ClusterEventType.normal;
+    }
+  }
+}
+
+class ClusterEvent {
+  const ClusterEvent({
+    required this.type,
+    required this.reason,
+    required this.message,
+    required this.lastTimestamp,
+    required this.count,
+    this.sourceComponent,
+  });
+
+  final ClusterEventType type;
+  final String reason;
+  final String message;
+  final DateTime lastTimestamp;
+  final int count;
+  final String? sourceComponent;
+
+  Map<String, dynamic> toJson() => {
+        'type': type.name,
+        'reason': reason,
+        'message': message,
+        'lastTimestamp': lastTimestamp.millisecondsSinceEpoch,
+        'count': count,
+        'sourceComponent': sourceComponent,
+      };
+
+  factory ClusterEvent.fromJson(Map<String, dynamic> json) => ClusterEvent(
+        type: ClusterEventType.values.byName(json['type'] as String),
+        reason: json['reason'] as String,
+        message: json['message'] as String,
+        lastTimestamp: DateTime.fromMillisecondsSinceEpoch(
+          json['lastTimestamp'] as int,
+          isUtc: true,
+        ),
+        count: json['count'] as int,
+        sourceComponent: json['sourceComponent'] as String?,
+      );
+}
+
 class ClusterProfile {
   const ClusterProfile({
     required this.id,

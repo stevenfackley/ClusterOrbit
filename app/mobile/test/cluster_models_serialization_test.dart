@@ -397,4 +397,58 @@ void main() {
       expect(restored.links.first.kind, TopologyEntityKind.workload);
     });
   });
+
+  group('ClusterEvent', () {
+    test('round-trips a Normal event with all fields', () {
+      final event = ClusterEvent(
+        type: ClusterEventType.normal,
+        reason: 'Pulled',
+        message: 'Successfully pulled image "nginx:1.27"',
+        lastTimestamp: DateTime.utc(2026, 4, 16, 20, 15),
+        count: 3,
+        sourceComponent: 'kubelet',
+      );
+      final restored = ClusterEvent.fromJson(event.toJson());
+      expect(restored.type, ClusterEventType.normal);
+      expect(restored.reason, 'Pulled');
+      expect(restored.message, 'Successfully pulled image "nginx:1.27"');
+      expect(restored.lastTimestamp, DateTime.utc(2026, 4, 16, 20, 15));
+      expect(restored.lastTimestamp.isUtc, isTrue);
+      expect(restored.count, 3);
+      expect(restored.sourceComponent, 'kubelet');
+    });
+
+    test('round-trips a Warning event with null sourceComponent', () {
+      final event = ClusterEvent(
+        type: ClusterEventType.warning,
+        reason: 'BackOff',
+        message: 'Back-off restarting failed container',
+        lastTimestamp: DateTime.utc(2026, 4, 16, 20, 16),
+        count: 7,
+      );
+      final restored = ClusterEvent.fromJson(event.toJson());
+      expect(restored.type, ClusterEventType.warning);
+      expect(restored.sourceComponent, isNull);
+      expect(restored.count, 7);
+    });
+
+    test('ClusterEventTypeLabel.fromK8sType maps Warning and Normal', () {
+      expect(
+        ClusterEventTypeLabel.fromK8sType('Warning'),
+        ClusterEventType.warning,
+      );
+      expect(
+        ClusterEventTypeLabel.fromK8sType('Normal'),
+        ClusterEventType.normal,
+      );
+      expect(
+        ClusterEventTypeLabel.fromK8sType(null),
+        ClusterEventType.normal,
+      );
+      expect(
+        ClusterEventTypeLabel.fromK8sType('Unknown'),
+        ClusterEventType.normal,
+      );
+    });
+  });
 }
