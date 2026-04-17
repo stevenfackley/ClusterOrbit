@@ -61,12 +61,21 @@ Defines the contract the UI is built around: `ClusterProfile`, `ClusterNode`, `C
 `ClusterService`, `ClusterAlert`, `TopologyLink`, `ClusterSnapshot`. All classes now have
 `toJson()`/`fromJson()`. Changing shapes here breaks the topology screen, store, and tests.
 
+### Session state
+
+- `app/mobile/lib/shared/state/cluster_session_controller.dart`
+
+`ClusterSessionController` (ChangeNotifier) owns: cluster list, selected cluster, current
+snapshot, load/refresh flags, `lastRefreshedAt`, and the 30s ticker that drives the
+"Updated Xm ago" AppBar label. `OrbitShell` is now a thin navigation shell wrapped in
+`ListenableBuilder(listenable: _session)`. Tests live in `test/cluster_session_controller_test.dart`.
+
 ### Snapshot cache
 
 - `app/mobile/lib/core/sync_cache/snapshot_store.dart`
 
 `SnapshotStore` interface + `SqfliteSnapshotStore`. The store is the only layer that should
-touch SQLite. `OrbitShell` is the only layer that should call the store.
+touch SQLite. `ClusterSessionController` is the only layer that should call the store.
 
 Key implementation details:
 
@@ -86,14 +95,19 @@ Key implementation details:
 
 ### Topology UI
 
-- `app/mobile/lib/features/topology/topology_screen.dart`
+Split across eight files under `app/mobile/lib/features/topology/`:
 
-Self-contained. Contains the interactive map, entity cards, painted links, lane layout,
-`_EntityDetailPanel`, and selection state. No reusable engine package extracted yet.
+- `topology_screen.dart` — orchestration only (selection state, filter state, viewport owner)
+- `topology_workspace.dart` — the canvas Stack + header + summary chips + filter row
+- `topology_panels.dart` — `TopologySidebar` (tablet rail) with flight-deck + priority alerts
+- `topology_layout.dart` — deterministic lane-based positioning + `TopologyFilter`
+- `topology_orbs.dart` — `NodeOrb` / `WorkloadOrb` / `ServiceOrb` + legend/status cards
+- `topology_painters.dart` — `OrbitBackdropPainter`, `TopologyGridPainter`, `TopologyLinkPainter`
+- `entity_detail_panel.dart` — tap-to-open side panel with events + scale dialog
 
 ## Tests
 
-**74 tests, all passing.** Run with:
+**101 tests, all passing.** Run with:
 
 ```bash
 cd app/mobile
@@ -135,9 +149,9 @@ failures surface as errors.
 **`saveProfiles([])` is a no-op, not a clear.** No mechanism to delete all cached profiles.
 If needed, add `clearProfiles()` to the interface.
 
-**No "stale cache" UI indicator.** When cached data is shown, `_isLoading` is cleared to
-`false`. The app gives no indication that a live refresh is in progress. Deliberate UX choice —
-revisit if users need freshness feedback.
+**Stale-cache UX** — the AppBar shows a "Refreshing" spinner while a live fetch is in
+flight and "Updated Xm ago" + a tap-to-refresh button once it lands. A 30s ticker in
+`ClusterSessionController` keeps the relative time fresh without a rebuild storm.
 
 **`@visibleForTesting dbForTest`** — exposes raw DB handle. Cleaner alternative: inject a
 `DatabaseFactory` via constructor. Current approach works but leaks implementation detail.
@@ -145,44 +159,49 @@ revisit if users need freshness feedback.
 **`sqlite3_flutter_libs` in `dev_dependencies`.** Sqflite bundles its own sqlite3 for
 Android/iOS, so this is correct for mobile. Move to `dependencies` if desktop is added.
 
-**Gateway now has a real Kubernetes backend.** `app/gateway/cmd/clusterorbit-gateway/main.go`
-selects `SampleBackend` or `KubeBackend` via `CLUSTERORBIT_GATEWAY_MODE` (`sample` default;
-`kube` reads `CLUSTERORBIT_GATEWAY_KUBECONFIG` / `KUBECONFIG`). `KubeBackend` talks raw HTTP
-to the API server (bearer token + CA data) — no client-go dependency. Single cluster per
-gateway for now. Any kubeconfig resolution or client init failure falls back to sample data
-with a log warning so the gateway still serves something useful during rollout.
+**Gateway has a real Kubernetes backend and is multi-cluster.** `MultiClusterBackend`
+resolves every kubeconfig context on boot and routes by `cluster_id`. Rate limiting
+(token-bucket, per-identity) + optional mTLS + JSON-Lines audit log all shipped. First
+mutation endpoint — POST `/clusters/{id}/workloads/{wid}/scale` — is live and audited.
 
-**Topology is a view, not an engine.** No force layout, no LOD, no filter, no viewport
-persistence.
+**Topology engine** is no longer a single file — filtering, LOD (hide labels below 0.9x),
+viewport persistence (TransformationController retained across rebuilds), and a deterministic
+lane layout are all shipped. Still no force-based layout.
 
 ## Recommended Next Tasks
 
-Prior items 1–5 plus the real Kubernetes backend are done. New priorities:
+Prior items 1–5 plus the real Kubernetes backend, gateway hardening, multi-cluster,
+mutation flow, topology engine split, and cache-invalidation UX are all done. New
+priorities:
 
-1. **Gateway auth hardening** — shared-token is minimum viable. Add rate limiting, rotate
-   support, and optional mTLS before exposing to anything non-local.
+1. **Approval / policy flows on the gateway.** `scale` is audited but unconditional —
+   add policy gates (e.g. max replicas, namespace allowlist, two-person approval) before
+   exposing more write paths.
 
-2. **Multi-cluster gateway** — `KubeBackend` is single-cluster; `cluster_id` is threaded
-   through the API but only one kubeconfig context is resolved at boot. Extend to resolve
-   multiple contexts and route requests by ID.
+2. **More mutation endpoints.** Cordon/drain nodes, restart deployments, rolling-update
+   image. Each one needs an explicit confirmation dialog on the mobile side and an audit
+   record on the gateway.
 
-3. **Mutation flows** — everything is read-only. Design and add the first write path
-   (e.g. scale a deployment, cordon a node) with an explicit confirmation + audit log.
+3. **Force-directed layout** as an optional topology mode — the deterministic lane
+   layout reads fine for small clusters but doesn't scale past ~40 nodes.
 
-4. **Topology engine extraction** — pan/zoom, filtering, LOD, viewport persistence. The
-   topology screen is still a single self-contained widget.
+4. **Retained scene graph** — re-rendering the full Stack on every frame of pan/zoom
+   is fine today but won't hold up under 200+ orbs. Move to a `CustomPainter` pass for
+   the orb layer with hit-testing via a spatial index.
 
-5. **Cache invalidation UX** — `cached_at` TTL shows stale data silently past 5 minutes.
-   Surface a "last refreshed" timestamp somewhere visible.
+5. **Settings screen wiring** — `settings_screen.dart` is still a placeholder. First
+   real control: pick kubeconfig context from a dropdown (today it's implicit on boot).
 
 ## Architecture Reminder
 
 ```text
 ClusterOrbitApp
-  └── OrbitShell (owns SnapshotStore + ClusterConnection)
-        ├── _bootstrap(): cache → live → save
-        ├── _cycleCluster(): cache → live → save
-        └── TopologyScreen / ResourcesScreen / ...
+  └── OrbitShell (thin nav shell, ListenableBuilder on session)
+        └── ClusterSessionController (owns ClusterConnection + SnapshotStore)
+              ├── bootstrap(): cache → live → save
+              ├── refresh(): live → save (returns error string for SnackBar)
+              ├── cycleCluster(): cache → live → save
+              └── TopologyScreen / ResourcesScreen / ...
 
 SnapshotStore (interface)
   └── SqfliteSnapshotStore
@@ -194,20 +213,21 @@ ClusterConnection (interface)
   └── GatewayClusterConnection (real HTTP; sample fallback on empty URL)
 
 Gateway server (app/gateway/)
-  └── api.Server (mux, shared-token auth)
+  └── api.Server (mux, shared-token auth, per-identity rate limit, optional mTLS)
         └── api.ClusterBackend (interface)
               ├── SampleBackend (in-memory demo data)
-              └── KubeBackend   (raw HTTP to k8s API via resolved kubeconfig)
+              └── MultiClusterBackend (one KubeBackend per resolvable context)
 ```
 
-`OrbitShell` is the only widget that should call `SnapshotStore`. No other layer should
-access it directly.
+`ClusterSessionController` is the only layer that should call `SnapshotStore`. Widgets
+read through the controller via `ListenableBuilder`.
 
 ## Quick Resume Checklist
 
 1. Read `PROJECT_PLAN.md`.
-2. Read `app/mobile/lib/shared/widgets/orbit_shell.dart` — bootstrap flow.
-3. Read `app/mobile/lib/core/sync_cache/snapshot_store.dart` — cache layer.
-4. Read `app/mobile/lib/features/topology/topology_screen.dart` — map + detail.
-5. Run `flutter test` in `app/mobile`.
-6. Pick a task from the list above.
+2. Read `app/mobile/lib/shared/state/cluster_session_controller.dart` — session state.
+3. Read `app/mobile/lib/shared/widgets/orbit_shell.dart` — nav shell wrapping the controller.
+4. Read `app/mobile/lib/core/sync_cache/snapshot_store.dart` — cache layer.
+5. Skim the `app/mobile/lib/features/topology/*.dart` split — screen / workspace / panels / orbs / painters / layout / entity_detail_panel.
+6. Run `flutter test` in `app/mobile`.
+7. Pick a task from the list above.
