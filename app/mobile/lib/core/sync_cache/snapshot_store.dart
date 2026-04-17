@@ -17,6 +17,24 @@ abstract interface class SnapshotStore {
   /// the cached row is older than `now - maxAge`, returns null.
   Future<ClusterSnapshot?> loadSnapshot(String profileId, {Duration? maxAge});
   Future<void> saveSnapshot(ClusterSnapshot snapshot);
+
+  /// Loads the cached event list for a single entity. Returns null when no
+  /// row exists or when the cached row is older than [maxAge].
+  Future<List<ClusterEvent>?> loadEvents({
+    required String profileId,
+    required TopologyEntityKind kind,
+    required String objectName,
+    String? namespace,
+    Duration? maxAge,
+  });
+
+  Future<void> saveEvents({
+    required String profileId,
+    required TopologyEntityKind kind,
+    required String objectName,
+    String? namespace,
+    required List<ClusterEvent> events,
+  });
 }
 
 final class SqfliteSnapshotStore implements SnapshotStore {
@@ -36,7 +54,7 @@ final class SqfliteSnapshotStore implements SnapshotStore {
             (await getApplicationDocumentsDirectory()).path, 'clusterorbit.db');
     return openDatabase(
       path,
-      version: 1,
+      version: 2,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE cluster_profiles (
@@ -53,9 +71,29 @@ final class SqfliteSnapshotStore implements SnapshotStore {
             cached_at    INTEGER NOT NULL
           )
         ''');
+        await db.execute(_createEventsTableSql);
+      },
+      onUpgrade: (db, oldVersion, newVersion) async {
+        if (oldVersion < 2) {
+          await db.execute(_createEventsTableSql);
+        }
       },
     );
   }
+
+  static const _createEventsTableSql = '''
+    CREATE TABLE cluster_events (
+      profile_id  TEXT NOT NULL,
+      kind        TEXT NOT NULL,
+      namespace   TEXT NOT NULL,
+      object_name TEXT NOT NULL,
+      payload     TEXT NOT NULL,
+      cached_at   INTEGER NOT NULL,
+      PRIMARY KEY (profile_id, kind, namespace, object_name)
+    )
+  ''';
+
+  static String _namespaceKey(String? namespace) => namespace ?? '';
 
   @override
   Future<List<ClusterProfile>> loadProfiles({Duration? maxAge}) async {
@@ -139,6 +177,65 @@ final class SqfliteSnapshotStore implements SnapshotStore {
         'profile_id': snapshot.profile.id,
         'payload': jsonEncode(snapshot.toJson()),
         'generated_at': snapshot.generatedAt.millisecondsSinceEpoch,
+        'cached_at': DateTime.now().millisecondsSinceEpoch,
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  @override
+  Future<List<ClusterEvent>?> loadEvents({
+    required String profileId,
+    required TopologyEntityKind kind,
+    required String objectName,
+    String? namespace,
+    Duration? maxAge,
+  }) async {
+    final db = await _db;
+    final where = maxAge == null
+        ? 'profile_id = ? AND kind = ? AND namespace = ? AND object_name = ?'
+        : 'profile_id = ? AND kind = ? AND namespace = ? AND object_name = ? AND cached_at >= ?';
+    final whereArgs = <Object>[
+      profileId,
+      kind.name,
+      _namespaceKey(namespace),
+      objectName,
+      if (maxAge != null)
+        DateTime.now().millisecondsSinceEpoch - maxAge.inMilliseconds,
+    ];
+    final rows = await db.query(
+      'cluster_events',
+      where: where,
+      whereArgs: whereArgs,
+    );
+    if (rows.isEmpty) return null;
+    try {
+      final list = jsonDecode(rows.first['payload'] as String) as List<dynamic>;
+      return list
+          .map((e) => ClusterEvent.fromJson(e as Map<String, dynamic>))
+          .toList();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  @override
+  Future<void> saveEvents({
+    required String profileId,
+    required TopologyEntityKind kind,
+    required String objectName,
+    String? namespace,
+    required List<ClusterEvent> events,
+  }) async {
+    final db = await _db;
+    await db.insert(
+      'cluster_events',
+      {
+        'profile_id': profileId,
+        'kind': kind.name,
+        'namespace': _namespaceKey(namespace),
+        'object_name': objectName,
+        'payload': jsonEncode(events.map((e) => e.toJson()).toList()),
         'cached_at': DateTime.now().millisecondsSinceEpoch,
       },
       conflictAlgorithm: ConflictAlgorithm.replace,

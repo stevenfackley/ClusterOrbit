@@ -208,6 +208,7 @@ class _OrbitShellState extends State<OrbitShell> {
         error: _loadError,
         connection: _connection,
         clusterId: _selectedCluster?.id,
+        store: _store,
       ),
       ResourcesScreen(snapshot: _snapshot, isLoading: _isLoading),
       ChangesScreen(snapshot: _snapshot, isLoading: _isLoading),

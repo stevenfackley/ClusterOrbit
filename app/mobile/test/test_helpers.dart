@@ -96,4 +96,23 @@ final class NoOpSnapshotStore implements SnapshotStore {
 
   @override
   Future<void> saveSnapshot(ClusterSnapshot snapshot) async {}
+
+  @override
+  Future<List<ClusterEvent>?> loadEvents({
+    required String profileId,
+    required TopologyEntityKind kind,
+    required String objectName,
+    String? namespace,
+    Duration? maxAge,
+  }) async =>
+      null;
+
+  @override
+  Future<void> saveEvents({
+    required String profileId,
+    required TopologyEntityKind kind,
+    required String objectName,
+    String? namespace,
+    required List<ClusterEvent> events,
+  }) async {}
 }

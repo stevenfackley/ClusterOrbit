@@ -1,9 +1,11 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
 import '../../core/cluster_domain/cluster_models.dart';
 import '../../core/connectivity/cluster_connection.dart';
+import '../../core/sync_cache/snapshot_store.dart';
 import '../../core/theme/clusterorbit_theme.dart';
 
 class TopologyScreen extends StatefulWidget {
@@ -14,6 +16,7 @@ class TopologyScreen extends StatefulWidget {
     required this.error,
     this.connection,
     this.clusterId,
+    this.store,
   });
 
   final ClusterSnapshot? snapshot;
@@ -21,6 +24,7 @@ class TopologyScreen extends StatefulWidget {
   final Object? error;
   final ClusterConnection? connection;
   final String? clusterId;
+  final SnapshotStore? store;
 
   @override
   State<TopologyScreen> createState() => _TopologyScreenState();
@@ -99,6 +103,7 @@ class _TopologyScreenState extends State<TopologyScreen> {
           showPortraitPanel: !isWide && !isLandscape,
           connection: widget.connection,
           clusterId: widget.clusterId,
+          store: widget.store,
         );
 
         if (isWide) {
@@ -121,6 +126,7 @@ class _TopologyScreenState extends State<TopologyScreen> {
                     onDismiss: _clearSelection,
                     connection: widget.connection,
                     clusterId: widget.clusterId,
+                    store: widget.store,
                   ),
                 ),
               ],
@@ -148,6 +154,8 @@ class _TopologyScreenState extends State<TopologyScreen> {
                                 onDismiss: _clearSelection,
                                 connection: widget.connection,
                                 clusterId: widget.clusterId,
+                                store: widget.store,
+                                profileId: widget.clusterId,
                               ),
                             ),
                           ),
@@ -183,6 +191,7 @@ class _TopologyWorkspace extends StatelessWidget {
     required this.showPortraitPanel,
     required this.connection,
     required this.clusterId,
+    required this.store,
   });
 
   final ClusterSnapshot snapshot;
@@ -195,6 +204,7 @@ class _TopologyWorkspace extends StatelessWidget {
   final bool showPortraitPanel;
   final ClusterConnection? connection;
   final String? clusterId;
+  final SnapshotStore? store;
 
   @override
   Widget build(BuildContext context) {
@@ -392,6 +402,8 @@ class _TopologyWorkspace extends StatelessWidget {
                                 onDismiss: onDismiss,
                                 connection: connection,
                                 clusterId: clusterId,
+                                store: store,
+                                profileId: clusterId,
                               ),
                             ),
                           ),
@@ -416,6 +428,7 @@ class _TopologySidebar extends StatelessWidget {
     required this.onDismiss,
     required this.connection,
     required this.clusterId,
+    required this.store,
   });
 
   final ClusterSnapshot snapshot;
@@ -424,6 +437,7 @@ class _TopologySidebar extends StatelessWidget {
   final VoidCallback onDismiss;
   final ClusterConnection? connection;
   final String? clusterId;
+  final SnapshotStore? store;
 
   @override
   Widget build(BuildContext context) {
@@ -451,6 +465,8 @@ class _TopologySidebar extends StatelessWidget {
                               onDismiss: onDismiss,
                               connection: connection,
                               clusterId: clusterId,
+                              store: store,
+                              profileId: clusterId,
                             ),
                           ),
                         ),
@@ -1249,6 +1265,8 @@ class _EntityDetailPanel extends StatefulWidget {
     required this.onDismiss,
     required this.connection,
     required this.clusterId,
+    this.store,
+    this.profileId,
   });
 
   final Object entity;
@@ -1256,18 +1274,29 @@ class _EntityDetailPanel extends StatefulWidget {
   final VoidCallback onDismiss;
   final ClusterConnection? connection;
   final String? clusterId;
+  final SnapshotStore? store;
+  final String? profileId;
 
   @override
   State<_EntityDetailPanel> createState() => _EntityDetailPanelState();
 }
 
 class _EntityDetailPanelState extends State<_EntityDetailPanel> {
-  Future<List<ClusterEvent>>? _eventsFuture;
+  static const _pollInterval = Duration(seconds: 30);
+  static const _eventCacheMaxAge = Duration(minutes: 5);
+
+  List<ClusterEvent>? _events;
+  bool _eventsSupported = false;
+  bool _isLoadingEvents = false;
+  bool _isRefreshingEvents = false;
+  Object? _eventsError;
+  Timer? _pollTimer;
+  int _loadGeneration = 0;
 
   @override
   void initState() {
     super.initState();
-    _loadEvents();
+    _startLoadForCurrentEntity();
   }
 
   @override
@@ -1275,28 +1304,143 @@ class _EntityDetailPanelState extends State<_EntityDetailPanel> {
     super.didUpdateWidget(oldWidget);
     if (!identical(oldWidget.entity, widget.entity) ||
         oldWidget.connection != widget.connection ||
-        oldWidget.clusterId != widget.clusterId) {
-      _loadEvents();
+        oldWidget.clusterId != widget.clusterId ||
+        oldWidget.store != widget.store ||
+        oldWidget.profileId != widget.profileId) {
+      _startLoadForCurrentEntity();
     }
   }
 
-  void _loadEvents() {
+  @override
+  void dispose() {
+    _pollTimer?.cancel();
+    super.dispose();
+  }
+
+  void _startLoadForCurrentEntity() {
+    _pollTimer?.cancel();
+    _pollTimer = null;
+    _loadGeneration++;
+    final generation = _loadGeneration;
+
     final connection = widget.connection;
     final clusterId = widget.clusterId;
-    if (connection == null || clusterId == null) {
-      _eventsFuture = null;
-      return;
-    }
     final ref = _entityRef(widget.entity);
-    if (ref == null) {
-      _eventsFuture = null;
+    if (connection == null || clusterId == null || ref == null) {
+      _events = null;
+      _eventsSupported = false;
+      _isLoadingEvents = false;
+      _isRefreshingEvents = false;
+      _eventsError = null;
       return;
     }
-    _eventsFuture = connection.loadEvents(
-      clusterId: clusterId,
-      kind: ref.kind,
-      objectName: ref.name,
-      namespace: ref.namespace,
+
+    _events = null;
+    _eventsSupported = true;
+    _isLoadingEvents = true;
+    _isRefreshingEvents = false;
+    _eventsError = null;
+
+    unawaited(_loadEvents(generation: generation, ref: ref));
+
+    _pollTimer = Timer.periodic(_pollInterval, (_) {
+      if (!mounted) return;
+      unawaited(_refreshLiveEvents(generation: generation, ref: ref));
+    });
+  }
+
+  Future<void> _loadEvents({
+    required int generation,
+    required _EntityRef ref,
+  }) async {
+    final store = widget.store;
+    final profileId = widget.profileId;
+
+    if (store != null && profileId != null) {
+      try {
+        final cached = await store.loadEvents(
+          profileId: profileId,
+          kind: ref.kind,
+          objectName: ref.name,
+          namespace: ref.namespace,
+          maxAge: _eventCacheMaxAge,
+        );
+        if (!mounted || generation != _loadGeneration) return;
+        if (cached != null) {
+          setState(() {
+            _events = cached;
+            _isLoadingEvents = false;
+            _isRefreshingEvents = true;
+            _eventsError = null;
+          });
+        }
+      } catch (_) {
+        // Cache read failure is non-fatal — fall through to live fetch.
+      }
+    }
+
+    await _refreshLiveEvents(generation: generation, ref: ref);
+  }
+
+  Future<void> _refreshLiveEvents({
+    required int generation,
+    required _EntityRef ref,
+  }) async {
+    final connection = widget.connection;
+    final clusterId = widget.clusterId;
+    if (connection == null || clusterId == null) return;
+
+    if (mounted && generation == _loadGeneration && _events != null) {
+      setState(() => _isRefreshingEvents = true);
+    }
+
+    try {
+      final events = await connection.loadEvents(
+        clusterId: clusterId,
+        kind: ref.kind,
+        objectName: ref.name,
+        namespace: ref.namespace,
+      );
+      if (!mounted || generation != _loadGeneration) return;
+
+      final store = widget.store;
+      final profileId = widget.profileId;
+      if (store != null && profileId != null) {
+        try {
+          await store.saveEvents(
+            profileId: profileId,
+            kind: ref.kind,
+            objectName: ref.name,
+            namespace: ref.namespace,
+            events: events,
+          );
+        } catch (_) {
+          // Cache write failure is non-fatal.
+        }
+      }
+
+      if (!mounted || generation != _loadGeneration) return;
+      setState(() {
+        _events = events;
+        _isLoadingEvents = false;
+        _isRefreshingEvents = false;
+        _eventsError = null;
+      });
+    } catch (error) {
+      if (!mounted || generation != _loadGeneration) return;
+      setState(() {
+        _isLoadingEvents = false;
+        _isRefreshingEvents = false;
+        if (_events == null) _eventsError = error;
+      });
+    }
+  }
+
+  void _onManualRefresh() {
+    final ref = _entityRef(widget.entity);
+    if (ref == null) return;
+    unawaited(
+      _refreshLiveEvents(generation: _loadGeneration, ref: ref),
     );
   }
 
@@ -1333,6 +1477,18 @@ class _EntityDetailPanelState extends State<_EntityDetailPanel> {
           Row(
             children: [
               Expanded(child: _buildTitle(theme)),
+              if (_eventsSupported)
+                IconButton(
+                  onPressed: _isLoadingEvents || _isRefreshingEvents
+                      ? null
+                      : _onManualRefresh,
+                  icon:
+                      const Icon(Icons.refresh, size: 18, color: Colors.white),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(),
+                  tooltip: 'Refresh events',
+                ),
+              if (_eventsSupported) const SizedBox(width: 8),
               IconButton(
                 onPressed: widget.onDismiss,
                 icon: const Icon(Icons.close, size: 18, color: Colors.white),
@@ -1344,14 +1500,33 @@ class _EntityDetailPanelState extends State<_EntityDetailPanel> {
           ),
           const SizedBox(height: 12),
           ..._buildFields(theme),
-          if (_eventsFuture != null) ...[
+          if (_eventsSupported) ...[
             const SizedBox(height: 16),
             Divider(color: Colors.white.withValues(alpha: 0.12), height: 1),
             const SizedBox(height: 12),
-            Text('Recent Events', style: theme.textTheme.titleSmall),
+            Row(
+              children: [
+                Text('Recent Events', style: theme.textTheme.titleSmall),
+                if (_isRefreshingEvents) ...[
+                  const SizedBox(width: 8),
+                  SizedBox(
+                    width: 12,
+                    height: 12,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      valueColor: AlwaysStoppedAnimation<Color>(
+                        Colors.white.withValues(alpha: 0.60),
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
             const SizedBox(height: 8),
             _EventList(
-              future: _eventsFuture!,
+              isLoading: _isLoadingEvents,
+              error: _eventsError,
+              events: _events,
               palette: widget.palette,
             ),
           ],
@@ -1551,48 +1726,50 @@ class _EntityRef {
 }
 
 class _EventList extends StatelessWidget {
-  const _EventList({required this.future, required this.palette});
+  const _EventList({
+    required this.isLoading,
+    required this.error,
+    required this.events,
+    required this.palette,
+  });
 
-  final Future<List<ClusterEvent>> future;
+  final bool isLoading;
+  final Object? error;
+  final List<ClusterEvent>? events;
   final ClusterOrbitPalette palette;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return FutureBuilder<List<ClusterEvent>>(
-      future: future,
-      builder: (context, snapshot) {
-        if (snapshot.connectionState != ConnectionState.done) {
-          return const Padding(
-            padding: EdgeInsets.symmetric(vertical: 8),
-            child: SizedBox(
-              width: 16,
-              height: 16,
-              child: CircularProgressIndicator(strokeWidth: 2),
-            ),
-          );
-        }
-        if (snapshot.hasError) {
-          return Text(
-            'Could not load events',
-            style: theme.textTheme.bodySmall?.copyWith(color: Colors.white60),
-          );
-        }
-        final events = snapshot.data ?? const [];
-        if (events.isEmpty) {
-          return Text(
-            'No recent events',
-            style: theme.textTheme.bodySmall?.copyWith(color: Colors.white60),
-          );
-        }
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            for (final event in events)
-              _EventRow(event: event, palette: palette, theme: theme),
-          ],
-        );
-      },
+    if (isLoading && events == null) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 8),
+        child: SizedBox(
+          width: 16,
+          height: 16,
+          child: CircularProgressIndicator(strokeWidth: 2),
+        ),
+      );
+    }
+    if (error != null && events == null) {
+      return Text(
+        'Could not load events',
+        style: theme.textTheme.bodySmall?.copyWith(color: Colors.white60),
+      );
+    }
+    final list = events ?? const <ClusterEvent>[];
+    if (list.isEmpty) {
+      return Text(
+        'No recent events',
+        style: theme.textTheme.bodySmall?.copyWith(color: Colors.white60),
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (final event in list)
+          _EventRow(event: event, palette: palette, theme: theme),
+      ],
     );
   }
 }
