@@ -200,7 +200,8 @@ class ClusterWorkload {
         'images': images,
       };
 
-  factory ClusterWorkload.fromJson(Map<String, dynamic> json) => ClusterWorkload(
+  factory ClusterWorkload.fromJson(Map<String, dynamic> json) =>
+      ClusterWorkload(
         id: json['id'] as String,
         namespace: json['namespace'] as String,
         name: json['name'] as String,
@@ -278,8 +279,7 @@ class ClusterService {
         namespace: json['namespace'] as String,
         name: json['name'] as String,
         exposure: ServiceExposure.values.byName(json['exposure'] as String),
-        targetWorkloadIds:
-            List<String>.from(json['targetWorkloadIds'] as List),
+        targetWorkloadIds: List<String>.from(json['targetWorkloadIds'] as List),
         ports: (json['ports'] as List)
             .map((p) => ServicePort.fromJson(p as Map<String, dynamic>))
             .toList(),
@@ -377,7 +377,8 @@ class ClusterSnapshot {
         'links': links.map((l) => l.toJson()).toList(),
       };
 
-  factory ClusterSnapshot.fromJson(Map<String, dynamic> json) => ClusterSnapshot(
+  factory ClusterSnapshot.fromJson(Map<String, dynamic> json) =>
+      ClusterSnapshot(
         profile:
             ClusterProfile.fromJson(json['profile'] as Map<String, dynamic>),
         generatedAt: DateTime.fromMillisecondsSinceEpoch(
