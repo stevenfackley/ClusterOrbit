@@ -7,6 +7,7 @@ import '../../core/cluster_domain/cluster_models.dart';
 import '../../core/connectivity/cluster_connection.dart';
 import '../../core/sync_cache/snapshot_store.dart';
 import '../../core/theme/clusterorbit_theme.dart';
+import 'topology_layout.dart';
 
 class TopologyScreen extends StatefulWidget {
   const TopologyScreen({
@@ -32,6 +33,14 @@ class TopologyScreen extends StatefulWidget {
 
 class _TopologyScreenState extends State<TopologyScreen> {
   Object? _selectedEntity;
+  TopologyFilter _filter = const TopologyFilter();
+  final TransformationController _viewport = TransformationController();
+
+  @override
+  void dispose() {
+    _viewport.dispose();
+    super.dispose();
+  }
 
   void _onEntityTap(Object entity) {
     setState(() {
@@ -41,6 +50,10 @@ class _TopologyScreenState extends State<TopologyScreen> {
 
   void _clearSelection() {
     setState(() => _selectedEntity = null);
+  }
+
+  void _setFilter(TopologyFilter next) {
+    setState(() => _filter = next);
   }
 
   @override
@@ -87,9 +100,10 @@ class _TopologyScreenState extends State<TopologyScreen> {
         final isLandscape =
             MediaQuery.orientationOf(context) == Orientation.landscape;
         final canvasHeight = math.max(520.0, constraints.maxHeight - 40);
-        final layout = _TopologyLayout.build(
+        final layout = TopologyLayout.build(
           clusterSnapshot,
           canvasHeight: canvasHeight,
+          filter: _filter,
         );
 
         final workspace = _TopologyWorkspace(
@@ -104,6 +118,9 @@ class _TopologyScreenState extends State<TopologyScreen> {
           connection: widget.connection,
           clusterId: widget.clusterId,
           store: widget.store,
+          filter: _filter,
+          onFilterChange: _setFilter,
+          viewport: _viewport,
         );
 
         if (isWide) {
@@ -192,10 +209,13 @@ class _TopologyWorkspace extends StatelessWidget {
     required this.connection,
     required this.clusterId,
     required this.store,
+    required this.filter,
+    required this.onFilterChange,
+    required this.viewport,
   });
 
   final ClusterSnapshot snapshot;
-  final _TopologyLayout layout;
+  final TopologyLayout layout;
   final double canvasHeight;
   final ClusterOrbitPalette palette;
   final Object? selectedEntity;
@@ -205,6 +225,9 @@ class _TopologyWorkspace extends StatelessWidget {
   final ClusterConnection? connection;
   final String? clusterId;
   final SnapshotStore? store;
+  final TopologyFilter filter;
+  final ValueChanged<TopologyFilter> onFilterChange;
+  final TransformationController viewport;
 
   @override
   Widget build(BuildContext context) {
@@ -296,6 +319,27 @@ class _TopologyWorkspace extends StatelessWidget {
                       const SizedBox(width: 12),
                       _SummaryChip(
                           label: 'Alerts', value: '${snapshot.alerts.length}'),
+                      const SizedBox(width: 24),
+                      _FilterChip(
+                        label: 'Nodes',
+                        selected: filter.showNodes,
+                        onChanged: (v) =>
+                            onFilterChange(filter.copyWith(showNodes: v)),
+                      ),
+                      const SizedBox(width: 8),
+                      _FilterChip(
+                        label: 'Workloads',
+                        selected: filter.showWorkloads,
+                        onChanged: (v) =>
+                            onFilterChange(filter.copyWith(showWorkloads: v)),
+                      ),
+                      const SizedBox(width: 8),
+                      _FilterChip(
+                        label: 'Services',
+                        selected: filter.showServices,
+                        onChanged: (v) =>
+                            onFilterChange(filter.copyWith(showServices: v)),
+                      ),
                     ],
                   ),
                 ),
@@ -324,6 +368,7 @@ class _TopologyWorkspace extends StatelessWidget {
                       ),
                       Positioned.fill(
                         child: InteractiveViewer(
+                          transformationController: viewport,
                           constrained: true,
                           minScale: 0.8,
                           maxScale: 1.8,
@@ -342,35 +387,40 @@ class _TopologyWorkspace extends StatelessWidget {
                                   ),
                                 ),
                                 for (final node in snapshot.nodes)
-                                  _CanvasNode(
-                                    offset: layout.positions[node.id]!,
-                                    onTap: () => onEntityTap(node),
-                                    child: _NodeOrb(
-                                      node: node,
-                                      palette: palette,
-                                      selected: selectedEntity == node,
+                                  if (layout.visibleNodeIds.contains(node.id))
+                                    _CanvasNode(
+                                      offset: layout.positions[node.id]!,
+                                      onTap: () => onEntityTap(node),
+                                      child: _NodeOrb(
+                                        node: node,
+                                        palette: palette,
+                                        selected: selectedEntity == node,
+                                      ),
                                     ),
-                                  ),
                                 for (final workload in snapshot.workloads)
-                                  _CanvasNode(
-                                    offset: layout.positions[workload.id]!,
-                                    onTap: () => onEntityTap(workload),
-                                    child: _WorkloadOrb(
-                                      workload: workload,
-                                      palette: palette,
-                                      selected: selectedEntity == workload,
+                                  if (layout.visibleWorkloadIds
+                                      .contains(workload.id))
+                                    _CanvasNode(
+                                      offset: layout.positions[workload.id]!,
+                                      onTap: () => onEntityTap(workload),
+                                      child: _WorkloadOrb(
+                                        workload: workload,
+                                        palette: palette,
+                                        selected: selectedEntity == workload,
+                                      ),
                                     ),
-                                  ),
                                 for (final service in snapshot.services)
-                                  _CanvasNode(
-                                    offset: layout.positions[service.id]!,
-                                    onTap: () => onEntityTap(service),
-                                    child: _ServiceOrb(
-                                      service: service,
-                                      palette: palette,
-                                      selected: selectedEntity == service,
+                                  if (layout.visibleServiceIds
+                                      .contains(service.id))
+                                    _CanvasNode(
+                                      offset: layout.positions[service.id]!,
+                                      onTap: () => onEntityTap(service),
+                                      child: _ServiceOrb(
+                                        service: service,
+                                        palette: palette,
+                                        selected: selectedEntity == service,
+                                      ),
                                     ),
-                                  ),
                               ],
                             ),
                           ),
@@ -639,7 +689,7 @@ class _LinkPainter extends CustomPainter {
     required this.accent,
   });
 
-  final _TopologyLayout layout;
+  final TopologyLayout layout;
   final Color accent;
 
   @override
@@ -1009,6 +1059,35 @@ class _SummaryChip extends StatelessWidget {
   }
 }
 
+class _FilterChip extends StatelessWidget {
+  const _FilterChip({
+    required this.label,
+    required this.selected,
+    required this.onChanged,
+  });
+
+  final String label;
+  final bool selected;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return FilterChip(
+      label: Text(label),
+      selected: selected,
+      onSelected: onChanged,
+      showCheckmark: true,
+      labelStyle: theme.textTheme.bodySmall?.copyWith(
+        color: selected ? theme.colorScheme.onPrimary : Colors.white70,
+      ),
+      backgroundColor: Colors.white.withValues(alpha: 0.04),
+      selectedColor: theme.colorScheme.primary.withValues(alpha: 0.5),
+      side: BorderSide(color: Colors.white.withValues(alpha: 0.1)),
+    );
+  }
+}
+
 class _MetricRow extends StatelessWidget {
   const _MetricRow({
     required this.label,
@@ -1122,140 +1201,6 @@ Color _healthTint(ClusterHealthLevel level, ClusterOrbitPalette palette) {
     case ClusterHealthLevel.critical:
       return const Color(0xFFFF6F7A);
   }
-}
-
-class _TopologyLayout {
-  const _TopologyLayout({
-    required this.positions,
-    required this.edges,
-    required this.canvasWidth,
-    required this.canvasHeight,
-  });
-
-  final Map<String, Offset> positions;
-  final List<_TopologyEdge> edges;
-  final double canvasWidth;
-  final double canvasHeight;
-
-  static _TopologyLayout build(
-    ClusterSnapshot snapshot, {
-    required double canvasHeight,
-  }) {
-    const leftMargin = 56.0;
-    const topMargin = 32.0;
-    const bottomMargin = 92.0;
-    const nodeWidth = 132.0;
-    const workloadWidth = 132.0;
-    const serviceWidth = 128.0;
-    const infrastructureWidth = 360.0;
-    const workloadLeft = 470.0;
-    const serviceLeft = 790.0;
-
-    final controlPlanes = snapshot.nodes
-        .where((node) => node.role == ClusterNodeRole.controlPlane)
-        .toList()
-      ..sort((a, b) => a.name.compareTo(b.name));
-    final workers = snapshot.nodes
-        .where((node) => node.role == ClusterNodeRole.worker)
-        .toList()
-      ..sort((a, b) => a.name.compareTo(b.name));
-    final workloads = [...snapshot.workloads]
-      ..sort((a, b) => a.name.compareTo(b.name));
-    final services = [...snapshot.services]
-      ..sort((a, b) => a.name.compareTo(b.name));
-
-    final positions = <String, Offset>{};
-    final usableHeight =
-        math.max(280.0, canvasHeight - topMargin - bottomMargin);
-
-    final controlPlaneStep = usableHeight / math.max(controlPlanes.length, 1);
-    for (var i = 0; i < controlPlanes.length; i++) {
-      positions[controlPlanes[i].id] = Offset(
-        leftMargin,
-        topMargin + (i * controlPlaneStep),
-      );
-    }
-
-    const workerColumns = 4;
-    final workerRows = math.max(1, (workers.length / workerColumns).ceil());
-    final workerRowStep = usableHeight / workerRows;
-    for (var i = 0; i < workers.length; i++) {
-      final row = i ~/ workerColumns;
-      final column = i % workerColumns;
-      positions[workers[i].id] = Offset(
-        leftMargin + 148 + (column * 80),
-        topMargin + (row * workerRowStep),
-      );
-    }
-
-    const workloadColumns = 2;
-    final workloadRows =
-        math.max(1, (workloads.length / workloadColumns).ceil());
-    final workloadRowStep = usableHeight / workloadRows;
-    for (var i = 0; i < workloads.length; i++) {
-      final row = i ~/ workloadColumns;
-      final column = i % workloadColumns;
-      positions[workloads[i].id] = Offset(
-        workloadLeft + (column * 154),
-        topMargin + (row * workloadRowStep),
-      );
-    }
-
-    final serviceRows = math.max(1, services.length);
-    final serviceRowStep = usableHeight / serviceRows;
-    for (var i = 0; i < services.length; i++) {
-      positions[services[i].id] = Offset(
-        serviceLeft,
-        topMargin + (i * serviceRowStep),
-      );
-    }
-
-    final edges = <_TopologyEdge>[
-      for (final link in snapshot.links)
-        if (positions.containsKey(link.sourceId) &&
-            positions.containsKey(link.targetId))
-          _TopologyEdge(
-            start: _connectionPoint(
-              positions[link.sourceId]!,
-              width: link.sourceId.startsWith('service:')
-                  ? serviceWidth
-                  : nodeWidth,
-            ),
-            end: _connectionPoint(
-              positions[link.targetId]!,
-              width: link.targetId.startsWith('service:')
-                  ? serviceWidth
-                  : workloadWidth,
-              trailing: false,
-            ),
-          ),
-    ];
-
-    return _TopologyLayout(
-      positions: positions,
-      edges: edges,
-      canvasWidth: infrastructureWidth + workloadWidth + serviceLeft,
-      canvasHeight: canvasHeight,
-    );
-  }
-
-  static Offset _connectionPoint(
-    Offset topLeft, {
-    required double width,
-    bool trailing = true,
-  }) {
-    return Offset(topLeft.dx + (trailing ? width : 0), topLeft.dy + 42);
-  }
-}
-
-class _TopologyEdge {
-  const _TopologyEdge({
-    required this.start,
-    required this.end,
-  });
-
-  final Offset start;
-  final Offset end;
 }
 
 class _EntityDetailPanel extends StatefulWidget {
