@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../core/cluster_domain/cluster_models.dart';
 import '../../core/connectivity/cluster_connection.dart';
 import '../../core/connectivity/cluster_connection_factory.dart';
+import '../../core/sync_cache/snapshot_store.dart';
 import '../../core/theme/clusterorbit_theme.dart';
 import '../../features/alerts/alerts_screen.dart';
 import '../../features/changes/changes_screen.dart';
@@ -14,9 +15,11 @@ class OrbitShell extends StatefulWidget {
   const OrbitShell({
     super.key,
     this.connection,
+    this.store,
   });
 
   final ClusterConnection? connection;
+  final SnapshotStore? store;
 
   @override
   State<OrbitShell> createState() => _OrbitShellState();
@@ -25,6 +28,7 @@ class OrbitShell extends StatefulWidget {
 class _OrbitShellState extends State<OrbitShell> {
   int _index = 0;
   late final ClusterConnection _connection;
+  late final SnapshotStore _store;
   List<ClusterProfile> _clusters = const [];
   ClusterProfile? _selectedCluster;
   ClusterSnapshot? _snapshot;
@@ -60,18 +64,46 @@ class _OrbitShellState extends State<OrbitShell> {
     super.initState();
     _connection =
         widget.connection ?? ClusterConnectionFactory.fromEnvironment();
+    _store = widget.store ?? SqfliteSnapshotStore();
     _bootstrap();
   }
 
   Future<void> _bootstrap() async {
+    // Show cached data immediately, then fetch live in the background.
+    bool cacheShown = false;
+
+    try {
+      final cachedProfiles = await _store.loadProfiles();
+      if (cachedProfiles.isNotEmpty) {
+        final cachedSnapshot =
+            await _store.loadSnapshot(cachedProfiles.first.id);
+        if (cachedSnapshot != null && mounted) {
+          setState(() {
+            _clusters = cachedProfiles;
+            _selectedCluster = cachedProfiles.first;
+            _snapshot = cachedSnapshot;
+            _loadError = null;
+            _isLoading = false;
+          });
+          cacheShown = true;
+        }
+      }
+    } catch (_) {
+      // Cache read failure is non-fatal — fall through to live fetch.
+    }
+
     try {
       final clusters = await _connection.listClusters();
+      if (clusters.isEmpty) return;
+
       final selectedCluster = clusters.first;
       final snapshot = await _connection.loadSnapshot(selectedCluster.id);
 
-      if (!mounted) {
-        return;
-      }
+      // Save to cache regardless of mount status — cache is process-scoped.
+      await _store.saveProfiles(clusters);
+      await _store.saveSnapshot(snapshot);
+
+      if (!mounted) return;
 
       setState(() {
         _clusters = clusters;
@@ -81,7 +113,10 @@ class _OrbitShellState extends State<OrbitShell> {
         _isLoading = false;
       });
     } catch (error) {
-      if (!mounted) {
+      if (!mounted) return;
+
+      if (cacheShown) {
+        // Cache is visible; swallow the live-fetch error silently.
         return;
       }
 
@@ -105,12 +140,27 @@ class _OrbitShellState extends State<OrbitShell> {
       _selectedCluster = nextCluster;
     });
 
+    // Show cached snapshot for the target cluster immediately if available.
+    bool cacheShown = false;
+    try {
+      final cachedSnapshot = await _store.loadSnapshot(nextCluster.id);
+      if (cachedSnapshot != null && mounted) {
+        setState(() {
+          _snapshot = cachedSnapshot;
+          _loadError = null;
+          _isLoading = false;
+        });
+        cacheShown = true;
+      }
+    } catch (_) {
+      // Non-fatal — fall through to live fetch.
+    }
+
     try {
       final snapshot = await _connection.loadSnapshot(nextCluster.id);
+      await _store.saveSnapshot(snapshot);
 
-      if (!mounted) {
-        return;
-      }
+      if (!mounted) return;
 
       setState(() {
         _snapshot = snapshot;
@@ -118,9 +168,9 @@ class _OrbitShellState extends State<OrbitShell> {
         _isLoading = false;
       });
     } catch (error) {
-      if (!mounted) {
-        return;
-      }
+      if (!mounted) return;
+
+      if (cacheShown) return;
 
       setState(() {
         _loadError = error;

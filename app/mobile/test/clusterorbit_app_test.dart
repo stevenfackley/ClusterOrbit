@@ -9,7 +9,10 @@ void main() {
   testWidgets('MaterialApp uses ClusterOrbit identity and dark mode',
       (tester) async {
     await tester.pumpWidget(
-      ClusterOrbitApp(connection: TestClusterConnection()),
+      ClusterOrbitApp(
+        connection: TestClusterConnection(),
+        store: const NoOpSnapshotStore(),
+      ),
     );
 
     final app = tester.widget<MaterialApp>(find.byType(MaterialApp));
@@ -24,7 +27,10 @@ void main() {
   testWidgets('dark theme exposes ClusterOrbit palette extension',
       (tester) async {
     await tester.pumpWidget(
-      ClusterOrbitApp(connection: TestClusterConnection()),
+      ClusterOrbitApp(
+        connection: TestClusterConnection(),
+        store: const NoOpSnapshotStore(),
+      ),
     );
 
     final context = tester.element(find.byType(Scaffold).first);

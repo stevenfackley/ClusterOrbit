@@ -4,6 +4,7 @@ import 'package:clusterorbit_mobile/app/clusterorbit_app.dart';
 import 'package:clusterorbit_mobile/core/cluster_domain/cluster_models.dart';
 import 'package:clusterorbit_mobile/core/connectivity/cluster_connection.dart';
 import 'package:clusterorbit_mobile/core/connectivity/sample_cluster_data.dart';
+import 'package:clusterorbit_mobile/core/sync_cache/snapshot_store.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 Future<void> pumpClusterOrbitApp(
@@ -17,7 +18,10 @@ Future<void> pumpClusterOrbitApp(
   }
 
   await tester.pumpWidget(
-    ClusterOrbitApp(connection: connection ?? TestClusterConnection()),
+    ClusterOrbitApp(
+      connection: connection ?? TestClusterConnection(),
+      store: const NoOpSnapshotStore(),
+    ),
   );
   await tester.pumpAndSettle();
 }
@@ -51,4 +55,21 @@ final class TestClusterConnection implements ClusterConnection {
   Stream<ClusterSnapshot> watchSnapshot(String clusterId) async* {
     yield await loadSnapshot(clusterId);
   }
+}
+
+/// No-op store used in widget tests — prevents any SQLite I/O during test runs.
+final class NoOpSnapshotStore implements SnapshotStore {
+  const NoOpSnapshotStore();
+
+  @override
+  Future<List<ClusterProfile>> loadProfiles() async => const [];
+
+  @override
+  Future<void> saveProfiles(List<ClusterProfile> profiles) async {}
+
+  @override
+  Future<ClusterSnapshot?> loadSnapshot(String profileId) async => null;
+
+  @override
+  Future<void> saveSnapshot(ClusterSnapshot snapshot) async {}
 }
