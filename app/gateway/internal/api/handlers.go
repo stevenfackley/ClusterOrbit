@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -51,7 +52,12 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	writeJSON(w, http.StatusOK, s.Backend.ListClusters())
+	clusters, err := s.Backend.ListClusters(r.Context())
+	if err != nil {
+		writeBackendError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, clusters)
 }
 
 // handleClusterScoped dispatches /v1/clusters/{id}/{subpath}.
@@ -75,9 +81,9 @@ func (s *Server) handleClusterScoped(w http.ResponseWriter, r *http.Request) {
 
 	switch subpath {
 	case "snapshot":
-		snapshot, ok := s.Backend.LoadSnapshot(clusterID)
-		if !ok {
-			writeError(w, http.StatusNotFound, "cluster not found")
+		snapshot, err := s.Backend.LoadSnapshot(r.Context(), clusterID)
+		if err != nil {
+			writeBackendError(w, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, snapshot)
@@ -96,11 +102,25 @@ func (s *Server) handleClusterScoped(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "kind and objectName are required")
 			return
 		}
-		events := s.Backend.LoadEvents(clusterID, kind, objectName, namespace, limit)
+		events, err := s.Backend.LoadEvents(r.Context(), clusterID, kind, objectName, namespace, limit)
+		if err != nil {
+			writeBackendError(w, err)
+			return
+		}
 		writeJSON(w, http.StatusOK, events)
 	default:
 		writeError(w, http.StatusNotFound, "not found")
 	}
+}
+
+// writeBackendError translates a ClusterBackend error into an HTTP status.
+// ErrNotFound → 404, anything else → 502 (upstream failure).
+func writeBackendError(w http.ResponseWriter, err error) {
+	if errors.Is(err, ErrNotFound) {
+		writeError(w, http.StatusNotFound, "cluster not found")
+		return
+	}
+	writeError(w, http.StatusBadGateway, "backend error: "+err.Error())
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {

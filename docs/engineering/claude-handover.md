@@ -145,24 +145,26 @@ revisit if users need freshness feedback.
 **`sqlite3_flutter_libs` in `dev_dependencies`.** Sqflite bundles its own sqlite3 for
 Android/iOS, so this is correct for mobile. Move to `dependencies` if desktop is added.
 
-**Gateway backend is scaffold-only.** `app/gateway/cmd/clusterorbit-gateway/main.go` serves
-the read-only HTTP contract (clusters / snapshot / events) with shared-token auth, but the
-data source is `SampleBackend` — there is no real Kubernetes client behind it yet. Swap in
-a real `ClusterBackend` implementation to connect to a live cluster.
+**Gateway now has a real Kubernetes backend.** `app/gateway/cmd/clusterorbit-gateway/main.go`
+selects `SampleBackend` or `KubeBackend` via `CLUSTERORBIT_GATEWAY_MODE` (`sample` default;
+`kube` reads `CLUSTERORBIT_GATEWAY_KUBECONFIG` / `KUBECONFIG`). `KubeBackend` talks raw HTTP
+to the API server (bearer token + CA data) — no client-go dependency. Single cluster per
+gateway for now. Any kubeconfig resolution or client init failure falls back to sample data
+with a log warning so the gateway still serves something useful during rollout.
 
 **Topology is a view, not an engine.** No force layout, no LOD, no filter, no viewport
 persistence.
 
 ## Recommended Next Tasks
 
-Prior items 1–5 are done. New priorities:
+Prior items 1–5 plus the real Kubernetes backend are done. New priorities:
 
-1. **Real Kubernetes backend in the gateway** — replace `SampleBackend` with a client that
-   reuses the same kubeconfig parsing + snapshot/event loaders as the mobile direct path.
-   Currently the gateway returns a hard-coded single-cluster demo.
-
-2. **Gateway auth hardening** — shared-token is minimum viable. Add rate limiting, rotate
+1. **Gateway auth hardening** — shared-token is minimum viable. Add rate limiting, rotate
    support, and optional mTLS before exposing to anything non-local.
+
+2. **Multi-cluster gateway** — `KubeBackend` is single-cluster; `cluster_id` is threaded
+   through the API but only one kubeconfig context is resolved at boot. Extend to resolve
+   multiple contexts and route requests by ID.
 
 3. **Mutation flows** — everything is read-only. Design and add the first write path
    (e.g. scale a deployment, cordon a node) with an explicit confirmation + audit log.
@@ -194,7 +196,8 @@ ClusterConnection (interface)
 Gateway server (app/gateway/)
   └── api.Server (mux, shared-token auth)
         └── api.ClusterBackend (interface)
-              └── SampleBackend (in-memory demo data)
+              ├── SampleBackend (in-memory demo data)
+              └── KubeBackend   (raw HTTP to k8s API via resolved kubeconfig)
 ```
 
 `OrbitShell` is the only widget that should call `SnapshotStore`. No other layer should

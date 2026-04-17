@@ -1,19 +1,27 @@
 package api
 
-import "time"
+import (
+	"context"
+	"errors"
+	"time"
+)
+
+// ErrNotFound is returned by ClusterBackend implementations when the caller
+// references a cluster ID the backend does not know about. Handlers map it
+// to HTTP 404. Any other error is treated as an upstream failure (502).
+var ErrNotFound = errors.New("cluster not found")
 
 // ClusterBackend provides the data a gateway serves. The sample implementation
-// is used when no real Kubernetes client is wired in; production deployments
-// are expected to substitute a real backend later.
+// is used for development and integration testing; the kube implementation
+// talks to a real Kubernetes API server.
 type ClusterBackend interface {
-	ListClusters() []ClusterProfile
-	LoadSnapshot(clusterID string) (ClusterSnapshot, bool)
-	LoadEvents(clusterID, kind, objectName, namespace string, limit int) []ClusterEvent
+	ListClusters(ctx context.Context) ([]ClusterProfile, error)
+	LoadSnapshot(ctx context.Context, clusterID string) (ClusterSnapshot, error)
+	LoadEvents(ctx context.Context, clusterID, kind, objectName, namespace string, limit int) ([]ClusterEvent, error)
 }
 
 // SampleBackend is an in-memory backend that returns deterministic fixture
-// data. It is intended for development and integration testing until a real
-// Kubernetes client is plumbed in.
+// data. It is intended for development, integration testing, and demo mode.
 type SampleBackend struct {
 	now func() time.Time
 }
@@ -22,19 +30,19 @@ func NewSampleBackend() *SampleBackend {
 	return &SampleBackend{now: time.Now}
 }
 
-func (s *SampleBackend) ListClusters() []ClusterProfile {
-	return []ClusterProfile{sampleProfile()}
+func (s *SampleBackend) ListClusters(_ context.Context) ([]ClusterProfile, error) {
+	return []ClusterProfile{sampleProfile()}, nil
 }
 
-func (s *SampleBackend) LoadSnapshot(clusterID string) (ClusterSnapshot, bool) {
+func (s *SampleBackend) LoadSnapshot(_ context.Context, clusterID string) (ClusterSnapshot, error) {
 	profile := sampleProfile()
 	if clusterID != "" && clusterID != profile.ID {
-		return ClusterSnapshot{}, false
+		return ClusterSnapshot{}, ErrNotFound
 	}
-	return sampleSnapshot(profile, s.now()), true
+	return sampleSnapshot(profile, s.now()), nil
 }
 
-func (s *SampleBackend) LoadEvents(clusterID, kind, objectName, namespace string, limit int) []ClusterEvent {
+func (s *SampleBackend) LoadEvents(_ context.Context, _, kind, objectName, _ string, limit int) ([]ClusterEvent, error) {
 	if limit <= 0 {
 		limit = 5
 	}
@@ -42,7 +50,7 @@ func (s *SampleBackend) LoadEvents(clusterID, kind, objectName, namespace string
 	if len(events) > limit {
 		events = events[:limit]
 	}
-	return events
+	return events, nil
 }
 
 func sampleProfile() ClusterProfile {
