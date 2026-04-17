@@ -63,6 +63,7 @@ Defines the contract the UI is built around: `ClusterProfile`, `ClusterNode`, `C
 touch SQLite. `OrbitShell` is the only layer that should call the store.
 
 Key implementation details:
+
 - `_dbFuture ??= _openDb()` — memoised async DB init (one connection per store instance)
 - `ConflictAlgorithm.replace` — upsert semantics for both tables
 - Corrupt JSON rows are silently skipped (logged internally, treated as cache miss)
@@ -93,6 +94,7 @@ flutter test
 ```
 
 Test files:
+
 - `test/cluster_models_serialization_test.dart` — 18 tests: round-trips all 8 classes,
   exhaustive enum coverage (`WorkloadKind`, `ServiceExposure`, `TopologyEntityKind`, etc.)
 - `test/snapshot_store_test.dart` — 10 tests: empty load, save/load, upsert, multi-profile,
@@ -109,6 +111,7 @@ or both of these — never let a test fall through to real SQLite or real kubeco
 ## Environment
 
 `.env` file (from `.env.example`) controls:
+
 - `CLUSTERORBIT_CONNECTION_MODE` — `direct` or `gateway`
 - `CLUSTERORBIT_KUBECONFIG` — override kubeconfig path
 - `CLUSTERORBIT_CONTEXT` — kubeconfig context name
@@ -169,7 +172,7 @@ persistence.
 
 ## Architecture Reminder
 
-```
+```text
 ClusterOrbitApp
   └── OrbitShell (owns SnapshotStore + ClusterConnection)
         ├── _bootstrap(): cache → live → save
