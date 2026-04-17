@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -68,7 +69,24 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc(pathRoot, s.authMiddleware(s.handleRoot))
 	mux.HandleFunc(pathRoot+"/", s.authMiddleware(s.handleClusterScoped))
-	return mux
+	return recoverMiddleware(mux)
+}
+
+// recoverMiddleware turns a panic in any downstream handler into a 500
+// instead of crashing the process. Stack trace is logged server-side; the
+// client gets an opaque error.
+func recoverMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rv := recover(); rv != nil {
+				log.Printf("gateway: panic serving %s %s: %v\n%s", r.Method, r.URL.Path, rv, debug.Stack())
+				// If the handler already started writing we can't send a
+				// clean 500 — let the server close the connection.
+				writeError(w, http.StatusInternalServerError, "internal error")
+			}
+		}()
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) acceptedTokens() []string {
