@@ -36,6 +36,7 @@ class _OrbitShellState extends State<OrbitShell> {
   ClusterSnapshot? _snapshot;
   Object? _loadError;
   bool _isLoading = true;
+  bool _isRefreshing = false;
 
   static const _destinations = [
     NavigationDestination(icon: Icon(Icons.blur_on_outlined), label: 'Map'),
@@ -88,6 +89,7 @@ class _OrbitShellState extends State<OrbitShell> {
             _snapshot = cachedSnapshot;
             _loadError = null;
             _isLoading = false;
+            _isRefreshing = true;
           });
           cacheShown = true;
         }
@@ -98,7 +100,10 @@ class _OrbitShellState extends State<OrbitShell> {
 
     try {
       final clusters = await _connection.listClusters();
-      if (clusters.isEmpty) return;
+      if (clusters.isEmpty) {
+        if (mounted) setState(() => _isRefreshing = false);
+        return;
+      }
 
       final selectedCluster = clusters.first;
       final snapshot = await _connection.loadSnapshot(selectedCluster.id);
@@ -115,18 +120,21 @@ class _OrbitShellState extends State<OrbitShell> {
         _snapshot = snapshot;
         _loadError = null;
         _isLoading = false;
+        _isRefreshing = false;
       });
     } catch (error) {
       if (!mounted) return;
 
       if (cacheShown) {
         // Cache is visible; swallow the live-fetch error silently.
+        setState(() => _isRefreshing = false);
         return;
       }
 
       setState(() {
         _loadError = error;
         _isLoading = false;
+        _isRefreshing = false;
       });
     }
   }
@@ -156,6 +164,7 @@ class _OrbitShellState extends State<OrbitShell> {
           _snapshot = cachedSnapshot;
           _loadError = null;
           _isLoading = false;
+          _isRefreshing = true;
         });
         cacheShown = true;
       }
@@ -173,15 +182,20 @@ class _OrbitShellState extends State<OrbitShell> {
         _snapshot = snapshot;
         _loadError = null;
         _isLoading = false;
+        _isRefreshing = false;
       });
     } catch (error) {
       if (!mounted) return;
 
-      if (cacheShown) return;
+      if (cacheShown) {
+        setState(() => _isRefreshing = false);
+        return;
+      }
 
       setState(() {
         _loadError = error;
         _isLoading = false;
+        _isRefreshing = false;
       });
     }
   }
@@ -226,6 +240,7 @@ class _OrbitShellState extends State<OrbitShell> {
           ],
         ),
         actions: [
+          if (_isRefreshing) const _RefreshingBadge(),
           TextButton.icon(
             onPressed: _clusters.isEmpty ? null : _cycleCluster,
             icon: const Icon(Icons.hub_outlined),
@@ -284,6 +299,39 @@ class _OrbitShellState extends State<OrbitShell> {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _RefreshingBadge extends StatelessWidget {
+  const _RefreshingBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 6),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 14,
+            height: 14,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              valueColor: AlwaysStoppedAnimation<Color>(
+                Colors.white.withValues(alpha: 0.68),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            'Refreshing',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: Colors.white.withValues(alpha: 0.68),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
