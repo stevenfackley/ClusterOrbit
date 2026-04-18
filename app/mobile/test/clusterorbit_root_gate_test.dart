@@ -66,4 +66,12 @@ final class _FakeSavedStore implements SavedConnectionStore {
   Future<void> deleteConnection(String id) async {
     saved.removeWhere((c) => c.id == id);
   }
+
+  @override
+  Future<void> setActiveConnection(String id) async {
+    final idx = saved.indexWhere((c) => c.id == id);
+    if (idx <= 0) return;
+    final promoted = saved.removeAt(idx);
+    saved.insert(0, promoted);
+  }
 }

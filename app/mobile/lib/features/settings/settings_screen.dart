@@ -64,6 +64,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
     widget.onConnectionsChanged?.call();
   }
 
+  Future<void> _onMakeActive(SavedConnection connection) async {
+    await widget.savedConnectionStore!.setActiveConnection(connection.id);
+    _reload();
+    widget.onConnectionsChanged?.call();
+  }
+
   void _openAddGateway() {
     Navigator.push<void>(
       context,
@@ -106,6 +112,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           onAddGateway: _openAddGateway,
           onAddSample: _addSample,
           onDelete: _onDelete,
+          onMakeActive: _onMakeActive,
         );
       },
     );
@@ -119,6 +126,7 @@ class _ConnectionList extends StatelessWidget {
     required this.onAddGateway,
     required this.onAddSample,
     required this.onDelete,
+    required this.onMakeActive,
   });
 
   final List<SavedConnection> connections;
@@ -126,6 +134,7 @@ class _ConnectionList extends StatelessWidget {
   final VoidCallback onAddGateway;
   final VoidCallback onAddSample;
   final Future<void> Function(SavedConnection) onDelete;
+  final Future<void> Function(SavedConnection) onMakeActive;
 
   @override
   Widget build(BuildContext context) {
@@ -157,6 +166,7 @@ class _ConnectionList extends StatelessWidget {
               connection: conn,
               isActive: conn.id == activeId,
               onDelete: () => _confirmDelete(context, conn),
+              onMakeActive: () => onMakeActive(conn),
             ),
         const SizedBox(height: 20),
         Row(
@@ -217,11 +227,13 @@ class _ConnectionTile extends StatelessWidget {
     required this.connection,
     required this.isActive,
     required this.onDelete,
+    required this.onMakeActive,
   });
 
   final SavedConnection connection;
   final bool isActive;
   final VoidCallback onDelete;
+  final VoidCallback onMakeActive;
 
   IconData get _icon => switch (connection.kind) {
         SavedConnectionKind.sample => Icons.science_outlined,
@@ -270,6 +282,12 @@ class _ConnectionTile extends StatelessWidget {
                 ],
               ),
             ),
+            if (!isActive)
+              IconButton(
+                tooltip: 'Make active',
+                onPressed: onMakeActive,
+                icon: const Icon(Icons.check_circle_outline),
+              ),
             IconButton(
               tooltip: 'Remove',
               onPressed: onDelete,

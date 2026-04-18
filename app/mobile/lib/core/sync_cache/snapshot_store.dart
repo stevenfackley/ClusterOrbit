@@ -11,9 +11,14 @@ import '../cluster_domain/saved_connection.dart';
 /// User-configured connection persistence. Distinct from [SnapshotStore]:
 /// this is "what the user added", that is "what we cached from live".
 abstract interface class SavedConnectionStore {
+  /// Returns connections ordered most-recently-touched first. The head of
+  /// this list is the "active" connection the shell boots onto.
   Future<List<SavedConnection>> listConnections();
   Future<void> saveConnection(SavedConnection connection);
   Future<void> deleteConnection(String id);
+
+  /// Promotes [id] to the top of [listConnections]. No-op if not found.
+  Future<void> setActiveConnection(String id);
 }
 
 abstract interface class SnapshotStore {
@@ -269,7 +274,7 @@ final class SqfliteSnapshotStore
     final db = await _db;
     final rows = await db.query(
       'saved_connections',
-      orderBy: 'created_at ASC',
+      orderBy: 'created_at DESC',
     );
     final out = <SavedConnection>[];
     for (final row in rows) {
@@ -302,5 +307,23 @@ final class SqfliteSnapshotStore
   Future<void> deleteConnection(String id) async {
     final db = await _db;
     await db.delete('saved_connections', where: 'id = ?', whereArgs: [id]);
+  }
+
+  @override
+  Future<void> setActiveConnection(String id) async {
+    final db = await _db;
+    // Bump created_at past the current max so DESC ordering puts it first.
+    // Using MAX+1 (not clock) avoids ties when multiple calls land in the
+    // same millisecond.
+    final rows = await db.rawQuery(
+      'SELECT MAX(created_at) AS max_ts FROM saved_connections',
+    );
+    final maxTs = (rows.first['max_ts'] as int?) ?? 0;
+    await db.update(
+      'saved_connections',
+      {'created_at': maxTs + 1},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
   }
 }

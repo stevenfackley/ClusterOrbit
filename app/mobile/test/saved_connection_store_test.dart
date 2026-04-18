@@ -66,7 +66,7 @@ void main() {
       expect(direct.kubeconfigContext, 'minikube');
     });
 
-    test('listConnections orders by created_at ascending', () async {
+    test('listConnections orders most-recently-touched first', () async {
       await store.saveConnection(sampleConn);
       // Force a measurable timestamp gap — cheaper than sleeping.
       final db = await store.dbForTest;
@@ -76,7 +76,26 @@ void main() {
       );
       await store.saveConnection(gatewayConn);
       final loaded = await store.listConnections();
-      expect(loaded.map((c) => c.id).toList(), ['sample-1', 'gw-1']);
+      expect(loaded.map((c) => c.id).toList(), ['gw-1', 'sample-1']);
+    });
+
+    test('setActiveConnection promotes target to head of list', () async {
+      await store.saveConnection(sampleConn);
+      await store.saveConnection(gatewayConn);
+      // gateway is currently first (most recent). Promote sample.
+      await store.setActiveConnection('sample-1');
+      final loaded = await store.listConnections();
+      expect(loaded.first.id, 'sample-1');
+      expect(loaded.last.id, 'gw-1');
+    });
+
+    test('setActiveConnection is a no-op for unknown id', () async {
+      await store.saveConnection(sampleConn);
+      await store.saveConnection(gatewayConn);
+      final before = await store.listConnections();
+      await store.setActiveConnection('does-not-exist');
+      final after = await store.listConnections();
+      expect(after.map((c) => c.id).toList(), before.map((c) => c.id).toList());
     });
 
     test('saveConnection upserts on duplicate id', () async {

@@ -81,6 +81,42 @@ void main() {
     expect(find.text('Sample data'), findsOneWidget);
   });
 
+  testWidgets('Make active button promotes the connection and fires callback',
+      (tester) async {
+    final store = _FakeSavedStore()
+      ..saved.addAll([
+        const SavedConnection(
+          id: 'gw-1',
+          displayName: 'Prod Gateway',
+          kind: SavedConnectionKind.gateway,
+          gatewayUrl: 'https://gw.example.com',
+        ),
+        const SavedConnection(
+          id: 'sample-1',
+          displayName: 'Demo',
+          kind: SavedConnectionKind.sample,
+        ),
+      ]);
+    var changedCount = 0;
+    await tester.pumpWidget(_wrap(
+      SettingsScreen(
+        savedConnectionStore: store,
+        activeConnectionId: 'gw-1',
+        onConnectionsChanged: () => changedCount++,
+      ),
+    ));
+    await tester.pumpAndSettle();
+
+    // Only the non-active tile (sample) has the Make active button.
+    expect(find.byIcon(Icons.check_circle_outline), findsOneWidget);
+
+    await tester.tap(find.byIcon(Icons.check_circle_outline));
+    await tester.pumpAndSettle();
+
+    expect(store.saved.first.id, 'sample-1');
+    expect(changedCount, 1);
+  });
+
   testWidgets('delete flow requires confirmation then removes the row',
       (tester) async {
     final store = _FakeSavedStore()
@@ -130,5 +166,13 @@ final class _FakeSavedStore implements SavedConnectionStore {
   @override
   Future<void> deleteConnection(String id) async {
     saved.removeWhere((c) => c.id == id);
+  }
+
+  @override
+  Future<void> setActiveConnection(String id) async {
+    final idx = saved.indexWhere((c) => c.id == id);
+    if (idx <= 0) return;
+    final promoted = saved.removeAt(idx);
+    saved.insert(0, promoted);
   }
 }
