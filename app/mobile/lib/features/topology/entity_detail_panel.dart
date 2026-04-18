@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../core/cluster_domain/cluster_models.dart';
 import '../../core/connectivity/cluster_connection.dart';
@@ -287,6 +288,24 @@ class _EntityDetailPanelState extends State<EntityDetailPanel> {
     );
   }
 
+  static String? _copyPayload(Object entity) => switch (entity) {
+        ClusterNode n => n.name,
+        ClusterWorkload w => '${w.namespace}/${w.name}',
+        ClusterService s => '${s.namespace}/${s.name}',
+        _ => null,
+      };
+
+  Future<void> _copyToClipboard(String text) async {
+    await Clipboard.setData(ClipboardData(text: text));
+    if (!mounted) return;
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      SnackBar(
+        content: Text('Copied: $text'),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
   Widget _buildTitle(ThemeData theme) {
     final (name, badge) = switch (widget.entity) {
       ClusterNode n => (n.name, n.role.label),
@@ -294,13 +313,20 @@ class _EntityDetailPanelState extends State<EntityDetailPanel> {
       ClusterService s => (s.name, s.exposure.label),
       _ => ('Unknown', ''),
     };
+    final copyPayload = _copyPayload(widget.entity);
     return Row(
       children: [
         Expanded(
-          child: Text(
-            name,
-            style: theme.textTheme.titleMedium,
-            overflow: TextOverflow.ellipsis,
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onLongPress: copyPayload == null
+                ? null
+                : () => _copyToClipboard(copyPayload),
+            child: Text(
+              name,
+              style: theme.textTheme.titleMedium,
+              overflow: TextOverflow.ellipsis,
+            ),
           ),
         ),
         const SizedBox(width: 8),
