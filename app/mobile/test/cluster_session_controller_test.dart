@@ -244,6 +244,62 @@ void main() {
     });
   });
 
+  group('autoRefreshInterval', () {
+    test('fires periodic refresh while idle', () async {
+      final profiles = SampleClusterData.profilesFor(ConnectionMode.direct);
+      final connection = _FakeConnection(profiles: profiles);
+      final controller = ClusterSessionController(
+        connection: connection,
+        store: _EmptyStore(),
+        autoRefreshInterval: const Duration(milliseconds: 20),
+      );
+      addTearDown(controller.dispose);
+
+      await controller.bootstrap();
+      final baseline = connection.loadSnapshotCallCount;
+
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(
+        connection.loadSnapshotCallCount,
+        greaterThan(baseline),
+        reason: 'auto-refresh should have triggered loadSnapshot at least once',
+      );
+    });
+
+    test('null interval disables auto-refresh', () async {
+      final profiles = SampleClusterData.profilesFor(ConnectionMode.direct);
+      final connection = _FakeConnection(profiles: profiles);
+      final controller = ClusterSessionController(
+        connection: connection,
+        store: _EmptyStore(),
+      );
+      addTearDown(controller.dispose);
+
+      await controller.bootstrap();
+      final baseline = connection.loadSnapshotCallCount;
+
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+      expect(connection.loadSnapshotCallCount, equals(baseline));
+    });
+
+    test('does not fire before cluster is selected', () async {
+      // Bootstrap fails → no selected cluster → timer should not refresh.
+      final connection = _FakeConnection(profiles: const []);
+      final controller = ClusterSessionController(
+        connection: connection,
+        store: _EmptyStore(),
+        autoRefreshInterval: const Duration(milliseconds: 20),
+      );
+      addTearDown(controller.dispose);
+
+      await controller.bootstrap();
+      final baseline = connection.loadSnapshotCallCount;
+
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+      expect(connection.loadSnapshotCallCount, equals(baseline));
+    });
+  });
+
   test('notifyListeners fires on bootstrap completion', () async {
     final profiles = SampleClusterData.profilesFor(ConnectionMode.direct);
     final connection = _FakeConnection(profiles: profiles);

@@ -20,6 +20,7 @@ class OrbitShell extends StatefulWidget {
     this.savedConnectionStore,
     this.activeConnectionId,
     this.onConnectionsChanged,
+    this.autoRefreshInterval = const Duration(seconds: 30),
   });
 
   final ClusterConnection? connection;
@@ -27,6 +28,11 @@ class OrbitShell extends StatefulWidget {
   final SavedConnectionStore? savedConnectionStore;
   final String? activeConnectionId;
   final VoidCallback? onConnectionsChanged;
+
+  /// How often to silently re-fetch the current cluster's snapshot.
+  /// Set to `null` or `Duration.zero` to disable. Tests pass `null` so
+  /// widget fakes aren't chattier than needed.
+  final Duration? autoRefreshInterval;
 
   @override
   State<OrbitShell> createState() => _OrbitShellState();
@@ -67,6 +73,7 @@ class _OrbitShellState extends State<OrbitShell> {
       connection:
           widget.connection ?? ClusterConnectionFactory.fromEnvironment(),
       store: widget.store ?? SqfliteSnapshotStore(),
+      autoRefreshInterval: widget.autoRefreshInterval,
     );
     _session.bootstrap();
   }

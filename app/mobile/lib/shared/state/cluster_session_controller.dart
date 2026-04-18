@@ -19,18 +19,28 @@ class ClusterSessionController extends ChangeNotifier {
     required SnapshotStore store,
     Duration cacheMaxAge = const Duration(minutes: 10),
     Duration relativeTimeTick = const Duration(seconds: 30),
+    Duration? autoRefreshInterval,
   })  : _connection = connection,
         _store = store,
         _cacheMaxAge = cacheMaxAge {
     _relativeTimeTicker = Timer.periodic(relativeTimeTick, (_) {
       if (_lastRefreshedAt != null) notifyListeners();
     });
+    if (autoRefreshInterval != null && autoRefreshInterval > Duration.zero) {
+      _autoRefreshTimer = Timer.periodic(autoRefreshInterval, (_) {
+        if (_disposed || _isLoading || _isRefreshing) return;
+        if (_selectedCluster == null) return;
+        // Fire-and-forget; refresh() is safe to call and self-gated.
+        refresh();
+      });
+    }
   }
 
   final ClusterConnection _connection;
   final SnapshotStore _store;
   final Duration _cacheMaxAge;
   Timer? _relativeTimeTicker;
+  Timer? _autoRefreshTimer;
   bool _disposed = false;
 
   List<ClusterProfile> _clusters = const [];
@@ -215,6 +225,7 @@ class ClusterSessionController extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _relativeTimeTicker?.cancel();
+    _autoRefreshTimer?.cancel();
     super.dispose();
   }
 }
