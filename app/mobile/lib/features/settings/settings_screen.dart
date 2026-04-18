@@ -165,6 +165,7 @@ class _ConnectionList extends StatelessWidget {
             _ConnectionTile(
               connection: conn,
               isActive: conn.id == activeId,
+              canDelete: connections.length > 1,
               onDelete: () => _confirmDelete(context, conn),
               onMakeActive: () => onMakeActive(conn),
             ),
@@ -226,12 +227,14 @@ class _ConnectionTile extends StatelessWidget {
   const _ConnectionTile({
     required this.connection,
     required this.isActive,
+    required this.canDelete,
     required this.onDelete,
     required this.onMakeActive,
   });
 
   final SavedConnection connection;
   final bool isActive;
+  final bool canDelete;
   final VoidCallback onDelete;
   final VoidCallback onMakeActive;
 
@@ -289,8 +292,9 @@ class _ConnectionTile extends StatelessWidget {
                 icon: const Icon(Icons.check_circle_outline),
               ),
             IconButton(
-              tooltip: 'Remove',
-              onPressed: onDelete,
+              tooltip:
+                  canDelete ? 'Remove' : 'Cannot remove the only connection',
+              onPressed: canDelete ? onDelete : null,
               icon: const Icon(Icons.delete_outline),
             ),
           ],

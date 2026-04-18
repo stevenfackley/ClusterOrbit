@@ -120,6 +120,46 @@ void main() {
   testWidgets('delete flow requires confirmation then removes the row',
       (tester) async {
     final store = _FakeSavedStore()
+      ..saved.addAll([
+        const SavedConnection(
+          id: 'gw-1',
+          displayName: 'Prod Gateway',
+          kind: SavedConnectionKind.gateway,
+          gatewayUrl: 'https://gw.example.com',
+        ),
+        const SavedConnection(
+          id: 'sample-1',
+          displayName: 'Demo',
+          kind: SavedConnectionKind.sample,
+        ),
+      ]);
+    await tester.pumpWidget(_wrap(
+      SettingsScreen(savedConnectionStore: store),
+    ));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.delete_outline).first);
+    await tester.pumpAndSettle();
+    expect(find.text('Remove connection?'), findsOneWidget);
+
+    // Cancel first — should keep the row.
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(store.saved.length, 2);
+
+    // Now confirm.
+    await tester.tap(find.byIcon(Icons.delete_outline).first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Remove'));
+    await tester.pumpAndSettle();
+
+    expect(store.saved.length, 1);
+    expect(store.saved.first.id, 'sample-1');
+  });
+
+  testWidgets('delete is disabled when only one connection remains',
+      (tester) async {
+    final store = _FakeSavedStore()
       ..saved.add(const SavedConnection(
         id: 'gw-1',
         displayName: 'Prod Gateway',
@@ -131,23 +171,18 @@ void main() {
     ));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byIcon(Icons.delete_outline));
-    await tester.pumpAndSettle();
-    expect(find.text('Remove connection?'), findsOneWidget);
+    // Find the single delete IconButton and confirm it is disabled.
+    final deleteButton = tester.widget<IconButton>(
+      find.widgetWithIcon(IconButton, Icons.delete_outline),
+    );
+    expect(deleteButton.onPressed, isNull);
+    expect(deleteButton.tooltip, contains('Cannot remove'));
 
-    // Cancel first — should keep the row.
-    await tester.tap(find.text('Cancel'));
+    // Tapping it should be a no-op — confirmation dialog must not appear.
+    await tester.tap(find.byIcon(Icons.delete_outline), warnIfMissed: false);
     await tester.pumpAndSettle();
+    expect(find.text('Remove connection?'), findsNothing);
     expect(store.saved.length, 1);
-
-    // Now confirm.
-    await tester.tap(find.byIcon(Icons.delete_outline));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Remove'));
-    await tester.pumpAndSettle();
-
-    expect(store.saved, isEmpty);
-    expect(find.text('No connections saved yet.'), findsOneWidget);
   });
 }
 
