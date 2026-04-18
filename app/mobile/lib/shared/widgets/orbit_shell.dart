@@ -93,11 +93,16 @@ class _OrbitShellState extends State<OrbitShell> {
         connection: _session.connection,
         clusterId: _session.selectedCluster?.id,
         store: _session.store,
+        onRefresh: _onRefresh,
       ),
       ResourcesScreen(
           snapshot: _session.snapshot, isLoading: _session.isLoading),
       ChangesScreen(snapshot: _session.snapshot, isLoading: _session.isLoading),
-      AlertsScreen(snapshot: _session.snapshot, isLoading: _session.isLoading),
+      AlertsScreen(
+        snapshot: _session.snapshot,
+        isLoading: _session.isLoading,
+        onRefresh: _onRefresh,
+      ),
       SettingsScreen(
         savedConnectionStore: widget.savedConnectionStore,
         activeConnectionId: widget.activeConnectionId,

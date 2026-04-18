@@ -21,6 +21,7 @@ class TopologyScreen extends StatefulWidget {
     this.connection,
     this.clusterId,
     this.store,
+    this.onRefresh,
   });
 
   final ClusterSnapshot? snapshot;
@@ -29,6 +30,7 @@ class TopologyScreen extends StatefulWidget {
   final ClusterConnection? connection;
   final String? clusterId;
   final SnapshotStore? store;
+  final Future<void> Function()? onRefresh;
 
   @override
   State<TopologyScreen> createState() => _TopologyScreenState();
@@ -223,6 +225,7 @@ class _TopologyScreenState extends State<TopologyScreen> {
                         connection: widget.connection,
                         clusterId: widget.clusterId,
                         store: widget.store,
+                        onRefresh: widget.onRefresh,
                       )
                     : Padding(
                         padding: const EdgeInsets.all(20),

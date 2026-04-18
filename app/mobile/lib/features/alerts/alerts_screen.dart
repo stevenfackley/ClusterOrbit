@@ -4,20 +4,39 @@ import '../../core/cluster_domain/cluster_models.dart';
 import 'alert_detail_sheet.dart';
 
 class AlertsScreen extends StatelessWidget {
-  const AlertsScreen({super.key, this.snapshot, this.isLoading = false});
+  const AlertsScreen({
+    super.key,
+    this.snapshot,
+    this.isLoading = false,
+    this.onRefresh,
+  });
 
   final ClusterSnapshot? snapshot;
   final bool isLoading;
+  final Future<void> Function()? onRefresh;
+
+  Widget _refreshWrap(Widget child) {
+    if (onRefresh == null) return child;
+    return RefreshIndicator(onRefresh: onRefresh!, child: child);
+  }
 
   @override
   Widget build(BuildContext context) {
     final snapshot = this.snapshot;
     if (snapshot == null) {
-      return const Center(
-        child: Padding(
-          padding: EdgeInsets.all(24),
-          child: Text(
-              'No snapshot yet. Alerts will appear when a cluster is connected.'),
+      return _refreshWrap(
+        ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          children: const [
+            SizedBox(height: 120),
+            Center(
+              child: Padding(
+                padding: EdgeInsets.all(24),
+                child: Text(
+                    'No snapshot yet. Alerts will appear when a cluster is connected.'),
+              ),
+            ),
+          ],
         ),
       );
     }
@@ -30,30 +49,30 @@ class AlertsScreen extends StatelessWidget {
 
     if (alerts.isEmpty) {
       final theme = Theme.of(context);
-      return Center(
-        child: Padding(
+      return _refreshWrap(
+        ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
           padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                Icons.check_circle_outline,
-                size: 48,
-                color: Colors.green.withValues(alpha: 0.8),
-              ),
-              const SizedBox(height: 12),
-              Text(
-                'All clear — no active alerts in this snapshot.',
-                style: theme.textTheme.bodyLarge,
-                textAlign: TextAlign.center,
-              ),
-            ],
-          ),
+          children: [
+            const SizedBox(height: 80),
+            Icon(
+              Icons.check_circle_outline,
+              size: 48,
+              color: Colors.green.withValues(alpha: 0.8),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'All clear — no active alerts in this snapshot.',
+              style: theme.textTheme.bodyLarge,
+              textAlign: TextAlign.center,
+            ),
+          ],
         ),
       );
     }
 
-    return ListView.separated(
+    return _refreshWrap(ListView.separated(
+      physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.all(16),
       itemCount: alerts.length,
       separatorBuilder: (_, __) => const SizedBox(height: 8),
@@ -82,7 +101,7 @@ class AlertsScreen extends StatelessWidget {
           ),
         );
       },
-    );
+    ));
   }
 
   int _priority(ClusterHealthLevel level) => switch (level) {

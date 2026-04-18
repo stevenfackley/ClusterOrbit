@@ -17,16 +17,19 @@ class TopologyListView extends StatelessWidget {
     this.connection,
     this.clusterId,
     this.store,
+    this.onRefresh,
   });
 
   final ClusterSnapshot snapshot;
   final ClusterConnection? connection;
   final String? clusterId;
   final SnapshotStore? store;
+  final Future<void> Function()? onRefresh;
 
   @override
   Widget build(BuildContext context) {
-    return ListView(
+    final list = ListView(
+      physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.only(bottom: 24),
       children: [
         _NodeSection(
@@ -49,6 +52,8 @@ class TopologyListView extends StatelessWidget {
         ),
       ],
     );
+    if (onRefresh == null) return list;
+    return RefreshIndicator(onRefresh: onRefresh!, child: list);
   }
 }
 
