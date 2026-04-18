@@ -8,6 +8,7 @@ import '../../core/sync_cache/snapshot_store.dart';
 import '../../core/theme/clusterorbit_theme.dart';
 import 'entity_detail_panel.dart';
 import 'topology_layout.dart';
+import 'topology_list_view.dart';
 import 'topology_panels.dart';
 import 'topology_workspace.dart';
 
@@ -33,10 +34,13 @@ class TopologyScreen extends StatefulWidget {
   State<TopologyScreen> createState() => _TopologyScreenState();
 }
 
+enum _PhoneView { list, map }
+
 class _TopologyScreenState extends State<TopologyScreen> {
   Object? _selectedEntity;
   TopologyFilter _filter = const TopologyFilter();
   final TransformationController _viewport = TransformationController();
+  _PhoneView _phoneView = _PhoneView.list;
 
   @override
   void dispose() {
@@ -185,11 +189,47 @@ class _TopologyScreenState extends State<TopologyScreen> {
             ),
           );
         } else {
-          return Padding(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              children: [Expanded(child: workspace)],
-            ),
+          // Phone portrait — default to list; toggle to map.
+          return Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+                child: SegmentedButton<_PhoneView>(
+                  key: const ValueKey('phone-view-toggle'),
+                  style: SegmentedButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                  ),
+                  segments: const [
+                    ButtonSegment(
+                      value: _PhoneView.list,
+                      label: Text('List'),
+                      icon: Icon(Icons.list),
+                    ),
+                    ButtonSegment(
+                      value: _PhoneView.map,
+                      label: Text('Map'),
+                      icon: Icon(Icons.hub_outlined),
+                    ),
+                  ],
+                  selected: {_phoneView},
+                  onSelectionChanged: (s) =>
+                      setState(() => _phoneView = s.first),
+                ),
+              ),
+              Expanded(
+                child: _phoneView == _PhoneView.list
+                    ? TopologyListView(
+                        snapshot: clusterSnapshot,
+                        connection: widget.connection,
+                        clusterId: widget.clusterId,
+                        store: widget.store,
+                      )
+                    : Padding(
+                        padding: const EdgeInsets.all(20),
+                        child: workspace,
+                      ),
+              ),
+            ],
           );
         }
       },

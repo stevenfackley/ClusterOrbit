@@ -145,6 +145,11 @@ void main() {
       (tester) async {
     await pumpClusterOrbitApp(tester, size: const Size(390, 844));
 
+    // Default is list view — switch to map first.
+    final toggle = find.byKey(const ValueKey('phone-view-toggle'));
+    await tester.tap(find.descendant(of: toggle, matching: find.text('Map')));
+    await tester.pumpAndSettle();
+
     await tester.tap(find.text('cp-1.dev-orbit'));
     await tester.pumpAndSettle();
 
@@ -156,6 +161,11 @@ void main() {
   testWidgets('phone portrait: dismiss button clears bottom panel',
       (tester) async {
     await pumpClusterOrbitApp(tester, size: const Size(390, 844));
+
+    // Default is list view — switch to map first.
+    final toggle = find.byKey(const ValueKey('phone-view-toggle'));
+    await tester.tap(find.descendant(of: toggle, matching: find.text('Map')));
+    await tester.pumpAndSettle();
 
     await tester.tap(find.text('cp-1.dev-orbit'));
     await tester.pumpAndSettle();

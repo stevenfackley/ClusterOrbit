@@ -9,7 +9,8 @@ void main() {
     await pumpClusterOrbitApp(tester, size: const Size(390, 844));
 
     expect(find.byTooltip('Switch cluster'), findsOneWidget);
-    expect(find.text('Map'), findsOneWidget);
+    // "Map" appears in both the bottom nav label and the phone-portrait toggle.
+    expect(find.text('Map'), findsWidgets);
     expect(find.text('Resources'), findsOneWidget);
     expect(find.text('Settings'), findsOneWidget);
 
