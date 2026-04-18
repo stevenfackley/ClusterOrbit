@@ -40,36 +40,15 @@ void main() {
     expect(find.text(firstAlert.summary), findsWidgets);
   });
 
-  testWidgets('sheet shows Acknowledge and Silence for 1h buttons',
-      (tester) async {
+  testWidgets('sheet shows no stub action buttons', (tester) async {
     await tester.pumpWidget(_buildApp(snapshot));
 
     final firstAlert = snapshot.alerts.first;
     await tester.tap(find.text(firstAlert.title).first);
     await tester.pumpAndSettle();
 
-    expect(find.text('Acknowledge'), findsOneWidget);
-    expect(find.text('Silence for 1h'), findsOneWidget);
-  });
-
-  testWidgets('tapping Acknowledge pops sheet and shows SnackBar',
-      (tester) async {
-    await tester.pumpWidget(_buildApp(snapshot));
-
-    final firstAlert = snapshot.alerts.first;
-    await tester.tap(find.text(firstAlert.title).first);
-    await tester.pumpAndSettle();
-
-    await tester.tap(find.text('Acknowledge'));
-    await tester.pumpAndSettle();
-
-    // Sheet gone.
-    expect(find.byType(AlertDetailSheet), findsNothing);
-    // SnackBar visible with stub message.
-    expect(
-      find.text('Acknowledge is not yet wired — see roadmap'),
-      findsOneWidget,
-    );
+    expect(find.text('Acknowledge'), findsNothing);
+    expect(find.text('Silence for 1h'), findsNothing);
   });
 
   testWidgets('empty-alerts state does not show sheet on any tap',

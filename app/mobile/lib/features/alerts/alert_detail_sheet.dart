@@ -80,39 +80,7 @@ class AlertDetailSheet extends StatelessWidget {
           Text('Recommended next steps', style: theme.textTheme.labelLarge),
           const SizedBox(height: 4),
           Text(_nextSteps(alert.level), style: theme.textTheme.bodyMedium),
-          const SizedBox(height: 24),
-
-          // Action buttons — STUBS only, not wired to any backend
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton(
-                  onPressed: () => _stubAction(context, 'Acknowledge'),
-                  child: const Text('Acknowledge'),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: OutlinedButton(
-                  onPressed: () => _stubAction(context, 'Silence for 1h'),
-                  child: const Text('Silence for 1h'),
-                ),
-              ),
-            ],
-          ),
         ],
-      ),
-    );
-  }
-
-  // TODO: wire to real backend action (see roadmap)
-  void _stubAction(BuildContext context, String label) {
-    Navigator.of(context).pop();
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          '$label is not yet wired — see roadmap',
-        ),
       ),
     );
   }
