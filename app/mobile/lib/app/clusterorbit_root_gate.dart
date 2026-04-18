@@ -64,6 +64,9 @@ class _ClusterOrbitRootGateState extends State<ClusterOrbitRootGate> {
           key: ValueKey('shell:${active.id}'),
           connection: ClusterConnectionFactory.fromSavedConnection(active),
           store: widget.snapshotStore,
+          savedConnectionStore: widget.savedConnectionStore,
+          activeConnectionId: active.id,
+          onConnectionsChanged: _reload,
         );
       },
     );

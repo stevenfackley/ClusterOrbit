@@ -17,10 +17,16 @@ class OrbitShell extends StatefulWidget {
     super.key,
     this.connection,
     this.store,
+    this.savedConnectionStore,
+    this.activeConnectionId,
+    this.onConnectionsChanged,
   });
 
   final ClusterConnection? connection;
   final SnapshotStore? store;
+  final SavedConnectionStore? savedConnectionStore;
+  final String? activeConnectionId;
+  final VoidCallback? onConnectionsChanged;
 
   @override
   State<OrbitShell> createState() => _OrbitShellState();
@@ -92,7 +98,11 @@ class _OrbitShellState extends State<OrbitShell> {
           snapshot: _session.snapshot, isLoading: _session.isLoading),
       ChangesScreen(snapshot: _session.snapshot, isLoading: _session.isLoading),
       AlertsScreen(snapshot: _session.snapshot, isLoading: _session.isLoading),
-      const SettingsScreen(),
+      SettingsScreen(
+        savedConnectionStore: widget.savedConnectionStore,
+        activeConnectionId: widget.activeConnectionId,
+        onConnectionsChanged: widget.onConnectionsChanged,
+      ),
     ];
   }
 
