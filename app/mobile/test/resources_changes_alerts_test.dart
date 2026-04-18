@@ -40,6 +40,38 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.textContaining('No cluster snapshot yet'), findsOneWidget);
     });
+
+    testWidgets('filter narrows tab counts and switches empty copy',
+        (tester) async {
+      tester.view.devicePixelRatio = 1.0;
+      tester.view.physicalSize = const Size(1280, 900);
+      await tester
+          .pumpWidget(_wrap(ResourcesScreen(snapshot: _sampleSnapshot())));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(find.byType(TextField), 'cp-');
+      await tester.pumpAndSettle();
+
+      // Sample has 3 control-plane nodes named cp-1/2/3.<cluster>.
+      expect(find.text('Nodes (3/42)'), findsOneWidget);
+      expect(find.text('Workloads (0/18)'), findsOneWidget);
+      expect(find.text('Services (0/12)'), findsOneWidget);
+
+      // Workloads tab empty state should reflect filter, not no-workloads.
+      await tester.tap(find.text('Workloads (0/18)'));
+      await tester.pumpAndSettle();
+      expect(
+          find.textContaining('No workloads match the filter'), findsOneWidget);
+
+      // Clear button wipes filter and restores full counts.
+      await tester.tap(find.byIcon(Icons.clear));
+      await tester.pumpAndSettle();
+      expect(find.text('Nodes (42)'), findsOneWidget);
+      expect(find.text('Workloads (18)'), findsOneWidget);
+
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
   });
 
   group('AlertsScreen', () {
