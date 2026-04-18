@@ -3,16 +3,27 @@ import 'package:flutter/material.dart';
 import '../../core/cluster_domain/cluster_models.dart';
 
 class ResourcesScreen extends StatelessWidget {
-  const ResourcesScreen({super.key, this.snapshot, this.isLoading = false});
+  const ResourcesScreen({
+    super.key,
+    this.snapshot,
+    this.isLoading = false,
+    this.onRefresh,
+  });
 
   final ClusterSnapshot? snapshot;
   final bool isLoading;
+  final Future<void> Function()? onRefresh;
+
+  Widget _refreshWrap(Widget child) {
+    if (onRefresh == null) return child;
+    return RefreshIndicator(onRefresh: onRefresh!, child: child);
+  }
 
   @override
   Widget build(BuildContext context) {
     final snapshot = this.snapshot;
     if (snapshot == null) {
-      return const _EmptyResourcesState();
+      return _refreshWrap(const _EmptyResourcesState());
     }
 
     return DefaultTabController(
@@ -29,9 +40,9 @@ class ResourcesScreen extends StatelessWidget {
           Expanded(
             child: TabBarView(
               children: [
-                _NodeList(nodes: snapshot.nodes),
-                _WorkloadList(workloads: snapshot.workloads),
-                _ServiceList(services: snapshot.services),
+                _refreshWrap(_NodeList(nodes: snapshot.nodes)),
+                _refreshWrap(_WorkloadList(workloads: snapshot.workloads)),
+                _refreshWrap(_ServiceList(services: snapshot.services)),
               ],
             ),
           ),
@@ -47,15 +58,17 @@ class _EmptyResourcesState extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Text(
+    return ListView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: const EdgeInsets.all(24),
+      children: [
+        const SizedBox(height: 120),
+        Text(
           'No cluster snapshot yet. Resources will appear when a cluster is connected.',
           style: theme.textTheme.bodyLarge,
           textAlign: TextAlign.center,
         ),
-      ),
+      ],
     );
   }
 }
@@ -71,6 +84,7 @@ class _NodeList extends StatelessWidget {
       return const _EmptySection(label: 'No nodes reported.');
     }
     return ListView.separated(
+      physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.all(16),
       itemCount: nodes.length,
       separatorBuilder: (_, __) => const SizedBox(height: 8),
@@ -105,6 +119,7 @@ class _WorkloadList extends StatelessWidget {
       return const _EmptySection(label: 'No workloads reported.');
     }
     return ListView.separated(
+      physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.all(16),
       itemCount: workloads.length,
       separatorBuilder: (_, __) => const SizedBox(height: 8),
@@ -137,6 +152,7 @@ class _ServiceList extends StatelessWidget {
       return const _EmptySection(label: 'No services reported.');
     }
     return ListView.separated(
+      physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.all(16),
       itemCount: services.length,
       separatorBuilder: (_, __) => const SizedBox(height: 8),
@@ -168,7 +184,14 @@ class _EmptySection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Center(child: Text(label));
+    return ListView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: const EdgeInsets.all(24),
+      children: [
+        const SizedBox(height: 80),
+        Center(child: Text(label)),
+      ],
+    );
   }
 }
 

@@ -3,22 +3,37 @@ import 'package:flutter/material.dart';
 import '../../core/cluster_domain/cluster_models.dart';
 
 class ChangesScreen extends StatelessWidget {
-  const ChangesScreen({super.key, this.snapshot, this.isLoading = false});
+  const ChangesScreen({
+    super.key,
+    this.snapshot,
+    this.isLoading = false,
+    this.onRefresh,
+  });
 
   final ClusterSnapshot? snapshot;
   final bool isLoading;
+  final Future<void> Function()? onRefresh;
+
+  Widget _refreshWrap(Widget child) {
+    if (onRefresh == null) return child;
+    return RefreshIndicator(onRefresh: onRefresh!, child: child);
+  }
 
   @override
   Widget build(BuildContext context) {
     final snapshot = this.snapshot;
     if (snapshot == null) {
-      return const Center(
-        child: Padding(
-          padding: EdgeInsets.all(24),
-          child: Text(
-              'No snapshot yet. Drift will appear when a cluster is connected.'),
-        ),
-      );
+      return _refreshWrap(ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.all(24),
+        children: const [
+          SizedBox(height: 120),
+          Center(
+            child: Text(
+                'No snapshot yet. Drift will appear when a cluster is connected.'),
+          ),
+        ],
+      ));
     }
 
     final drift = snapshot.workloads
@@ -30,7 +45,8 @@ class ChangesScreen extends StatelessWidget {
     final unschedulable = snapshot.nodes.where((n) => !n.schedulable).toList();
 
     final theme = Theme.of(context);
-    return ListView(
+    return _refreshWrap(ListView(
+      physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.all(16),
       children: [
         Card(
@@ -94,6 +110,6 @@ class ChangesScreen extends StatelessWidget {
               ),
             ),
       ],
-    );
+    ));
   }
 }
