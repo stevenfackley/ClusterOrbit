@@ -484,6 +484,17 @@ class _DetailRow extends StatelessWidget {
   final String value;
   final ThemeData theme;
 
+  Future<void> _copy(BuildContext context) async {
+    await Clipboard.setData(ClipboardData(text: value));
+    if (!context.mounted) return;
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      SnackBar(
+        content: Text('Copied: $value'),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Padding(
@@ -499,9 +510,13 @@ class _DetailRow extends StatelessWidget {
             ),
           ),
           Expanded(
-            child: Text(
-              value,
-              style: theme.textTheme.bodySmall?.copyWith(color: Colors.white),
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onLongPress: () => _copy(context),
+              child: Text(
+                value,
+                style: theme.textTheme.bodySmall?.copyWith(color: Colors.white),
+              ),
             ),
           ),
         ],

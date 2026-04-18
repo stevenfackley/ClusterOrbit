@@ -104,6 +104,25 @@ void main() {
     expect(_clipboardContents, 'commerce/payments');
     expect(find.textContaining('Copied: commerce/payments'), findsOneWidget);
   });
+
+  testWidgets('long-press on detail row value copies that value',
+      (tester) async {
+    const workload = ClusterWorkload(
+      id: 'w-1',
+      name: 'api-server',
+      namespace: 'prod',
+      kind: WorkloadKind.deployment,
+      desiredReplicas: 3,
+      readyReplicas: 3,
+      nodeIds: ['n-1'],
+      images: ['registry.example.com/team/api:v2.1.0'],
+      health: ClusterHealthLevel.healthy,
+    );
+    await tester.pumpWidget(host(workload));
+    await tester.longPress(find.text('registry.example.com/team/api:v2.1.0'));
+    await tester.pumpAndSettle();
+    expect(_clipboardContents, 'registry.example.com/team/api:v2.1.0');
+  });
 }
 
 String? _clipboardContents;
