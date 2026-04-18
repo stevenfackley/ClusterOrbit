@@ -13,10 +13,11 @@ Most existing Kubernetes tools are desktop-first, list-heavy, or weak at showing
 - Adaptive shell — phone bottom-tabs, tablet side-rail + inspector, auto-switching at 960 px.
 - Interactive cluster topology (pan/zoom, lane-based layout, curved links, entity detail panels).
 - Phone-first list view with grouped nodes/workloads/services and toggle to the map.
-- Alerts tab with detail sheet; resources tab with tabbed nodes/workloads/services; changes tab showing drift + unschedulable nodes.
-- Swipe-to-refresh on every data screen; last-refreshed indicator + manual refresh in the app bar.
+- Alerts tab with detail sheet; resources tab with tabbed nodes/workloads/services and a name/namespace filter bar; changes tab showing drift + unschedulable nodes.
+- Swipe-to-refresh on every data screen; last-refreshed indicator + manual refresh in the app bar; auto-refresh on a 30s timer.
+- Long-press an entity title in the detail panel to copy its namespace/name to the clipboard.
 - First-run onboarding (sample, gateway, or direct/kubeconfig). Gateway form has connection test before save.
-- Saved connection store (sqflite) with switch-active, delete, and most-recently-touched ordering.
+- Saved connection store (sqflite) with switch-active, delete, and most-recently-touched ordering. Last connection cannot be deleted (guards against no-connection state).
 - Workload scale mutation (sample + direct + gateway backed).
 - Two connection modes:
   - **Direct** — kubeconfig parsed on-device; snapshot fetched straight from the API server.
