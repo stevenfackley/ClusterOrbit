@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/cluster_domain/cluster_models.dart';
+import 'alert_detail_sheet.dart';
 
 class AlertsScreen extends StatelessWidget {
   const AlertsScreen({super.key, this.snapshot, this.isLoading = false});
@@ -70,6 +71,13 @@ class AlertsScreen extends StatelessWidget {
             trailing: Chip(
               label: Text(a.level.name),
               backgroundColor: _color(a.level).withValues(alpha: 0.15),
+            ),
+            onTap: () => showModalBottomSheet<void>(
+              context: context,
+              isScrollControlled: true,
+              useSafeArea: true,
+              showDragHandle: true,
+              builder: (_) => AlertDetailSheet(alert: a),
             ),
           ),
         );
