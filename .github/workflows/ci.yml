@@ -28,7 +28,7 @@ jobs:
       - name: Test
         run: flutter test --coverage
       - name: Upload mobile coverage
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mobile-coverage
           path: app/mobile/coverage/lcov.info
