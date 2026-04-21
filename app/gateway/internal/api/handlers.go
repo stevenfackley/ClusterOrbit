@@ -48,6 +48,9 @@ type Server struct {
 	// Passed as a func so callers can plug in a file, stdout, or a channel
 	// without this package depending on io.
 	AuditSink func(AuditEntry)
+	// ScalePolicy, if set, gates POST /workloads/{id}/scale before the
+	// backend is called. Violations return 403 and are audited.
+	ScalePolicy *ScalePolicy
 }
 
 // AuditEntry is one row of the mutation log. Captured fields intentionally
@@ -253,6 +256,12 @@ func (s *Server) handleMutation(w http.ResponseWriter, r *http.Request, clusterI
 	if body.Replicas == nil || *body.Replicas < 0 {
 		s.audit(r, clusterID, workloadID, body.Replicas, http.StatusBadRequest, "replicas must be >=0")
 		writeError(w, http.StatusBadRequest, "replicas must be a non-negative integer")
+		return
+	}
+
+	if reason := s.ScalePolicy.Evaluate(workloadID, *body.Replicas); reason != "" {
+		s.audit(r, clusterID, workloadID, body.Replicas, http.StatusForbidden, "policy: "+reason)
+		writeError(w, http.StatusForbidden, "policy violation: "+reason)
 		return
 	}
 

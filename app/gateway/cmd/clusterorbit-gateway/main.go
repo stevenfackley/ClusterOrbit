@@ -43,11 +43,14 @@ func main() {
 		defer auditCloser()
 	}
 
+	policy, policyLabel := buildScalePolicy()
+
 	server := &api.Server{
-		Backend:   backend,
-		Tokens:    tokens,
-		Limiter:   limiter,
-		AuditSink: auditSink,
+		Backend:     backend,
+		Tokens:      tokens,
+		Limiter:     limiter,
+		AuditSink:   auditSink,
+		ScalePolicy: policy,
 	}
 
 	tlsCfg, tlsLabel, err := buildTLS()
@@ -65,8 +68,8 @@ func main() {
 		TLSConfig:         tlsCfg,
 	}
 
-	fmt.Printf("%s listening on %s (auth=%s backend=%s tls=%s rate=%s audit=%s)\n",
-		startupBanner, addr, authLabel(tokens), backendLabel, tlsLabel, rateLabel(limiter), auditLabel)
+	fmt.Printf("%s listening on %s (auth=%s backend=%s tls=%s rate=%s audit=%s policy=%s)\n",
+		startupBanner, addr, authLabel(tokens), backendLabel, tlsLabel, rateLabel(limiter), auditLabel, policyLabel)
 
 	// Serve in a goroutine; main goroutine waits for SIGTERM/SIGINT then
 	// triggers a graceful shutdown so in-flight requests and the audit
@@ -173,6 +176,35 @@ func collectTokens() []string {
 		}
 	}
 	return out
+}
+
+// buildScalePolicy assembles a ScalePolicy from env. Returns (nil, "off") when
+// nothing is configured so handlers take the no-policy fast path.
+//
+//	CLUSTERORBIT_GATEWAY_POLICY_MAX_REPLICAS   int, ceiling applied to scale N
+//	CLUSTERORBIT_GATEWAY_POLICY_NAMESPACES     comma-separated allowlist
+func buildScalePolicy() (*api.ScalePolicy, string) {
+	max, _ := strconv.Atoi(strings.TrimSpace(os.Getenv("CLUSTERORBIT_GATEWAY_POLICY_MAX_REPLICAS")))
+	var namespaces []string
+	if raw := os.Getenv("CLUSTERORBIT_GATEWAY_POLICY_NAMESPACES"); raw != "" {
+		for _, ns := range strings.Split(raw, ",") {
+			ns = strings.TrimSpace(ns)
+			if ns != "" {
+				namespaces = append(namespaces, ns)
+			}
+		}
+	}
+	if max <= 0 && len(namespaces) == 0 {
+		return nil, "off"
+	}
+	var parts []string
+	if max > 0 {
+		parts = append(parts, fmt.Sprintf("max=%d", max))
+	}
+	if len(namespaces) > 0 {
+		parts = append(parts, fmt.Sprintf("ns=%d", len(namespaces)))
+	}
+	return &api.ScalePolicy{MaxReplicas: max, AllowedNamespaces: namespaces}, strings.Join(parts, ",")
 }
 
 func buildLimiter() *api.RateLimiter {
