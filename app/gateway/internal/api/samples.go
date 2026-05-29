@@ -33,6 +33,13 @@ type ClusterBackend interface {
 	// mutations may return ErrUnsupported. Note: this does not evict pods —
 	// draining is a separate, multi-step operation.
 	CordonNode(ctx context.Context, clusterID, nodeID string, unschedulable bool) error
+	// StartDrain cordons a node and evicts its pods in the background, returning
+	// a DrainJob handle to poll. nodeID is the node name. Backends that don't
+	// support mutations may return ErrUnsupported.
+	StartDrain(ctx context.Context, clusterID, nodeID string) (DrainJob, error)
+	// DrainStatus returns the current state of a drain job by its ID.
+	// ErrNotFound when the job is unknown to the backend.
+	DrainStatus(ctx context.Context, clusterID, nodeID, jobID string) (DrainJob, error)
 }
 
 // ErrUnsupported indicates a backend cannot perform a requested mutation

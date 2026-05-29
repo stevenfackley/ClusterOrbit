@@ -200,11 +200,16 @@ type recordingBackend struct {
 	scaleCalls       int
 	restartCalls     int
 	cordonCalls      int
+	startDrainCalls  int
+	drainStatusCalls int
 	gotCluster       string
 	gotWorkload      string
 	gotNode          string
+	gotJobID         string
 	gotReplicas      int
 	gotUnschedulable bool
+	drainJob         DrainJob
+	statusJob        DrainJob
 	returnErr        error
 }
 
@@ -235,6 +240,31 @@ func (r *recordingBackend) CordonNode(_ context.Context, clusterID, nodeID strin
 	r.gotNode = nodeID
 	r.gotUnschedulable = unschedulable
 	return r.returnErr
+}
+
+func (r *recordingBackend) StartDrain(_ context.Context, clusterID, nodeID string) (DrainJob, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.startDrainCalls++
+	r.gotCluster = clusterID
+	r.gotNode = nodeID
+	if r.returnErr != nil {
+		return DrainJob{}, r.returnErr
+	}
+	return r.drainJob, nil
+}
+
+func (r *recordingBackend) DrainStatus(_ context.Context, clusterID, nodeID, jobID string) (DrainJob, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.drainStatusCalls++
+	r.gotCluster = clusterID
+	r.gotNode = nodeID
+	r.gotJobID = jobID
+	if r.returnErr != nil {
+		return DrainJob{}, r.returnErr
+	}
+	return r.statusJob, nil
 }
 
 func TestScaleWorkloadSuccessAndAudit(t *testing.T) {
@@ -511,6 +541,122 @@ func TestSampleBackendCordonReturnsUnsupported(t *testing.T) {
 	sb := NewSampleBackend()
 	if err := sb.CordonNode(context.Background(), "", "worker-1", true); !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("expected ErrUnsupported, got %v", err)
+	}
+}
+
+func TestStartDrainReturns202AndAudits(t *testing.T) {
+	rb := &recordingBackend{
+		ClusterBackend: NewSampleBackend(),
+		drainJob:       DrainJob{ID: "job-xyz", NodeID: "worker-1", Phase: DrainPhasePending},
+	}
+	var entries []AuditEntry
+	s := &Server{
+		Backend:   rb,
+		AuditSink: func(e AuditEntry) { entries = append(entries, e) },
+	}
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	resp, err := http.Post(ts.URL+"/v1/clusters/demo/nodes/worker-1/drain",
+		"application/json", nil)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d body = %s", resp.StatusCode, raw)
+	}
+	var job DrainJob
+	if err := json.NewDecoder(resp.Body).Decode(&job); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if job.ID != "job-xyz" || job.Phase != DrainPhasePending {
+		t.Fatalf("job = %+v", job)
+	}
+	if rb.startDrainCalls != 1 || rb.gotNode != "worker-1" || rb.gotCluster != "demo" {
+		t.Fatalf("start drain args wrong: %+v", rb)
+	}
+	if len(entries) != 1 || entries[0].Status != http.StatusAccepted || entries[0].WorkloadID != "worker-1" {
+		t.Fatalf("audit entries = %+v", entries)
+	}
+}
+
+func TestStartDrainUnsupportedBackend(t *testing.T) {
+	s := &Server{Backend: NewSampleBackend()}
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	resp, err := http.Post(ts.URL+"/v1/clusters/demo/nodes/worker-1/drain",
+		"application/json", nil)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotImplemented {
+		t.Fatalf("status = %d, want 501", resp.StatusCode)
+	}
+}
+
+func TestDrainStatusRoutesToBackend(t *testing.T) {
+	rb := &recordingBackend{
+		ClusterBackend: NewSampleBackend(),
+		statusJob: DrainJob{
+			ID: "job-xyz", NodeID: "worker-1",
+			Phase: DrainPhaseSucceeded, Remaining: 0,
+			Evicted: []string{"platform/api-1"},
+		},
+	}
+	s := &Server{Backend: rb}
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/v1/clusters/demo/nodes/worker-1/drain/job-xyz")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	var job DrainJob
+	if err := json.NewDecoder(resp.Body).Decode(&job); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if job.Phase != DrainPhaseSucceeded || len(job.Evicted) != 1 {
+		t.Fatalf("job = %+v", job)
+	}
+	if rb.drainStatusCalls != 1 || rb.gotJobID != "job-xyz" || rb.gotNode != "worker-1" {
+		t.Fatalf("drain status args wrong: %+v", rb)
+	}
+}
+
+func TestDrainStatusUnknownJobIs404(t *testing.T) {
+	rb := &recordingBackend{ClusterBackend: NewSampleBackend(), returnErr: ErrNotFound}
+	s := &Server{Backend: rb}
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/v1/clusters/demo/nodes/worker-1/drain/nope")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
+func TestSampleBackendDrainReturnsUnsupported(t *testing.T) {
+	sb := NewSampleBackend()
+	if _, err := sb.StartDrain(context.Background(), "", "worker-1"); !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("StartDrain: expected ErrUnsupported, got %v", err)
+	}
+	if _, err := sb.StartDrain(context.Background(), "", ""); !errors.Is(err, ErrBadRequest) {
+		t.Fatalf("StartDrain empty node: expected ErrBadRequest, got %v", err)
+	}
+	if _, err := sb.DrainStatus(context.Background(), "", "worker-1", "job-1"); !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("DrainStatus: expected ErrUnsupported, got %v", err)
 	}
 }
 

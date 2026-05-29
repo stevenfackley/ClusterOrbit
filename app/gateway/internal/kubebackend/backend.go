@@ -25,6 +25,20 @@ type KubeBackend struct {
 	cluster *kubeconfig.ResolvedCluster
 	profile api.ClusterProfile
 	now     func() time.Time
+
+	// Drain job registry. Jobs are keyed by their generated ID and mutated by
+	// a background goroutine, so every access goes through drainMu.
+	drainMu   sync.Mutex
+	drainJobs map[string]*api.DrainJob
+	// drainBackoff is the initial wait before retrying a PDB-blocked (429)
+	// eviction; it doubles up to drainMaxBackoff. drainTimeout caps the whole
+	// drain. Overridable in tests to keep them fast.
+	drainBackoff    time.Duration
+	drainMaxBackoff time.Duration
+	drainTimeout    time.Duration
+	// newJobID mints unique job identifiers; overridable in tests for
+	// deterministic IDs.
+	newJobID func() string
 }
 
 // NewKubeBackend builds a backend for the given resolved kubeconfig cluster.
@@ -39,10 +53,15 @@ func NewKubeBackend(cluster *kubeconfig.ResolvedCluster) (*KubeBackend, error) {
 		return nil, err
 	}
 	return &KubeBackend{
-		client:  client,
-		cluster: cluster,
-		profile: profileFromCluster(cluster),
-		now:     time.Now,
+		client:          client,
+		cluster:         cluster,
+		profile:         profileFromCluster(cluster),
+		now:             time.Now,
+		drainJobs:       map[string]*api.DrainJob{},
+		drainBackoff:    1 * time.Second,
+		drainMaxBackoff: 15 * time.Second,
+		drainTimeout:    5 * time.Minute,
+		newJobID:        randomJobID,
 	}, nil
 }
 

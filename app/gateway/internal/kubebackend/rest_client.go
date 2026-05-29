@@ -141,3 +141,36 @@ func (c *RestClient) Patch(ctx context.Context, path, contentType string, body [
 	}
 	return respBody, nil
 }
+
+// Post issues a POST against path and returns the HTTP status code alongside
+// the raw body. Unlike GetJSON/Patch it does NOT fold non-2xx into the error —
+// the error slot is reserved for transport/read failures. Callers inspect the
+// status themselves, which the eviction flow relies on: a 429 means a
+// PodDisruptionBudget would be violated and the caller should back off and
+// retry, not treat it as fatal.
+func (c *RestClient) Post(ctx context.Context, path, contentType string, body []byte) (int, []byte, error) {
+	u := *c.baseURL
+	u.Path = path
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader(body))
+	if err != nil {
+		return 0, nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", contentType)
+	if c.bearerToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.bearerToken)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return 0, nil, fmt.Errorf("kube api request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return resp.StatusCode, nil, fmt.Errorf("read response body: %w", err)
+	}
+	return resp.StatusCode, respBody, nil
+}

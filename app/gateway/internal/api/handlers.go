@@ -191,6 +191,18 @@ func (s *Server) handleClusterScoped(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// GET .../nodes/{nodeID}/drain/{jobID} — drain job status poll. Node names
+	// can't contain "/", so splitting on "/drain/" cleanly separates the node
+	// from the job ID.
+	if rest := strings.TrimPrefix(subpath, "nodes/"); rest != subpath {
+		if idx := strings.Index(rest, "/drain/"); idx >= 0 {
+			nodeID := rest[:idx]
+			jobID := rest[idx+len("/drain/"):]
+			s.handleDrainStatus(w, r, clusterID, nodeID, jobID)
+			return
+		}
+	}
+
 	switch subpath {
 	case "snapshot":
 		snapshot, err := s.Backend.LoadSnapshot(r.Context(), clusterID)
@@ -262,9 +274,50 @@ func (s *Server) handleNodeMutation(w http.ResponseWriter, r *http.Request, clus
 		s.handleCordon(w, r, clusterID, strings.TrimSuffix(rest, "/cordon"), true)
 	case strings.HasSuffix(rest, "/uncordon"):
 		s.handleCordon(w, r, clusterID, strings.TrimSuffix(rest, "/uncordon"), false)
+	case strings.HasSuffix(rest, "/drain"):
+		s.handleStartDrain(w, r, clusterID, strings.TrimSuffix(rest, "/drain"))
 	default:
 		writeError(w, http.StatusNotFound, "not found")
 	}
+}
+
+// handleStartDrain serves POST .../nodes/{nodeID}/drain. No body — drain has no
+// parameters. Returns 202 Accepted with the job handle (including its ID) so
+// the client can poll GET .../drain/{jobID}. Like cordon, the namespace-scoped
+// ScalePolicy does not apply to node ops.
+func (s *Server) handleStartDrain(w http.ResponseWriter, r *http.Request, clusterID, nodeID string) {
+	if nodeID == "" {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+
+	job, err := s.Backend.StartDrain(r.Context(), clusterID, nodeID)
+	status := http.StatusAccepted
+	msg := ""
+	if err != nil {
+		status, msg = scaleStatus(err)
+	}
+	s.audit(r, clusterID, nodeID, nil, status, msg)
+	if err != nil {
+		writeBackendError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, job)
+}
+
+// handleDrainStatus serves GET .../nodes/{nodeID}/drain/{jobID}. Read-only, so
+// it is not audited (consistent with snapshot/events GETs).
+func (s *Server) handleDrainStatus(w http.ResponseWriter, r *http.Request, clusterID, nodeID, jobID string) {
+	if nodeID == "" || jobID == "" {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	job, err := s.Backend.DrainStatus(r.Context(), clusterID, nodeID, jobID)
+	if err != nil {
+		writeBackendError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, job)
 }
 
 // handleCordon serves POST .../nodes/{nodeID}/cordon and /uncordon. No request

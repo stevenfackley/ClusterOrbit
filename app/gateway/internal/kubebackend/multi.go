@@ -102,3 +102,25 @@ func (m *MultiClusterBackend) CordonNode(
 	}
 	return kb.CordonNode(ctx, clusterID, nodeID, unschedulable)
 }
+
+func (m *MultiClusterBackend) StartDrain(
+	ctx context.Context,
+	clusterID, nodeID string,
+) (api.DrainJob, error) {
+	kb, ok := m.backends[clusterID]
+	if !ok {
+		return api.DrainJob{}, api.ErrNotFound
+	}
+	return kb.StartDrain(ctx, clusterID, nodeID)
+}
+
+func (m *MultiClusterBackend) DrainStatus(
+	ctx context.Context,
+	clusterID, nodeID, jobID string,
+) (api.DrainJob, error) {
+	kb, ok := m.backends[clusterID]
+	if !ok {
+		return api.DrainJob{}, api.ErrNotFound
+	}
+	return kb.DrainStatus(ctx, clusterID, nodeID, jobID)
+}
