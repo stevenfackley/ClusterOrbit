@@ -232,6 +232,21 @@ final class _RecordingConnection implements ClusterConnection {
     required String nodeId,
     required bool schedulable,
   }) async {}
+
+  @override
+  Future<DrainJob> startDrain({
+    required String clusterId,
+    required String nodeId,
+  }) async =>
+      throw UnsupportedError('drain');
+
+  @override
+  Future<DrainJob> drainStatus({
+    required String clusterId,
+    required String nodeId,
+    required String jobId,
+  }) async =>
+      throw UnsupportedError('drain');
 }
 
 final class _MemoryStore implements SnapshotStore {

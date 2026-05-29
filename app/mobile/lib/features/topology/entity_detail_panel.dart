@@ -373,16 +373,78 @@ class _EntityDetailPanelState extends State<EntityDetailPanel> {
           label: 'Health', value: n.health.name, tint: tint, theme: theme),
       if (widget.connection != null && widget.clusterId != null) ...[
         const SizedBox(height: 4),
-        Align(
-          alignment: Alignment.centerLeft,
-          child: _ActionButton(
-            icon: n.schedulable ? Icons.block : Icons.play_circle_outline,
-            label: n.schedulable ? 'Cordon' : 'Uncordon',
-            onPressed: () => _onCordonPressed(n),
-          ),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            _ActionButton(
+              icon: n.schedulable ? Icons.block : Icons.play_circle_outline,
+              label: n.schedulable ? 'Cordon' : 'Uncordon',
+              onPressed: () => _onCordonPressed(n),
+            ),
+            // Drain evicts pods via the gateway's async job API; direct and
+            // sample connections don't implement it, so gate on gateway mode.
+            if (widget.connection!.mode == ConnectionMode.gateway)
+              _ActionButton(
+                icon: Icons.cleaning_services_outlined,
+                label: 'Drain',
+                onPressed: () => _onDrainPressed(n),
+              ),
+          ],
         ),
       ],
     ];
+  }
+
+  Future<void> _onDrainPressed(ClusterNode n) async {
+    final connection = widget.connection;
+    final clusterId = widget.clusterId;
+    if (connection == null || clusterId == null) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Drain ${n.name}?'),
+        content: Text(
+          'This cordons ${n.name} and evicts its pods (skipping DaemonSet, '
+          'mirror, and completed pods). Evictions honor PodDisruptionBudgets '
+          'and may take a while.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Drain'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    final DrainJob job;
+    try {
+      job = await connection.startDrain(clusterId: clusterId, nodeId: n.id);
+    } catch (e) {
+      messenger?.showSnackBar(SnackBar(content: Text('Drain failed: $e')));
+      return;
+    }
+    if (!mounted) return;
+
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => _DrainProgressDialog(
+        connection: connection,
+        clusterId: clusterId,
+        nodeName: n.name,
+        nodeId: n.id,
+        initialJob: job,
+      ),
+    );
   }
 
   Future<void> _onCordonPressed(ClusterNode n) async {
@@ -902,6 +964,122 @@ class _ScaleDialogState extends State<_ScaleDialog> {
         FilledButton(
           onPressed: _submit,
           child: const Text('Apply'),
+        ),
+      ],
+    );
+  }
+}
+
+/// Polls `drainStatus` until the job reaches a terminal phase, showing live
+/// evicted/skipped/remaining counts. The poll timer is tied to the dialog
+/// lifecycle so it stops the moment the dialog is dismissed.
+class _DrainProgressDialog extends StatefulWidget {
+  const _DrainProgressDialog({
+    required this.connection,
+    required this.clusterId,
+    required this.nodeName,
+    required this.nodeId,
+    required this.initialJob,
+  });
+
+  final ClusterConnection connection;
+  final String clusterId;
+  final String nodeName;
+  final String nodeId;
+  final DrainJob initialJob;
+
+  @override
+  State<_DrainProgressDialog> createState() => _DrainProgressDialogState();
+}
+
+class _DrainProgressDialogState extends State<_DrainProgressDialog> {
+  static const _pollInterval = Duration(seconds: 2);
+
+  late DrainJob _job = widget.initialJob;
+  Timer? _timer;
+  Object? _pollError;
+
+  @override
+  void initState() {
+    super.initState();
+    if (!_job.phase.isTerminal) {
+      _timer = Timer.periodic(_pollInterval, (_) => unawaited(_poll()));
+    }
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _poll() async {
+    try {
+      final next = await widget.connection.drainStatus(
+        clusterId: widget.clusterId,
+        nodeId: widget.nodeId,
+        jobId: _job.id,
+      );
+      if (!mounted) return;
+      setState(() {
+        _job = next;
+        _pollError = null;
+      });
+      if (next.phase.isTerminal) _timer?.cancel();
+    } catch (e) {
+      if (!mounted) return;
+      // Transient poll failures shouldn't kill the dialog — keep polling and
+      // surface the latest error so the user knows status may be stale.
+      setState(() => _pollError = e);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final done = _job.phase.isTerminal;
+    return AlertDialog(
+      title: Text('Draining ${widget.nodeName}'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              if (!done) ...[
+                const SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+                const SizedBox(width: 10),
+              ],
+              Text('Phase: ${_job.phase.label}',
+                  style: theme.textTheme.bodyMedium),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text('Evicted: ${_job.evicted.length}'),
+          Text('Skipped: ${_job.skipped.length}'),
+          Text('Remaining: ${_job.remaining}'),
+          if (_job.error != null && _job.error!.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text(_job.error!,
+                style: theme.textTheme.bodySmall
+                    ?.copyWith(color: theme.colorScheme.error)),
+          ],
+          if (_pollError != null && !done) ...[
+            const SizedBox(height: 8),
+            Text('Status update failed; retrying…',
+                style:
+                    theme.textTheme.bodySmall?.copyWith(color: Colors.white54)),
+          ],
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: Text(done ? 'Close' : 'Run in background'),
         ),
       ],
     );

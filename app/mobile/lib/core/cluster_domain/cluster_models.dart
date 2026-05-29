@@ -137,6 +137,80 @@ class ClusterEvent {
       );
 }
 
+enum DrainPhase {
+  pending,
+  running,
+  succeeded,
+  failed,
+}
+
+extension DrainPhaseLabel on DrainPhase {
+  bool get isTerminal =>
+      this == DrainPhase.succeeded || this == DrainPhase.failed;
+
+  String get label => switch (this) {
+        DrainPhase.pending => 'Pending',
+        DrainPhase.running => 'Draining',
+        DrainPhase.succeeded => 'Drained',
+        DrainPhase.failed => 'Failed',
+      };
+
+  static DrainPhase fromWire(String? raw) {
+    switch (raw) {
+      case 'running':
+        return DrainPhase.running;
+      case 'succeeded':
+        return DrainPhase.succeeded;
+      case 'failed':
+        return DrainPhase.failed;
+      case 'pending':
+      default:
+        return DrainPhase.pending;
+    }
+  }
+}
+
+/// Observable state of an asynchronous node drain. The gateway returns one
+/// from `startDrain`; the client re-fetches it via `drainStatus` until
+/// [phase] is terminal. [evicted] and [skipped] hold `namespace/name` pod
+/// identifiers; [remaining] is the count of still-to-evict pods.
+class DrainJob {
+  const DrainJob({
+    required this.id,
+    required this.nodeId,
+    required this.phase,
+    required this.evicted,
+    required this.skipped,
+    required this.remaining,
+    this.error,
+  });
+
+  final String id;
+  final String nodeId;
+  final DrainPhase phase;
+  final List<String> evicted;
+  final List<String> skipped;
+  final int remaining;
+  final String? error;
+
+  factory DrainJob.fromJson(Map<String, dynamic> json) => DrainJob(
+        id: json['id'] as String? ?? '',
+        nodeId: json['nodeId'] as String? ?? '',
+        phase: DrainPhaseLabel.fromWire(json['phase'] as String?),
+        evicted: _stringList(json['evicted']),
+        skipped: _stringList(json['skipped']),
+        remaining: (json['remaining'] as num?)?.toInt() ?? 0,
+        error: json['error'] as String?,
+      );
+
+  static List<String> _stringList(Object? raw) {
+    if (raw is List) {
+      return raw.map((e) => e.toString()).toList();
+    }
+    return const [];
+  }
+}
+
 class ClusterProfile {
   const ClusterProfile({
     required this.id,

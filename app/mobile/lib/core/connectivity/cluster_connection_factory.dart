@@ -191,6 +191,27 @@ final class DirectClusterConnection implements ClusterConnection {
     );
   }
 
+  @override
+  Future<DrainJob> startDrain({
+    required String clusterId,
+    required String nodeId,
+  }) async {
+    throw UnsupportedError(
+      'Direct mode does not support node drain — connect through the gateway to drain nodes.',
+    );
+  }
+
+  @override
+  Future<DrainJob> drainStatus({
+    required String clusterId,
+    required String nodeId,
+    required String jobId,
+  }) async {
+    throw UnsupportedError(
+      'Direct mode does not support node drain — connect through the gateway to drain nodes.',
+    );
+  }
+
   Future<ClusterProfile> _resolveCluster(String clusterId) async {
     final profiles = await listClusters();
     return profiles.firstWhere(
@@ -270,6 +291,27 @@ final class SampleClusterConnection implements ClusterConnection {
   }) async {
     throw StateError(
       'Sample connection does not support mutations — add a real connection to cordon nodes.',
+    );
+  }
+
+  @override
+  Future<DrainJob> startDrain({
+    required String clusterId,
+    required String nodeId,
+  }) async {
+    throw StateError(
+      'Sample connection does not support mutations — add a real connection to drain nodes.',
+    );
+  }
+
+  @override
+  Future<DrainJob> drainStatus({
+    required String clusterId,
+    required String nodeId,
+    required String jobId,
+  }) async {
+    throw StateError(
+      'Sample connection does not support mutations — add a real connection to drain nodes.',
     );
   }
 }
@@ -455,6 +497,64 @@ final class GatewayClusterConnection implements ClusterConnection {
       headers: _headers(),
       body: const <String, dynamic>{},
     );
+  }
+
+  @override
+  Future<DrainJob> startDrain({
+    required String clusterId,
+    required String nodeId,
+  }) async {
+    final base = _parseBase();
+    if (base == null) {
+      throw StateError(
+        'Gateway base URL is not configured — drain is unsupported in sample-only mode.',
+      );
+    }
+    final target = base.replace(
+      pathSegments: [
+        ...base.pathSegments.where((s) => s.isNotEmpty),
+        'v1',
+        'clusters',
+        clusterId,
+        'nodes',
+        nodeId,
+        'drain',
+      ],
+    );
+    final body = await _httpClient.postJson(
+      target,
+      headers: _headers(),
+      body: const <String, dynamic>{},
+    );
+    return DrainJob.fromJson(body as Map<String, dynamic>);
+  }
+
+  @override
+  Future<DrainJob> drainStatus({
+    required String clusterId,
+    required String nodeId,
+    required String jobId,
+  }) async {
+    final base = _parseBase();
+    if (base == null) {
+      throw StateError(
+        'Gateway base URL is not configured — drain is unsupported in sample-only mode.',
+      );
+    }
+    final target = base.replace(
+      pathSegments: [
+        ...base.pathSegments.where((s) => s.isNotEmpty),
+        'v1',
+        'clusters',
+        clusterId,
+        'nodes',
+        nodeId,
+        'drain',
+        jobId,
+      ],
+    );
+    final body = await _httpClient.getJson(target, headers: _headers());
+    return DrainJob.fromJson(body as Map<String, dynamic>);
   }
 
   Uri? _parseBase() {

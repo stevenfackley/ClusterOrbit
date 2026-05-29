@@ -110,6 +110,21 @@ final class TestClusterConnection implements ClusterConnection {
   }) async {
     onSetSchedulable?.call(clusterId, nodeId, schedulable);
   }
+
+  @override
+  Future<DrainJob> startDrain({
+    required String clusterId,
+    required String nodeId,
+  }) async =>
+      throw UnsupportedError('drain not supported in TestClusterConnection');
+
+  @override
+  Future<DrainJob> drainStatus({
+    required String clusterId,
+    required String nodeId,
+    required String jobId,
+  }) async =>
+      throw UnsupportedError('drain not supported in TestClusterConnection');
 }
 
 /// No-op store used in widget tests — prevents any SQLite I/O during test runs.

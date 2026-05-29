@@ -56,6 +56,29 @@ abstract interface class ClusterConnection {
     required String nodeId,
     required bool schedulable,
   });
+
+  /// Start an async drain of a node (cordon + evict pods).
+  ///
+  /// Cordons [nodeId] then evicts all evictable pods (skipping DaemonSet,
+  /// mirror/static, and completed pods). The returned [DrainJob] carries the
+  /// job id to poll with [drainStatus]; the drain runs in the background.
+  /// Only the gateway backend supports this; others throw
+  /// [UnsupportedError]. Implementations throw on backend failure.
+  Future<DrainJob> startDrain({
+    required String clusterId,
+    required String nodeId,
+  });
+
+  /// Poll the status of a previously started drain job.
+  ///
+  /// [jobId] comes from the [DrainJob] returned by [startDrain]. The returned
+  /// job reports the current [DrainPhase] plus evicted/skipped/remaining
+  /// counts. Implementations throw on backend failure.
+  Future<DrainJob> drainStatus({
+    required String clusterId,
+    required String nodeId,
+    required String jobId,
+  });
 }
 
 /// Thrown when `scaleWorkload` is called on a workload kind the backend does

@@ -408,6 +408,71 @@ current-context: prod-admin
     );
   });
 
+  test('gateway startDrain POSTs to drain subpath and parses the job',
+      () async {
+    const drainUrl =
+        'https://gateway.example.internal/v1/clusters/remote-alpha/nodes/worker-1/drain';
+    final fake = _FakeGatewayHttpClient({
+      drainUrl: {
+        'id': 'job-1',
+        'nodeId': 'worker-1',
+        'phase': 'pending',
+        'evicted': <String>[],
+        'skipped': <String>[],
+        'remaining': 0,
+      },
+    });
+    final connection = GatewayClusterConnection(
+      gatewayBaseUrl: 'https://gateway.example.internal/',
+      token: 's3cret',
+      httpClient: fake,
+    );
+
+    final job = await connection.startDrain(
+      clusterId: 'remote-alpha',
+      nodeId: 'worker-1',
+    );
+
+    expect(fake.lastPostUrl.toString(), drainUrl);
+    expect(fake.lastPostBody, isEmpty);
+    expect(fake.lastHeaders['X-ClusterOrbit-Token'], 's3cret');
+    expect(job.id, 'job-1');
+    expect(job.nodeId, 'worker-1');
+    expect(job.phase, DrainPhase.pending);
+  });
+
+  test('gateway drainStatus GETs the job subpath and parses progress',
+      () async {
+    const statusUrl =
+        'https://gateway.example.internal/v1/clusters/remote-alpha/nodes/worker-1/drain/job-1';
+    final fake = _FakeGatewayHttpClient({
+      statusUrl: {
+        'id': 'job-1',
+        'nodeId': 'worker-1',
+        'phase': 'succeeded',
+        'evicted': ['platform/api-1', 'platform/api-2'],
+        'skipped': ['kube-system/ds-1'],
+        'remaining': 0,
+      },
+    });
+    final connection = GatewayClusterConnection(
+      gatewayBaseUrl: 'https://gateway.example.internal/',
+      httpClient: fake,
+    );
+
+    final job = await connection.drainStatus(
+      clusterId: 'remote-alpha',
+      nodeId: 'worker-1',
+      jobId: 'job-1',
+    );
+
+    expect(job.phase, DrainPhase.succeeded);
+    expect(job.phase.isTerminal, isTrue);
+    expect(job.evicted, ['platform/api-1', 'platform/api-2']);
+    expect(job.skipped, ['kube-system/ds-1']);
+    expect(job.remaining, 0);
+  });
+
   test(
       'direct restartWorkload strategic-merge-patches the pod template annotation',
       () async {
