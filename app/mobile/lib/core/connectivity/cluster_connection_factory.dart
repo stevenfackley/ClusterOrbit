@@ -71,15 +71,18 @@ final class DirectClusterConnection implements ClusterConnection {
     KubernetesSnapshotLoader? snapshotLoader,
     KubernetesEventLoader? eventLoader,
     KubernetesWorkloadScaler? workloadScaler,
+    KubernetesNodeCordoner? nodeCordoner,
   })  : _repository = repository ?? KubeconfigRepository(),
         _snapshotLoader = snapshotLoader ?? KubernetesSnapshotLoader(),
         _eventLoader = eventLoader ?? KubernetesEventLoader(),
-        _workloadScaler = workloadScaler ?? KubernetesWorkloadScaler();
+        _workloadScaler = workloadScaler ?? KubernetesWorkloadScaler(),
+        _nodeCordoner = nodeCordoner ?? KubernetesNodeCordoner();
 
   final KubeconfigRepository _repository;
   final KubernetesSnapshotLoader _snapshotLoader;
   final KubernetesEventLoader _eventLoader;
   final KubernetesWorkloadScaler _workloadScaler;
+  final KubernetesNodeCordoner _nodeCordoner;
 
   @override
   ConnectionMode get mode => ConnectionMode.direct;
@@ -152,6 +155,42 @@ final class DirectClusterConnection implements ClusterConnection {
     );
   }
 
+  @override
+  Future<void> restartWorkload({
+    required String clusterId,
+    required String workloadId,
+  }) async {
+    final resolvedCluster = await _repository.loadResolvedCluster(clusterId);
+    if (resolvedCluster == null) {
+      throw StateError(
+        'No resolvable kubeconfig for cluster $clusterId — restart is unsupported in sample-only mode.',
+      );
+    }
+    await _workloadScaler.restartWorkload(
+      cluster: resolvedCluster,
+      workloadId: workloadId,
+    );
+  }
+
+  @override
+  Future<void> setNodeSchedulable({
+    required String clusterId,
+    required String nodeId,
+    required bool schedulable,
+  }) async {
+    final resolvedCluster = await _repository.loadResolvedCluster(clusterId);
+    if (resolvedCluster == null) {
+      throw StateError(
+        'No resolvable kubeconfig for cluster $clusterId — cordon is unsupported in sample-only mode.',
+      );
+    }
+    await _nodeCordoner.setSchedulable(
+      cluster: resolvedCluster,
+      nodeId: nodeId,
+      schedulable: schedulable,
+    );
+  }
+
   Future<ClusterProfile> _resolveCluster(String clusterId) async {
     final profiles = await listClusters();
     return profiles.firstWhere(
@@ -210,6 +249,27 @@ final class SampleClusterConnection implements ClusterConnection {
   }) async {
     throw StateError(
       'Sample connection does not support mutations — add a real connection to scale workloads.',
+    );
+  }
+
+  @override
+  Future<void> restartWorkload({
+    required String clusterId,
+    required String workloadId,
+  }) async {
+    throw StateError(
+      'Sample connection does not support mutations — add a real connection to restart workloads.',
+    );
+  }
+
+  @override
+  Future<void> setNodeSchedulable({
+    required String clusterId,
+    required String nodeId,
+    required bool schedulable,
+  }) async {
+    throw StateError(
+      'Sample connection does not support mutations — add a real connection to cordon nodes.',
     );
   }
 }
@@ -335,6 +395,65 @@ final class GatewayClusterConnection implements ClusterConnection {
       target,
       headers: _headers(),
       body: {'replicas': replicas},
+    );
+  }
+
+  @override
+  Future<void> restartWorkload({
+    required String clusterId,
+    required String workloadId,
+  }) async {
+    final base = _parseBase();
+    if (base == null) {
+      throw StateError(
+        'Gateway base URL is not configured — restart is unsupported in sample-only mode.',
+      );
+    }
+    final target = base.replace(
+      pathSegments: [
+        ...base.pathSegments.where((s) => s.isNotEmpty),
+        'v1',
+        'clusters',
+        clusterId,
+        'workloads',
+        workloadId,
+        'restart',
+      ],
+    );
+    await _httpClient.postJson(
+      target,
+      headers: _headers(),
+      body: const <String, dynamic>{},
+    );
+  }
+
+  @override
+  Future<void> setNodeSchedulable({
+    required String clusterId,
+    required String nodeId,
+    required bool schedulable,
+  }) async {
+    final base = _parseBase();
+    if (base == null) {
+      throw StateError(
+        'Gateway base URL is not configured — cordon is unsupported in sample-only mode.',
+      );
+    }
+    final target = base.replace(
+      pathSegments: [
+        ...base.pathSegments.where((s) => s.isNotEmpty),
+        'v1',
+        'clusters',
+        clusterId,
+        'nodes',
+        nodeId,
+        schedulable ? 'uncordon' : 'cordon',
+      ],
+    );
+    await _httpClient.postJson(
+      target,
+      headers: _headers(),
+      body: const <String, dynamic>{},
     );
   }
 

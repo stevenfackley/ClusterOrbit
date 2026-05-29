@@ -358,6 +358,145 @@ current-context: prod-admin
       throwsA(isA<UnsupportedWorkloadKindException>()),
     );
   });
+
+  test('gateway restartWorkload POSTs to restart subpath', () async {
+    final fake = _FakeGatewayHttpClient(const {});
+    final connection = GatewayClusterConnection(
+      gatewayBaseUrl: 'https://gateway.example.internal/',
+      token: 's3cret',
+      httpClient: fake,
+    );
+
+    await connection.restartWorkload(
+      clusterId: 'remote-alpha',
+      workloadId: 'deployment:platform/api',
+    );
+
+    expect(
+      fake.lastPostUrl.toString(),
+      'https://gateway.example.internal/v1/clusters/remote-alpha/workloads/deployment:platform%2Fapi/restart',
+    );
+    expect(fake.lastPostBody, isEmpty);
+    expect(fake.lastHeaders['X-ClusterOrbit-Token'], 's3cret');
+  });
+
+  test('gateway setNodeSchedulable POSTs cordon/uncordon verbs', () async {
+    final fake = _FakeGatewayHttpClient(const {});
+    final connection = GatewayClusterConnection(
+      gatewayBaseUrl: 'https://gateway.example.internal/',
+      httpClient: fake,
+    );
+
+    await connection.setNodeSchedulable(
+      clusterId: 'remote-alpha',
+      nodeId: 'worker-1',
+      schedulable: false,
+    );
+    expect(
+      fake.lastPostUrl.toString(),
+      'https://gateway.example.internal/v1/clusters/remote-alpha/nodes/worker-1/cordon',
+    );
+
+    await connection.setNodeSchedulable(
+      clusterId: 'remote-alpha',
+      nodeId: 'worker-1',
+      schedulable: true,
+    );
+    expect(
+      fake.lastPostUrl.toString(),
+      'https://gateway.example.internal/v1/clusters/remote-alpha/nodes/worker-1/uncordon',
+    );
+  });
+
+  test(
+      'direct restartWorkload strategic-merge-patches the pod template annotation',
+      () async {
+    final tempDir = await Directory.systemTemp.createTemp('clusterorbit_test');
+    addTearDown(() async => tempDir.delete(recursive: true));
+    final kubeconfig = File('${tempDir.path}${Platform.pathSeparator}config');
+    await kubeconfig.writeAsString('''
+apiVersion: v1
+clusters:
+  - cluster:
+      server: https://prod.example.internal:6443
+    name: prod-cluster
+contexts:
+  - context:
+      cluster: prod-cluster
+      user: prod-user
+    name: prod-admin
+users:
+  - name: prod-user
+    user:
+      token: abc123
+current-context: prod-admin
+''');
+    final transport = _RecordingTransport();
+    final connection = DirectClusterConnection(
+      repository: KubeconfigRepository(environment: {
+        'CLUSTERORBIT_KUBECONFIG': kubeconfig.path,
+      }),
+      workloadScaler: KubernetesWorkloadScaler(transport: transport),
+    );
+
+    await connection.restartWorkload(
+      clusterId: 'prod-admin',
+      workloadId: 'deployment:platform/api',
+    );
+
+    expect(transport.lastUri.toString(),
+        'https://prod.example.internal:6443/apis/apps/v1/namespaces/platform/deployments/api');
+    expect(transport.lastContentType, 'application/strategic-merge-patch+json');
+    final decoded =
+        jsonDecode(utf8.decode(transport.lastBody!)) as Map<String, dynamic>;
+    final annotations = decoded['spec']['template']['metadata']['annotations']
+        as Map<String, dynamic>;
+    expect(
+        annotations.containsKey('kubectl.kubernetes.io/restartedAt'), isTrue);
+  });
+
+  test('direct setNodeSchedulable merge-patches spec.unschedulable', () async {
+    final tempDir = await Directory.systemTemp.createTemp('clusterorbit_test');
+    addTearDown(() async => tempDir.delete(recursive: true));
+    final kubeconfig = File('${tempDir.path}${Platform.pathSeparator}config');
+    await kubeconfig.writeAsString('''
+apiVersion: v1
+clusters:
+  - cluster:
+      server: https://prod.example.internal:6443
+    name: prod-cluster
+contexts:
+  - context:
+      cluster: prod-cluster
+      user: prod-user
+    name: prod-admin
+users:
+  - name: prod-user
+    user:
+      token: abc123
+current-context: prod-admin
+''');
+    final transport = _RecordingTransport();
+    final connection = DirectClusterConnection(
+      repository: KubeconfigRepository(environment: {
+        'CLUSTERORBIT_KUBECONFIG': kubeconfig.path,
+      }),
+      nodeCordoner: KubernetesNodeCordoner(transport: transport),
+    );
+
+    await connection.setNodeSchedulable(
+      clusterId: 'prod-admin',
+      nodeId: 'worker-1',
+      schedulable: false,
+    );
+
+    expect(transport.lastUri.toString(),
+        'https://prod.example.internal:6443/api/v1/nodes/worker-1');
+    expect(transport.lastContentType, 'application/merge-patch+json');
+    expect(jsonDecode(utf8.decode(transport.lastBody!)), {
+      'spec': {'unschedulable': true}
+    });
+  });
 }
 
 Map<String, dynamic> _listResponse(List<Map<String, dynamic>> items) => {

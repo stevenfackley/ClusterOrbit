@@ -33,6 +33,29 @@ abstract interface class ClusterConnection {
     required String workloadId,
     required int replicas,
   });
+
+  /// Trigger a rolling restart of a workload (kubectl rollout restart).
+  ///
+  /// [workloadId] is the topology workload id (`{kind}:{namespace}/{name}`).
+  /// `deployment`, `statefulSet`, and `daemonSet` are supported; other kinds
+  /// throw [UnsupportedWorkloadKindException]. Implementations throw on
+  /// backend failure so the caller can surface the error.
+  Future<void> restartWorkload({
+    required String clusterId,
+    required String workloadId,
+  });
+
+  /// Toggle a node's schedulability (cordon / uncordon).
+  ///
+  /// [schedulable] false cordons the node (sets `spec.unschedulable=true`);
+  /// true uncordons it. [nodeId] is the topology node id (the node name).
+  /// This does not evict running pods — draining is a separate operation.
+  /// Implementations throw on backend failure.
+  Future<void> setNodeSchedulable({
+    required String clusterId,
+    required String nodeId,
+    required bool schedulable,
+  });
 }
 
 /// Thrown when `scaleWorkload` is called on a workload kind the backend does

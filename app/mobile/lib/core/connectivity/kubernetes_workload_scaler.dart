@@ -49,6 +49,87 @@ final class KubernetesWorkloadScaler {
       body: body,
     );
   }
+
+  /// Triggers a rolling restart by strategic-merge-patching the pod template's
+  /// `restartedAt` annotation (kubectl rollout restart semantics). Deployment,
+  /// StatefulSet, and DaemonSet are supported; Job is not.
+  Future<void> restartWorkload({
+    required KubeconfigResolvedCluster cluster,
+    required String workloadId,
+    DateTime? now,
+  }) async {
+    final parsed = _parseWorkloadId(workloadId);
+    final resource = _restartResourceFor(parsed.kind);
+    if (resource == null) {
+      throw UnsupportedWorkloadKindException(parsed.kind);
+    }
+
+    final baseUri = Uri.parse(cluster.server);
+    final path =
+        '/apis/apps/v1/namespaces/${parsed.namespace}/$resource/${parsed.name}';
+    final timestamp = (now ?? DateTime.now()).toUtc().toIso8601String();
+    final body = utf8.encode(
+      jsonEncode({
+        'spec': {
+          'template': {
+            'metadata': {
+              'annotations': {
+                'kubectl.kubernetes.io/restartedAt': timestamp,
+              },
+            },
+          },
+        },
+      }),
+    );
+
+    await _transport.patchJson(
+      KubernetesRequest(
+        uri: baseUri.resolve(path),
+        auth: cluster.auth,
+        tls: cluster.tls,
+      ),
+      contentType: 'application/strategic-merge-patch+json',
+      body: body,
+    );
+  }
+}
+
+/// Cordons / uncordons a node on a live cluster by merge-patching the node's
+/// `spec.unschedulable` field. Cordoning only blocks new scheduling; it does
+/// not evict running pods.
+final class KubernetesNodeCordoner {
+  KubernetesNodeCordoner({
+    KubernetesTransport? transport,
+  }) : _transport = transport ?? HttpKubernetesTransport();
+
+  final KubernetesTransport _transport;
+
+  Future<void> setSchedulable({
+    required KubeconfigResolvedCluster cluster,
+    required String nodeId,
+    required bool schedulable,
+  }) async {
+    if (nodeId.isEmpty) {
+      throw ArgumentError.value(nodeId, 'nodeId', 'must not be empty');
+    }
+    final baseUri = Uri.parse(cluster.server);
+    final path = '/api/v1/nodes/$nodeId';
+    final body = utf8.encode(
+      jsonEncode({
+        'spec': {'unschedulable': !schedulable}
+      }),
+    );
+
+    await _transport.patchJson(
+      KubernetesRequest(
+        uri: baseUri.resolve(path),
+        auth: cluster.auth,
+        tls: cluster.tls,
+      ),
+      contentType: 'application/merge-patch+json',
+      body: body,
+    );
+  }
 }
 
 /// Topology workload ID shape: `{kind}:{namespace}/{name}`. The `/` inside
@@ -77,6 +158,19 @@ String? _scaleResourceFor(String kind) {
       return 'deployments';
     case 'statefulSet':
       return 'statefulsets';
+    default:
+      return null;
+  }
+}
+
+String? _restartResourceFor(String kind) {
+  switch (kind) {
+    case 'deployment':
+      return 'deployments';
+    case 'statefulSet':
+      return 'statefulsets';
+    case 'daemonSet':
+      return 'daemonsets';
     default:
       return null;
   }

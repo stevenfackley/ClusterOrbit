@@ -219,6 +219,19 @@ final class _RecordingConnection implements ClusterConnection {
     required String workloadId,
     required int replicas,
   }) async {}
+
+  @override
+  Future<void> restartWorkload({
+    required String clusterId,
+    required String workloadId,
+  }) async {}
+
+  @override
+  Future<void> setNodeSchedulable({
+    required String clusterId,
+    required String nodeId,
+    required bool schedulable,
+  }) async {}
 }
 
 final class _MemoryStore implements SnapshotStore {

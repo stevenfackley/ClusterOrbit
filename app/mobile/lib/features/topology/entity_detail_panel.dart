@@ -371,13 +371,81 @@ class _EntityDetailPanelState extends State<EntityDetailPanel> {
           theme: theme),
       _DetailStatusRow(
           label: 'Health', value: n.health.name, tint: tint, theme: theme),
+      if (widget.connection != null && widget.clusterId != null) ...[
+        const SizedBox(height: 4),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: _ActionButton(
+            icon: n.schedulable ? Icons.block : Icons.play_circle_outline,
+            label: n.schedulable ? 'Cordon' : 'Uncordon',
+            onPressed: () => _onCordonPressed(n),
+          ),
+        ),
+      ],
     ];
+  }
+
+  Future<void> _onCordonPressed(ClusterNode n) async {
+    final connection = widget.connection;
+    final clusterId = widget.clusterId;
+    if (connection == null || clusterId == null) return;
+
+    // Toggling: schedulable node → cordon (make unschedulable), and vice versa.
+    final makeSchedulable = !n.schedulable;
+    final verb = makeSchedulable ? 'Uncordon' : 'Cordon';
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('$verb ${n.name}?'),
+        content: Text(
+          makeSchedulable
+              ? 'This allows new pods to be scheduled on ${n.name}.'
+              : 'This blocks new pods from scheduling on ${n.name}. '
+                  'Running pods are not evicted.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: Text(verb),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    try {
+      await connection.setNodeSchedulable(
+        clusterId: clusterId,
+        nodeId: n.id,
+        schedulable: makeSchedulable,
+      );
+      messenger?.showSnackBar(
+        SnackBar(
+          content: Text(
+              'Requested ${verb.toLowerCase()} of ${n.name}. Refresh to see applied state.'),
+        ),
+      );
+    } catch (e) {
+      messenger?.showSnackBar(
+        SnackBar(content: Text('$verb failed: $e')),
+      );
+    }
   }
 
   List<Widget> _workloadFields(ClusterWorkload w, ThemeData theme) {
     final tint = healthTint(w.health, widget.palette);
     final isScalable =
         w.kind == WorkloadKind.deployment || w.kind == WorkloadKind.statefulSet;
+    final isRestartable = isScalable || w.kind == WorkloadKind.daemonSet;
+    final hasActions = (isScalable || isRestartable) &&
+        widget.connection != null &&
+        widget.clusterId != null;
     return [
       _DetailRow(label: 'Namespace', value: w.namespace, theme: theme),
       _DetailRow(label: 'Kind', value: w.kind.label, theme: theme),
@@ -393,26 +461,74 @@ class _EntityDetailPanelState extends State<EntityDetailPanel> {
         _DetailRow(label: 'Image', value: image, theme: theme),
       _DetailStatusRow(
           label: 'Health', value: w.health.name, tint: tint, theme: theme),
-      if (isScalable &&
-          widget.connection != null &&
-          widget.clusterId != null) ...[
+      if (hasActions) ...[
         const SizedBox(height: 4),
-        Align(
-          alignment: Alignment.centerLeft,
-          child: TextButton.icon(
-            onPressed: () => _onScalePressed(w),
-            icon: const Icon(Icons.tune, size: 16),
-            label: const Text('Scale'),
-            style: TextButton.styleFrom(
-              foregroundColor: Colors.white,
-              visualDensity: VisualDensity.compact,
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-              backgroundColor: Colors.white.withValues(alpha: 0.08),
-            ),
-          ),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            if (isScalable)
+              _ActionButton(
+                icon: Icons.tune,
+                label: 'Scale',
+                onPressed: () => _onScalePressed(w),
+              ),
+            if (isRestartable)
+              _ActionButton(
+                icon: Icons.restart_alt,
+                label: 'Restart',
+                onPressed: () => _onRestartPressed(w),
+              ),
+          ],
         ),
       ],
     ];
+  }
+
+  Future<void> _onRestartPressed(ClusterWorkload w) async {
+    final connection = widget.connection;
+    final clusterId = widget.clusterId;
+    if (connection == null || clusterId == null) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Restart ${w.name}?'),
+        content: Text(
+          'This triggers a rolling restart of all pods in ${w.name}. '
+          'Existing pods are replaced gradually.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Restart'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    try {
+      await connection.restartWorkload(
+        clusterId: clusterId,
+        workloadId: w.id,
+      );
+      messenger?.showSnackBar(
+        SnackBar(
+          content: Text(
+              'Requested rolling restart of ${w.name}. Refresh to see applied state.'),
+        ),
+      );
+    } catch (e) {
+      messenger?.showSnackBar(
+        SnackBar(content: Text('Restart failed: $e')),
+      );
+    }
   }
 
   Future<void> _onScalePressed(ClusterWorkload w) async {
@@ -561,6 +677,33 @@ class _DetailStatusRow extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _ActionButton extends StatelessWidget {
+  const _ActionButton({
+    required this.icon,
+    required this.label,
+    required this.onPressed,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return TextButton.icon(
+      onPressed: onPressed,
+      icon: Icon(icon, size: 16),
+      label: Text(label),
+      style: TextButton.styleFrom(
+        foregroundColor: Colors.white,
+        visualDensity: VisualDensity.compact,
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        backgroundColor: Colors.white.withValues(alpha: 0.08),
       ),
     );
   }

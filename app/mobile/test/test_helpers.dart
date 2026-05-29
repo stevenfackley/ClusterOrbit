@@ -36,11 +36,16 @@ final class TestClusterConnection implements ClusterConnection {
   TestClusterConnection({
     List<ClusterEvent>? events,
     this.onScale,
+    this.onRestart,
+    this.onSetSchedulable,
   }) : _events = events;
 
   final List<ClusterEvent>? _events;
   final void Function(String clusterId, String workloadId, int replicas)?
       onScale;
+  final void Function(String clusterId, String workloadId)? onRestart;
+  final void Function(String clusterId, String nodeId, bool schedulable)?
+      onSetSchedulable;
   final List<ClusterProfile> _profiles =
       SampleClusterData.profilesFor(ConnectionMode.direct);
 
@@ -87,6 +92,23 @@ final class TestClusterConnection implements ClusterConnection {
     required int replicas,
   }) async {
     onScale?.call(clusterId, workloadId, replicas);
+  }
+
+  @override
+  Future<void> restartWorkload({
+    required String clusterId,
+    required String workloadId,
+  }) async {
+    onRestart?.call(clusterId, workloadId);
+  }
+
+  @override
+  Future<void> setNodeSchedulable({
+    required String clusterId,
+    required String nodeId,
+    required bool schedulable,
+  }) async {
+    onSetSchedulable?.call(clusterId, nodeId, schedulable);
   }
 }
 
