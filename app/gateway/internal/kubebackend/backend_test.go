@@ -341,6 +341,71 @@ func TestKubeBackendRestartRejectsBadID(t *testing.T) {
 	}
 }
 
+func TestKubeBackendCordonPatchesUnschedulable(t *testing.T) {
+	cases := []struct {
+		name          string
+		unschedulable bool
+		wantBody      string
+	}{
+		{"cordon", true, `"unschedulable":true`},
+		{"uncordon", false, `"unschedulable":false`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotMethod, gotPath, gotContentType, gotBody string
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotMethod = r.Method
+				gotPath = r.URL.Path
+				gotContentType = r.Header.Get("Content-Type")
+				buf := make([]byte, 256)
+				n, _ := r.Body.Read(buf)
+				gotBody = string(buf[:n])
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"kind":"Node"}`))
+			}))
+			defer ts.Close()
+
+			backend, err := NewKubeBackend(&kubeconfig.ResolvedCluster{
+				Server: ts.URL, ContextName: "test",
+			})
+			if err != nil {
+				t.Fatalf("new backend: %v", err)
+			}
+
+			if err := backend.CordonNode(context.Background(), "test", "worker-1", tc.unschedulable); err != nil {
+				t.Fatalf("CordonNode: %v", err)
+			}
+			if gotMethod != "PATCH" {
+				t.Fatalf("method = %q", gotMethod)
+			}
+			if gotPath != "/api/v1/nodes/worker-1" {
+				t.Fatalf("path = %q", gotPath)
+			}
+			if gotContentType != "application/merge-patch+json" {
+				t.Fatalf("content-type = %q", gotContentType)
+			}
+			if !strings.Contains(gotBody, tc.wantBody) {
+				t.Fatalf("body = %q, want substring %q", gotBody, tc.wantBody)
+			}
+		})
+	}
+}
+
+func TestKubeBackendCordonRejectsBadInput(t *testing.T) {
+	backend, err := NewKubeBackend(&kubeconfig.ResolvedCluster{
+		Server: "http://example.com", ContextName: "test",
+	})
+	if err != nil {
+		t.Fatalf("new backend: %v", err)
+	}
+	if err := backend.CordonNode(context.Background(), "test", "", true); !errors.Is(err, api.ErrBadRequest) {
+		t.Fatalf("expected ErrBadRequest for empty node id, got %v", err)
+	}
+	if err := backend.CordonNode(context.Background(), "other", "worker-1", true); !errors.Is(err, api.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for unknown cluster, got %v", err)
+	}
+}
+
 func TestKubeBackendScaleRejectsBadID(t *testing.T) {
 	backend, err := NewKubeBackend(&kubeconfig.ResolvedCluster{
 		Server: "http://example.com", ContextName: "test",

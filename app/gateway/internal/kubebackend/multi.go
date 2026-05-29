@@ -90,3 +90,15 @@ func (m *MultiClusterBackend) RestartWorkload(
 	}
 	return kb.RestartWorkload(ctx, clusterID, workloadID)
 }
+
+func (m *MultiClusterBackend) CordonNode(
+	ctx context.Context,
+	clusterID, nodeID string,
+	unschedulable bool,
+) error {
+	kb, ok := m.backends[clusterID]
+	if !ok {
+		return api.ErrNotFound
+	}
+	return kb.CordonNode(ctx, clusterID, nodeID, unschedulable)
+}

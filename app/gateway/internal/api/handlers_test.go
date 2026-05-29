@@ -196,13 +196,16 @@ func TestServerRejectsUnknownToken(t *testing.T) {
 
 type recordingBackend struct {
 	ClusterBackend
-	mu           sync.Mutex
-	scaleCalls   int
-	restartCalls int
-	gotCluster   string
-	gotWorkload  string
-	gotReplicas  int
-	returnErr    error
+	mu               sync.Mutex
+	scaleCalls       int
+	restartCalls     int
+	cordonCalls      int
+	gotCluster       string
+	gotWorkload      string
+	gotNode          string
+	gotReplicas      int
+	gotUnschedulable bool
+	returnErr        error
 }
 
 func (r *recordingBackend) ScaleWorkload(_ context.Context, clusterID, workloadID string, replicas int) error {
@@ -221,6 +224,16 @@ func (r *recordingBackend) RestartWorkload(_ context.Context, clusterID, workloa
 	r.restartCalls++
 	r.gotCluster = clusterID
 	r.gotWorkload = workloadID
+	return r.returnErr
+}
+
+func (r *recordingBackend) CordonNode(_ context.Context, clusterID, nodeID string, unschedulable bool) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.cordonCalls++
+	r.gotCluster = clusterID
+	r.gotNode = nodeID
+	r.gotUnschedulable = unschedulable
 	return r.returnErr
 }
 
@@ -408,6 +421,95 @@ func TestRestartWorkloadNamespacePolicyBlocks(t *testing.T) {
 func TestSampleBackendRestartReturnsUnsupported(t *testing.T) {
 	sb := NewSampleBackend()
 	if err := sb.RestartWorkload(context.Background(), "", "deployment:ns/name"); !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("expected ErrUnsupported, got %v", err)
+	}
+}
+
+func TestCordonNodeSuccessAndAudit(t *testing.T) {
+	rb := &recordingBackend{ClusterBackend: NewSampleBackend()}
+	var entries []AuditEntry
+	s := &Server{
+		Backend:   rb,
+		AuditSink: func(e AuditEntry) { entries = append(entries, e) },
+	}
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	resp, err := http.Post(ts.URL+"/v1/clusters/demo/nodes/worker-1/cordon",
+		"application/json", nil)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d body = %s", resp.StatusCode, raw)
+	}
+	if rb.cordonCalls != 1 || rb.gotNode != "worker-1" || rb.gotCluster != "demo" || !rb.gotUnschedulable {
+		t.Fatalf("cordon args wrong: %+v", rb)
+	}
+	if len(entries) != 1 || entries[0].Status != http.StatusOK || entries[0].Replicas != nil {
+		t.Fatalf("audit entries = %+v", entries)
+	}
+	if entries[0].WorkloadID != "worker-1" {
+		t.Fatalf("audit target = %q, want worker-1", entries[0].WorkloadID)
+	}
+}
+
+func TestUncordonNode(t *testing.T) {
+	rb := &recordingBackend{ClusterBackend: NewSampleBackend()}
+	s := &Server{Backend: rb}
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	resp, err := http.Post(ts.URL+"/v1/clusters/demo/nodes/worker-1/uncordon",
+		"application/json", nil)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if rb.cordonCalls != 1 || rb.gotUnschedulable {
+		t.Fatalf("uncordon should pass unschedulable=false: %+v", rb)
+	}
+}
+
+func TestCordonNodeUnsupportedBackend(t *testing.T) {
+	rb := &recordingBackend{ClusterBackend: NewSampleBackend(), returnErr: ErrUnsupported}
+	s := &Server{Backend: rb}
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	resp, err := http.Post(ts.URL+"/v1/clusters/demo/nodes/worker-1/cordon",
+		"application/json", nil)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotImplemented {
+		t.Fatalf("status = %d, want 501", resp.StatusCode)
+	}
+}
+
+func TestCordonNodePathValidation(t *testing.T) {
+	s := &Server{Backend: NewSampleBackend()}
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	// Unknown node verb — should 404.
+	resp, _ := http.Post(ts.URL+"/v1/clusters/demo/nodes/worker-1/frobnicate",
+		"application/json", nil)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
+func TestSampleBackendCordonReturnsUnsupported(t *testing.T) {
+	sb := NewSampleBackend()
+	if err := sb.CordonNode(context.Background(), "", "worker-1", true); !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("expected ErrUnsupported, got %v", err)
 	}
 }

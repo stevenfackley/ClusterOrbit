@@ -225,18 +225,24 @@ func (s *Server) handleClusterScoped(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleMutation routes POST /v1/clusters/{id}/workloads/{wid}/{action}.
-// workloadID is "{kind}:{namespace}/{name}", which contains a literal "/", so
-// we peel the "workloads/" prefix and the trailing action verb rather than
-// splitting the whole subpath by slash. Every attempt is audited downstream.
+// handleMutation routes POST /v1/clusters/{id}/{resource}/{target}/{action}.
+// Resource IDs (workload "{kind}:{namespace}/{name}", node name) can contain a
+// literal "/", so we peel the resource prefix and the trailing action verb
+// rather than splitting the whole subpath by slash. Every attempt is audited
+// downstream.
 func (s *Server) handleMutation(w http.ResponseWriter, r *http.Request, clusterID, subpath string) {
-	const prefix = "workloads/"
-	if !strings.HasPrefix(subpath, prefix) {
+	switch {
+	case strings.HasPrefix(subpath, "workloads/"):
+		s.handleWorkloadMutation(w, r, clusterID, strings.TrimPrefix(subpath, "workloads/"))
+	case strings.HasPrefix(subpath, "nodes/"):
+		s.handleNodeMutation(w, r, clusterID, strings.TrimPrefix(subpath, "nodes/"))
+	default:
 		writeError(w, http.StatusNotFound, "not found")
-		return
 	}
-	rest := strings.TrimPrefix(subpath, prefix)
+}
 
+// handleWorkloadMutation dispatches the action verb for /workloads/{wid}/{verb}.
+func (s *Server) handleWorkloadMutation(w http.ResponseWriter, r *http.Request, clusterID, rest string) {
 	switch {
 	case strings.HasSuffix(rest, "/scale"):
 		s.handleScale(w, r, clusterID, strings.TrimSuffix(rest, "/scale"))
@@ -245,6 +251,44 @@ func (s *Server) handleMutation(w http.ResponseWriter, r *http.Request, clusterI
 	default:
 		writeError(w, http.StatusNotFound, "not found")
 	}
+}
+
+// handleNodeMutation dispatches /nodes/{nodeID}/{cordon|uncordon}. Node ops are
+// not namespaced, so ScalePolicy (which is namespace/replica oriented) does not
+// apply — node-level gating would need its own policy.
+func (s *Server) handleNodeMutation(w http.ResponseWriter, r *http.Request, clusterID, rest string) {
+	switch {
+	case strings.HasSuffix(rest, "/cordon"):
+		s.handleCordon(w, r, clusterID, strings.TrimSuffix(rest, "/cordon"), true)
+	case strings.HasSuffix(rest, "/uncordon"):
+		s.handleCordon(w, r, clusterID, strings.TrimSuffix(rest, "/uncordon"), false)
+	default:
+		writeError(w, http.StatusNotFound, "not found")
+	}
+}
+
+// handleCordon serves POST .../nodes/{nodeID}/cordon and /uncordon. No request
+// body — toggling schedulability has no parameters. The node ID is carried in
+// the audit WorkloadID slot (the mutation target); the Path field disambiguates
+// node ops from workload ops for anyone parsing the audit log.
+func (s *Server) handleCordon(w http.ResponseWriter, r *http.Request, clusterID, nodeID string, unschedulable bool) {
+	if nodeID == "" {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+
+	err := s.Backend.CordonNode(r.Context(), clusterID, nodeID, unschedulable)
+	status, msg := scaleStatus(err)
+	s.audit(r, clusterID, nodeID, nil, status, msg)
+	if err != nil {
+		writeBackendError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"clusterId":   clusterID,
+		"nodeId":      nodeID,
+		"schedulable": !unschedulable,
+	})
 }
 
 // handleScale serves POST .../workloads/{wid}/scale with a {"replicas": N} body.

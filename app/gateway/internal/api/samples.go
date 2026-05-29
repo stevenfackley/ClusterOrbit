@@ -27,6 +27,12 @@ type ClusterBackend interface {
 	// semantics). workloadID is "{kind}:{namespace}/{name}". Backends that
 	// don't support mutations may return ErrUnsupported.
 	RestartWorkload(ctx context.Context, clusterID, workloadID string) error
+	// CordonNode toggles a node's schedulability (spec.unschedulable). Pass
+	// unschedulable=true to cordon, false to uncordon. nodeID is the node name
+	// (snapshot node IDs equal their names). Backends that don't support
+	// mutations may return ErrUnsupported. Note: this does not evict pods —
+	// draining is a separate, multi-step operation.
+	CordonNode(ctx context.Context, clusterID, nodeID string, unschedulable bool) error
 }
 
 // ErrUnsupported indicates a backend cannot perform a requested mutation
@@ -77,6 +83,16 @@ func (s *SampleBackend) ScaleWorkload(_ context.Context, _, workloadID string, r
 // nothing to restart.
 func (s *SampleBackend) RestartWorkload(_ context.Context, _, workloadID string) error {
 	if workloadID == "" {
+		return ErrBadRequest
+	}
+	return ErrUnsupported
+}
+
+// CordonNode mirrors the other mutations on the sample backend: validate the
+// id so integration tests catch malformed clients, then report ErrUnsupported
+// since fixture nodes have nothing to cordon.
+func (s *SampleBackend) CordonNode(_ context.Context, _, nodeID string, _ bool) error {
+	if nodeID == "" {
 		return ErrBadRequest
 	}
 	return ErrUnsupported

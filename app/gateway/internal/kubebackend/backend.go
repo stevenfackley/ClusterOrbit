@@ -290,6 +290,24 @@ func (b *KubeBackend) RestartWorkload(ctx context.Context, clusterID, workloadID
 	return nil
 }
 
+// CordonNode patches a node's spec.unschedulable field (kubectl cordon /
+// uncordon semantics). Pass unschedulable=true to cordon, false to uncordon.
+func (b *KubeBackend) CordonNode(ctx context.Context, clusterID, nodeID string, unschedulable bool) error {
+	if clusterID != "" && clusterID != b.profile.ID {
+		return api.ErrNotFound
+	}
+	if nodeID == "" {
+		return fmt.Errorf("%w: nodeID is required", api.ErrBadRequest)
+	}
+	path := fmt.Sprintf("/api/v1/nodes/%s", nodeID)
+	body := []byte(fmt.Sprintf(`{"spec":{"unschedulable":%t}}`, unschedulable))
+	_, err := b.client.Patch(ctx, path, "application/merge-patch+json", body)
+	if err != nil {
+		return fmt.Errorf("cordon node %s: %w", nodeID, err)
+	}
+	return nil
+}
+
 func restartResourceFor(kind string) (string, bool) {
 	switch kind {
 	case workloadKindDeployment:
