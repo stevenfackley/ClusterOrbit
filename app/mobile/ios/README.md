@@ -7,7 +7,7 @@ Mac mini runner — see `.github/workflows/ios-release.yml`.
 
 | Field           | Value                       |
 |-----------------|-----------------------------|
-| Bundle ID       | `io.clusterorbit.mobile`    |
+| Bundle ID       | `com.qavren.clusterorbit`   |
 | Display name    | `ClusterOrbit`              |
 | Min iOS         | per Flutter default         |
 | Orientations    | portrait + landscape (phone), all four (iPad) |

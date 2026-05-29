@@ -23,10 +23,13 @@ jobs:
       run:
         working-directory: app/mobile
     env:
-      BUNDLE_ID: io.clusterorbit.mobile
+      BUNDLE_ID: com.qavren.clusterorbit
       KEYCHAIN_NAME: clusterorbit-build.keychain
     steps:
       - uses: actions/checkout@v6
+
+      - name: Setup PATH for Homebrew tools
+        run: echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
 
       - name: Show toolchain
         run: |
@@ -54,6 +57,15 @@ jobs:
           # Prepend new keychain to search list without dropping login keychain
           security list-keychains -d user -s "$KEYCHAIN_NAME" $(security list-keychains -d user | tr -d '"')
 
+      - name: Import WWDR intermediate
+        run: |
+          # Bundle the Apple WWDR intermediate into the temp keychain so chain
+          # validation doesn't depend on the runner's login keychain being unlocked.
+          WWDR_PATH="$RUNNER_TEMP/wwdr.cer"
+          curl -fsSL https://www.apple.com/certificateauthority/AppleWWDRCAG3.cer -o "$WWDR_PATH"
+          security import "$WWDR_PATH" -k "$KEYCHAIN_NAME" -T /usr/bin/codesign
+          rm "$WWDR_PATH"
+
       - name: Import distribution certificate
         env:
           CERT_P12_BASE64: ${{ secrets.IOS_DIST_CERT_P12_BASE64 }}
@@ -73,6 +85,12 @@ jobs:
             -s -k "$KEYCHAIN_PASSWORD" \
             "$KEYCHAIN_NAME"
           rm "$CERT_PATH"
+          # Verify the identity resolves for codesigning
+          security find-identity -v -p codesigning "$KEYCHAIN_NAME" | grep -q "Apple Distribution" || {
+            echo "::error::Distribution identity did not resolve after import"
+            security find-identity -v "$KEYCHAIN_NAME"
+            exit 1
+          }
 
       - name: Install provisioning profile
         env:
