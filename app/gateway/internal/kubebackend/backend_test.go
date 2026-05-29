@@ -284,6 +284,63 @@ func TestKubeBackendScaleDeploymentPatchesScaleSubresource(t *testing.T) {
 	}
 }
 
+func TestKubeBackendRestartPatchesPodTemplateAnnotation(t *testing.T) {
+	var gotMethod, gotPath, gotContentType, gotBody string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		gotContentType = r.Header.Get("Content-Type")
+		buf := make([]byte, 512)
+		n, _ := r.Body.Read(buf)
+		gotBody = string(buf[:n])
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"kind":"Deployment"}`))
+	}))
+	defer ts.Close()
+
+	backend, err := NewKubeBackend(&kubeconfig.ResolvedCluster{
+		Server: ts.URL, ContextName: "test",
+	})
+	if err != nil {
+		t.Fatalf("new backend: %v", err)
+	}
+
+	if err := backend.RestartWorkload(context.Background(), "test", "deployment:platform/api"); err != nil {
+		t.Fatalf("RestartWorkload: %v", err)
+	}
+	if gotMethod != "PATCH" {
+		t.Fatalf("method = %q", gotMethod)
+	}
+	if gotPath != "/apis/apps/v1/namespaces/platform/deployments/api" {
+		t.Fatalf("path = %q", gotPath)
+	}
+	if gotContentType != "application/strategic-merge-patch+json" {
+		t.Fatalf("content-type = %q", gotContentType)
+	}
+	if !strings.Contains(gotBody, "kubectl.kubernetes.io/restartedAt") ||
+		!strings.Contains(gotBody, `"template"`) {
+		t.Fatalf("body = %q", gotBody)
+	}
+}
+
+func TestKubeBackendRestartRejectsBadID(t *testing.T) {
+	backend, err := NewKubeBackend(&kubeconfig.ResolvedCluster{
+		Server: "http://example.com", ContextName: "test",
+	})
+	if err != nil {
+		t.Fatalf("new backend: %v", err)
+	}
+	if err := backend.RestartWorkload(context.Background(), "test", "bogus-id"); !errors.Is(err, api.ErrBadRequest) {
+		t.Fatalf("expected ErrBadRequest for bad id, got %v", err)
+	}
+	if err := backend.RestartWorkload(context.Background(), "test", "job:ns/name"); !errors.Is(err, api.ErrBadRequest) {
+		t.Fatalf("expected ErrBadRequest for non-restartable kind, got %v", err)
+	}
+	if err := backend.RestartWorkload(context.Background(), "other", "deployment:ns/name"); !errors.Is(err, api.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for unknown cluster, got %v", err)
+	}
+}
+
 func TestKubeBackendScaleRejectsBadID(t *testing.T) {
 	backend, err := NewKubeBackend(&kubeconfig.ResolvedCluster{
 		Server: "http://example.com", ContextName: "test",

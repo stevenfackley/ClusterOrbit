@@ -261,6 +261,48 @@ func scaleResourceFor(kind string) (string, bool) {
 	}
 }
 
+// RestartWorkload triggers a rolling restart of a Deployment, StatefulSet, or
+// DaemonSet by patching the pod-template annotation (kubectl rollout restart
+// semantics). Jobs cannot be restarted this way; callers get ErrBadRequest.
+func (b *KubeBackend) RestartWorkload(ctx context.Context, clusterID, workloadID string) error {
+	if clusterID != "" && clusterID != b.profile.ID {
+		return api.ErrNotFound
+	}
+	kind, namespace, name, err := parseWorkloadID(workloadID)
+	if err != nil {
+		return err
+	}
+	resource, ok := restartResourceFor(kind)
+	if !ok {
+		return fmt.Errorf("%w: kind %q cannot be restarted", api.ErrBadRequest, kind)
+	}
+
+	path := fmt.Sprintf("/apis/apps/v1/namespaces/%s/%s/%s", namespace, resource, name)
+	ts := time.Now().UTC().Format(time.RFC3339)
+	body := []byte(fmt.Sprintf(
+		`{"spec":{"template":{"metadata":{"annotations":{"kubectl.kubernetes.io/restartedAt":%q}}}}}`,
+		ts,
+	))
+	_, err = b.client.Patch(ctx, path, "application/strategic-merge-patch+json", body)
+	if err != nil {
+		return fmt.Errorf("restart %s %s/%s: %w", kind, namespace, name, err)
+	}
+	return nil
+}
+
+func restartResourceFor(kind string) (string, bool) {
+	switch kind {
+	case workloadKindDeployment:
+		return "deployments", true
+	case workloadKindStatefulSet:
+		return "statefulsets", true
+	case workloadKindDaemonSet:
+		return "daemonsets", true
+	default:
+		return "", false
+	}
+}
+
 // parseWorkloadID splits "{kind}:{namespace}/{name}" back into its parts.
 // Returns api.ErrBadRequest for any malformation so handlers map to 400.
 func parseWorkloadID(id string) (kind, namespace, name string, err error) {

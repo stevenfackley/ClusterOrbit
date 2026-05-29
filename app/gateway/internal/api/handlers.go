@@ -225,20 +225,30 @@ func (s *Server) handleClusterScoped(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleMutation dispatches POST /v1/clusters/{id}/workloads/{wid}/scale.
-// Every attempt — success, bad input, backend failure — is pushed to the
-// audit sink so callers can reconstruct who did what, even when nothing
-// changed.
+// handleMutation routes POST /v1/clusters/{id}/workloads/{wid}/{action}.
+// workloadID is "{kind}:{namespace}/{name}", which contains a literal "/", so
+// we peel the "workloads/" prefix and the trailing action verb rather than
+// splitting the whole subpath by slash. Every attempt is audited downstream.
 func (s *Server) handleMutation(w http.ResponseWriter, r *http.Request, clusterID, subpath string) {
-	// workloadID is "{kind}:{namespace}/{name}", which contains a literal
-	// "/" — so we can't split the whole subpath by slash. Peel prefix/suffix.
 	const prefix = "workloads/"
-	const suffix = "/scale"
-	if !strings.HasPrefix(subpath, prefix) || !strings.HasSuffix(subpath, suffix) {
+	if !strings.HasPrefix(subpath, prefix) {
 		writeError(w, http.StatusNotFound, "not found")
 		return
 	}
-	workloadID := strings.TrimSuffix(strings.TrimPrefix(subpath, prefix), suffix)
+	rest := strings.TrimPrefix(subpath, prefix)
+
+	switch {
+	case strings.HasSuffix(rest, "/scale"):
+		s.handleScale(w, r, clusterID, strings.TrimSuffix(rest, "/scale"))
+	case strings.HasSuffix(rest, "/restart"):
+		s.handleRestart(w, r, clusterID, strings.TrimSuffix(rest, "/restart"))
+	default:
+		writeError(w, http.StatusNotFound, "not found")
+	}
+}
+
+// handleScale serves POST .../workloads/{wid}/scale with a {"replicas": N} body.
+func (s *Server) handleScale(w http.ResponseWriter, r *http.Request, clusterID, workloadID string) {
 	if workloadID == "" {
 		writeError(w, http.StatusNotFound, "not found")
 		return
@@ -276,6 +286,36 @@ func (s *Server) handleMutation(w http.ResponseWriter, r *http.Request, clusterI
 		"clusterId":  clusterID,
 		"workloadId": workloadID,
 		"replicas":   *body.Replicas,
+	})
+}
+
+// handleRestart serves POST .../workloads/{wid}/restart. No request body —
+// a rolling restart has no parameters. The namespace allowlist still applies
+// (via EvaluateNamespace), but the replica ceiling does not, so we don't run
+// the full ScalePolicy.Evaluate here.
+func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request, clusterID, workloadID string) {
+	if workloadID == "" {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+
+	if reason := s.ScalePolicy.EvaluateNamespace(workloadID); reason != "" {
+		s.audit(r, clusterID, workloadID, nil, http.StatusForbidden, "policy: "+reason)
+		writeError(w, http.StatusForbidden, "policy violation: "+reason)
+		return
+	}
+
+	err := s.Backend.RestartWorkload(r.Context(), clusterID, workloadID)
+	status, msg := scaleStatus(err)
+	s.audit(r, clusterID, workloadID, nil, status, msg)
+	if err != nil {
+		writeBackendError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"clusterId":  clusterID,
+		"workloadId": workloadID,
+		"restarted":  true,
 	})
 }
 

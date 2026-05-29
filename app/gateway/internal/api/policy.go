@@ -30,14 +30,22 @@ func (p *ScalePolicy) Evaluate(workloadID string, replicas int) string {
 	if p.MaxReplicas > 0 && replicas > p.MaxReplicas {
 		return fmt.Sprintf("replicas %d exceeds max %d", replicas, p.MaxReplicas)
 	}
-	if len(p.AllowedNamespaces) > 0 {
-		ns := workloadNamespace(workloadID)
-		if ns == "" {
-			return "workload id missing namespace"
-		}
-		if !containsString(p.AllowedNamespaces, ns) {
-			return fmt.Sprintf("namespace %q not in allowlist", ns)
-		}
+	return p.EvaluateNamespace(workloadID)
+}
+
+// EvaluateNamespace runs only the namespace-allowlist portion of the policy.
+// Mutations without a replica dimension (restart, future cordon/drain) call
+// this so they share the same allowlist gate as scale without the ceiling.
+func (p *ScalePolicy) EvaluateNamespace(workloadID string) string {
+	if p == nil || len(p.AllowedNamespaces) == 0 {
+		return ""
+	}
+	ns := workloadNamespace(workloadID)
+	if ns == "" {
+		return "workload id missing namespace"
+	}
+	if !containsString(p.AllowedNamespaces, ns) {
+		return fmt.Sprintf("namespace %q not in allowlist", ns)
 	}
 	return ""
 }

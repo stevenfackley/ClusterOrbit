@@ -22,6 +22,11 @@ type ClusterBackend interface {
 	// workloadID is "{kind}:{namespace}/{name}" per the snapshot schema.
 	// Backends that don't support mutations may return ErrUnsupported.
 	ScaleWorkload(ctx context.Context, clusterID, workloadID string, replicas int) error
+	// RestartWorkload triggers a rolling restart of a Deployment, StatefulSet,
+	// or DaemonSet by touching its pod template (kubectl rollout restart
+	// semantics). workloadID is "{kind}:{namespace}/{name}". Backends that
+	// don't support mutations may return ErrUnsupported.
+	RestartWorkload(ctx context.Context, clusterID, workloadID string) error
 }
 
 // ErrUnsupported indicates a backend cannot perform a requested mutation
@@ -62,6 +67,16 @@ func (s *SampleBackend) ScaleWorkload(_ context.Context, _, workloadID string, r
 		return ErrBadRequest
 	}
 	if replicas < 0 {
+		return ErrBadRequest
+	}
+	return ErrUnsupported
+}
+
+// RestartWorkload mirrors ScaleWorkload: validate the id so integration tests
+// catch malformed clients, then report ErrUnsupported since fixture data has
+// nothing to restart.
+func (s *SampleBackend) RestartWorkload(_ context.Context, _, workloadID string) error {
+	if workloadID == "" {
 		return ErrBadRequest
 	}
 	return ErrUnsupported

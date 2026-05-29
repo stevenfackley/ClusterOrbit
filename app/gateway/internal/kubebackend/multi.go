@@ -79,3 +79,14 @@ func (m *MultiClusterBackend) ScaleWorkload(
 	}
 	return kb.ScaleWorkload(ctx, clusterID, workloadID, replicas)
 }
+
+func (m *MultiClusterBackend) RestartWorkload(
+	ctx context.Context,
+	clusterID, workloadID string,
+) error {
+	kb, ok := m.backends[clusterID]
+	if !ok {
+		return api.ErrNotFound
+	}
+	return kb.RestartWorkload(ctx, clusterID, workloadID)
+}
