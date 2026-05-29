@@ -43,9 +43,13 @@ jobs:
       - name: Flutter pub get
         run: flutter pub get
 
-      - name: Pod install
-        working-directory: app/mobile/ios
-        run: pod install --repo-update
+      - name: Generate Podfile and install pods
+        run: |
+          # Flutter generates ios/Podfile lazily; --config-only runs the iOS
+          # config step (which creates Podfile + runs pod install) without
+          # invoking the full build pipeline.
+          flutter precache --ios
+          flutter build ios --config-only --no-codesign
 
       - name: Create temporary keychain
         env:
