@@ -174,9 +174,12 @@ Prior items 1–5 plus the real Kubernetes backend, gateway hardening, multi-clu
 mutation flow, topology engine split, and cache-invalidation UX are all done. New
 priorities:
 
-1. **Approval / policy flows on the gateway.** `scale` is audited but unconditional —
-   add policy gates (e.g. max replicas, namespace allowlist, two-person approval) before
-   exposing more write paths.
+1. **Two-person approval flow on the gateway.** Synchronous policy gates now exist:
+   `ScalePolicy` (max replicas + namespace allowlist) gates scale/restart, and
+   `NodePolicy` (node allowlist + protected-node denylist + drain kill-switch) gates
+   cordon/drain — uncordon is deliberately exempt as a recovery op. All violations
+   return 403 and are audited. Still missing is an *asynchronous* approval path
+   (pending-request state + second approver) for the most destructive ops.
 
 2. **More mutation endpoints.** Cordon/drain nodes, restart deployments, rolling-update
    image. Each one needs an explicit confirmation dialog on the mobile side and an audit

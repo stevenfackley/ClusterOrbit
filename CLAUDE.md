@@ -63,16 +63,17 @@ Functional HTTP gateway (`go 1.24`, single `yaml.v3` dep, no `client-go`). Layou
 | `cmd/clusterorbit-gateway/main.go` | Wiring: env → backend (sample or kube), token set, rate limiter, TLS/mTLS, JSON-Lines audit sink, graceful shutdown on SIGTERM/SIGINT |
 | `internal/api/handlers.go` | HTTP handlers for `/v1/clusters`, `/{id}/snapshot`, `/{id}/events`, POST `/{id}/workloads/{wid}/scale`; shared-token auth via `X-ClusterOrbit-Token`; audit every mutation |
 | `internal/api/ratelimit.go` | Per-identity token-bucket (per-token when auth on, per-IP otherwise) |
+| `internal/api/policy.go` | `ScalePolicy` (replica ceiling + namespace allowlist, gates scale/restart) and `NodePolicy` (node allowlist + protected denylist + drain kill-switch, gates cordon/drain; uncordon always exempt). Zero value = allow-all; violations → 403 + audit |
 | `internal/api/samples.go` | Sample backend — same shapes the mobile app ships with |
 | `internal/kubebackend/` | Real k8s backend; hand-rolled HTTP client against K8s API; `MultiClusterBackend` serves every resolvable kubeconfig context |
 | `internal/kubeconfig/` | Kubeconfig loader/resolver (yaml.v3) — contexts, clusters, users, TLS, auth |
 
-Key env vars: `CLUSTERORBIT_GATEWAY_ADDR`, `_MODE` (`sample`|`kube`), `_TOKEN` / `_TOKENS`, `_TLS_CERT`/`_TLS_KEY`/`_CLIENT_CA`, `_RATE_LIMIT_RPS`/`_BURST`, `_AUDIT_LOG`, `_KUBECONFIG` / `KUBECONFIG`, `_KUBE_CONTEXT`.
+Key env vars: `CLUSTERORBIT_GATEWAY_ADDR`, `_MODE` (`sample`|`kube`), `_TOKEN` / `_TOKENS`, `_TLS_CERT`/`_TLS_KEY`/`_CLIENT_CA`, `_RATE_LIMIT_RPS`/`_BURST`, `_AUDIT_LOG`, `_KUBECONFIG` / `KUBECONFIG`, `_KUBE_CONTEXT`. Policy gates: `_POLICY_MAX_REPLICAS`, `_POLICY_NAMESPACES` (scale/restart); `_POLICY_NODES` (node allowlist), `_POLICY_PROTECTED_NODES` (denylist), `_POLICY_DISABLE_DRAIN` (cordon/drain). All policy vars unset = allow-all.
 
 ## Current limitations (as of last session)
 
 - Topology is a view, not a retained-scene engine — no filtering, LOD, force-based layout, or pan/zoom persistence
-- No approval / policy flows on the gateway (token + rate limit only)
+- Policy gates exist (scale ceiling/namespace, node allowlist/denylist/drain kill-switch) but no two-person approval flow yet
 - `README.md` is stale; treat code and tests as authoritative
 
 ## Key docs

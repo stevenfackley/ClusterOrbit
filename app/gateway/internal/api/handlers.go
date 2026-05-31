@@ -51,6 +51,10 @@ type Server struct {
 	// ScalePolicy, if set, gates POST /workloads/{id}/scale before the
 	// backend is called. Violations return 403 and are audited.
 	ScalePolicy *ScalePolicy
+	// NodePolicy, if set, gates node mutations (cordon, drain) before the
+	// backend is called. Violations return 403 and are audited. nil skips the
+	// check. Uncordon is never gated (recovery action).
+	NodePolicy *NodePolicy
 }
 
 // AuditEntry is one row of the mutation log. Captured fields intentionally
@@ -265,9 +269,9 @@ func (s *Server) handleWorkloadMutation(w http.ResponseWriter, r *http.Request, 
 	}
 }
 
-// handleNodeMutation dispatches /nodes/{nodeID}/{cordon|uncordon}. Node ops are
-// not namespaced, so ScalePolicy (which is namespace/replica oriented) does not
-// apply — node-level gating would need its own policy.
+// handleNodeMutation dispatches /nodes/{nodeID}/{cordon|uncordon|drain}. Node
+// ops are not namespaced, so ScalePolicy does not apply; NodePolicy gates them
+// instead (checked inside the individual handlers).
 func (s *Server) handleNodeMutation(w http.ResponseWriter, r *http.Request, clusterID, rest string) {
 	switch {
 	case strings.HasSuffix(rest, "/cordon"):
@@ -283,11 +287,17 @@ func (s *Server) handleNodeMutation(w http.ResponseWriter, r *http.Request, clus
 
 // handleStartDrain serves POST .../nodes/{nodeID}/drain. No body — drain has no
 // parameters. Returns 202 Accepted with the job handle (including its ID) so
-// the client can poll GET .../drain/{jobID}. Like cordon, the namespace-scoped
-// ScalePolicy does not apply to node ops.
+// the client can poll GET .../drain/{jobID}. Gated by NodePolicy.EvaluateDrain
+// (node lists + the DisableDrain kill switch).
 func (s *Server) handleStartDrain(w http.ResponseWriter, r *http.Request, clusterID, nodeID string) {
 	if nodeID == "" {
 		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+
+	if reason := s.NodePolicy.EvaluateDrain(nodeID); reason != "" {
+		s.audit(r, clusterID, nodeID, nil, http.StatusForbidden, "policy: "+reason)
+		writeError(w, http.StatusForbidden, "policy violation: "+reason)
 		return
 	}
 
@@ -327,6 +337,12 @@ func (s *Server) handleDrainStatus(w http.ResponseWriter, r *http.Request, clust
 func (s *Server) handleCordon(w http.ResponseWriter, r *http.Request, clusterID, nodeID string, unschedulable bool) {
 	if nodeID == "" {
 		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+
+	if reason := s.NodePolicy.EvaluateCordon(nodeID, unschedulable); reason != "" {
+		s.audit(r, clusterID, nodeID, nil, http.StatusForbidden, "policy: "+reason)
+		writeError(w, http.StatusForbidden, "policy violation: "+reason)
 		return
 	}
 

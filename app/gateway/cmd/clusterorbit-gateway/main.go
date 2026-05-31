@@ -44,6 +44,7 @@ func main() {
 	}
 
 	policy, policyLabel := buildScalePolicy()
+	nodePolicy, nodePolicyLabel := buildNodePolicy()
 
 	server := &api.Server{
 		Backend:     backend,
@@ -51,6 +52,7 @@ func main() {
 		Limiter:     limiter,
 		AuditSink:   auditSink,
 		ScalePolicy: policy,
+		NodePolicy:  nodePolicy,
 	}
 
 	tlsCfg, tlsLabel, err := buildTLS()
@@ -68,8 +70,8 @@ func main() {
 		TLSConfig:         tlsCfg,
 	}
 
-	fmt.Printf("%s listening on %s (auth=%s backend=%s tls=%s rate=%s audit=%s policy=%s)\n",
-		startupBanner, addr, authLabel(tokens), backendLabel, tlsLabel, rateLabel(limiter), auditLabel, policyLabel)
+	fmt.Printf("%s listening on %s (auth=%s backend=%s tls=%s rate=%s audit=%s policy=%s nodePolicy=%s)\n",
+		startupBanner, addr, authLabel(tokens), backendLabel, tlsLabel, rateLabel(limiter), auditLabel, policyLabel, nodePolicyLabel)
 
 	// Serve in a goroutine; main goroutine waits for SIGTERM/SIGINT then
 	// triggers a graceful shutdown so in-flight requests and the audit
@@ -205,6 +207,58 @@ func buildScalePolicy() (*api.ScalePolicy, string) {
 		parts = append(parts, fmt.Sprintf("ns=%d", len(namespaces)))
 	}
 	return &api.ScalePolicy{MaxReplicas: max, AllowedNamespaces: namespaces}, strings.Join(parts, ",")
+}
+
+// buildNodePolicy assembles a NodePolicy from env. Returns (nil, "off") when
+// nothing is configured so node handlers take the no-policy fast path.
+//
+//	CLUSTERORBIT_GATEWAY_POLICY_NODES            comma-separated node allowlist
+//	CLUSTERORBIT_GATEWAY_POLICY_PROTECTED_NODES  comma-separated node denylist
+//	CLUSTERORBIT_GATEWAY_POLICY_DISABLE_DRAIN    truthy → reject every drain
+func buildNodePolicy() (*api.NodePolicy, string) {
+	allowed := splitCSV(os.Getenv("CLUSTERORBIT_GATEWAY_POLICY_NODES"))
+	protected := splitCSV(os.Getenv("CLUSTERORBIT_GATEWAY_POLICY_PROTECTED_NODES"))
+	disableDrain := isTruthy(os.Getenv("CLUSTERORBIT_GATEWAY_POLICY_DISABLE_DRAIN"))
+
+	if len(allowed) == 0 && len(protected) == 0 && !disableDrain {
+		return nil, "off"
+	}
+	var parts []string
+	if len(allowed) > 0 {
+		parts = append(parts, fmt.Sprintf("allow=%d", len(allowed)))
+	}
+	if len(protected) > 0 {
+		parts = append(parts, fmt.Sprintf("protected=%d", len(protected)))
+	}
+	if disableDrain {
+		parts = append(parts, "drain=off")
+	}
+	return &api.NodePolicy{
+		AllowedNodes:   allowed,
+		ProtectedNodes: protected,
+		DisableDrain:   disableDrain,
+	}, strings.Join(parts, ",")
+}
+
+// splitCSV parses a comma-separated env value into a trimmed, non-empty slice.
+func splitCSV(raw string) []string {
+	var out []string
+	for _, v := range strings.Split(raw, ",") {
+		if v = strings.TrimSpace(v); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// isTruthy treats the usual on/true/1/yes spellings (case-insensitive) as true.
+func isTruthy(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 func buildLimiter() *api.RateLimiter {
