@@ -64,16 +64,17 @@ Functional HTTP gateway (`go 1.24`, single `yaml.v3` dep, no `client-go`). Layou
 | `internal/api/handlers.go` | HTTP handlers for `/v1/clusters`, `/{id}/snapshot`, `/{id}/events`, POST `/{id}/workloads/{wid}/scale`; shared-token auth via `X-ClusterOrbit-Token`; audit every mutation |
 | `internal/api/ratelimit.go` | Per-identity token-bucket (per-token when auth on, per-IP otherwise) |
 | `internal/api/policy.go` | `ScalePolicy` (replica ceiling + namespace allowlist, gates scale/restart) and `NodePolicy` (node allowlist + protected denylist + drain kill-switch, gates cordon/drain; uncordon always exempt). Zero value = allow-all; violations → 403 + audit |
+| `internal/api/approval.go` | `ApprovalPolicy` (op-classes needing a second-person approval) + `ApprovalStore` (in-memory, TTL'd registry of `PendingRequest`). Gated mutation parks → `202`; a *distinct* identity approves → executes inline (drain → launches DrainJob, `ResultID` = job id). Runs after the hard 403 gate; zero value = no approval required |
 | `internal/api/samples.go` | Sample backend — same shapes the mobile app ships with |
 | `internal/kubebackend/` | Real k8s backend; hand-rolled HTTP client against K8s API; `MultiClusterBackend` serves every resolvable kubeconfig context |
 | `internal/kubeconfig/` | Kubeconfig loader/resolver (yaml.v3) — contexts, clusters, users, TLS, auth |
 
-Key env vars: `CLUSTERORBIT_GATEWAY_ADDR`, `_MODE` (`sample`|`kube`), `_TOKEN` / `_TOKENS`, `_TLS_CERT`/`_TLS_KEY`/`_CLIENT_CA`, `_RATE_LIMIT_RPS`/`_BURST`, `_AUDIT_LOG`, `_KUBECONFIG` / `KUBECONFIG`, `_KUBE_CONTEXT`. Policy gates: `_POLICY_MAX_REPLICAS`, `_POLICY_NAMESPACES` (scale/restart); `_POLICY_NODES` (node allowlist), `_POLICY_PROTECTED_NODES` (denylist), `_POLICY_DISABLE_DRAIN` (cordon/drain). All policy vars unset = allow-all.
+Key env vars: `CLUSTERORBIT_GATEWAY_ADDR`, `_MODE` (`sample`|`kube`), `_TOKEN` / `_TOKENS`, `_TLS_CERT`/`_TLS_KEY`/`_CLIENT_CA`, `_RATE_LIMIT_RPS`/`_BURST`, `_AUDIT_LOG`, `_KUBECONFIG` / `KUBECONFIG`, `_KUBE_CONTEXT`. Policy gates: `_POLICY_MAX_REPLICAS`, `_POLICY_NAMESPACES` (scale/restart); `_POLICY_NODES` (node allowlist), `_POLICY_PROTECTED_NODES` (denylist), `_POLICY_DISABLE_DRAIN` (cordon/drain). All policy vars unset = allow-all. Async approval: `_POLICY_REQUIRE_APPROVAL` (comma list of `scale,restart,cordon,drain`; gated ops park for a second-person approve instead of executing inline), `_POLICY_APPROVAL_TTL` (Go duration, default `15m`). Needs ≥2 distinct tokens to be meaningful (gateway logs a warning at boot otherwise); requests are in-memory and dropped on restart.
 
 ## Current limitations (as of last session)
 
 - Topology is a view, not a retained-scene engine — no filtering, LOD, force-based layout, or pan/zoom persistence
-- Policy gates exist (scale ceiling/namespace, node allowlist/denylist/drain kill-switch) but no two-person approval flow yet
+- Two-person approval flow exists on the gateway (park → distinct-identity approve → execute), but pending requests are in-memory only (dropped on restart) and there is no mobile UI for listing/approving them yet
 - `README.md` is stale; treat code and tests as authoritative
 
 ## Key docs

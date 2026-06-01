@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log"
@@ -55,6 +56,12 @@ type Server struct {
 	// backend is called. Violations return 403 and are audited. nil skips the
 	// check. Uncordon is never gated (recovery action).
 	NodePolicy *NodePolicy
+	// ApprovalPolicy, if set, parks mutations whose op-class requires a
+	// second-person approval instead of executing them inline. When non-nil,
+	// Approvals MUST also be non-nil (main wires the two together).
+	ApprovalPolicy *ApprovalPolicy
+	// Approvals is the pending-request registry for the approval flow.
+	Approvals *ApprovalStore
 }
 
 // AuditEntry is one row of the mutation log. Captured fields intentionally
@@ -69,6 +76,7 @@ type AuditEntry struct {
 	Replicas   *int   `json:"replicas,omitempty"`
 	Status     int    `json:"status"`
 	Error      string `json:"error,omitempty"`
+	ApprovalID string `json:"approvalId,omitempty"`
 }
 
 // Handler returns the root http.Handler for the gateway API.
@@ -207,7 +215,15 @@ func (s *Server) handleClusterScoped(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// GET .../approvals/{rid} — single pending request.
+	if rid := strings.TrimPrefix(subpath, "approvals/"); rid != subpath {
+		s.handleGetApproval(w, r, clusterID, rid)
+		return
+	}
+
 	switch subpath {
+	case "approvals":
+		s.handleListApprovals(w, r, clusterID)
 	case "snapshot":
 		snapshot, err := s.Backend.LoadSnapshot(r.Context(), clusterID)
 		if err != nil {
@@ -252,6 +268,8 @@ func (s *Server) handleMutation(w http.ResponseWriter, r *http.Request, clusterI
 		s.handleWorkloadMutation(w, r, clusterID, strings.TrimPrefix(subpath, "workloads/"))
 	case strings.HasPrefix(subpath, "nodes/"):
 		s.handleNodeMutation(w, r, clusterID, strings.TrimPrefix(subpath, "nodes/"))
+	case strings.HasPrefix(subpath, "approvals/"):
+		s.handleApprovalAction(w, r, clusterID, strings.TrimPrefix(subpath, "approvals/"))
 	default:
 		writeError(w, http.StatusNotFound, "not found")
 	}
@@ -301,6 +319,13 @@ func (s *Server) handleStartDrain(w http.ResponseWriter, r *http.Request, cluste
 		return
 	}
 
+	if s.ApprovalPolicy.Requires(OpDrain) {
+		pr := s.Approvals.Park(OpDrain, clusterID, nodeID, nil, requestIdentity(r))
+		s.auditApproval(r, pr, http.StatusAccepted, "")
+		writeJSON(w, http.StatusAccepted, pr)
+		return
+	}
+
 	job, err := s.Backend.StartDrain(r.Context(), clusterID, nodeID)
 	status := http.StatusAccepted
 	msg := ""
@@ -346,6 +371,13 @@ func (s *Server) handleCordon(w http.ResponseWriter, r *http.Request, clusterID,
 		return
 	}
 
+	if unschedulable && s.ApprovalPolicy.Requires(OpCordon) {
+		pr := s.Approvals.Park(OpCordon, clusterID, nodeID, nil, requestIdentity(r))
+		s.auditApproval(r, pr, http.StatusAccepted, "")
+		writeJSON(w, http.StatusAccepted, pr)
+		return
+	}
+
 	err := s.Backend.CordonNode(r.Context(), clusterID, nodeID, unschedulable)
 	status, msg := scaleStatus(err)
 	s.audit(r, clusterID, nodeID, nil, status, msg)
@@ -388,6 +420,13 @@ func (s *Server) handleScale(w http.ResponseWriter, r *http.Request, clusterID, 
 		return
 	}
 
+	if s.ApprovalPolicy.Requires(OpScale) {
+		pr := s.Approvals.Park(OpScale, clusterID, workloadID, body.Replicas, requestIdentity(r))
+		s.auditApproval(r, pr, http.StatusAccepted, "")
+		writeJSON(w, http.StatusAccepted, pr)
+		return
+	}
+
 	err := s.Backend.ScaleWorkload(r.Context(), clusterID, workloadID, *body.Replicas)
 	status, msg := scaleStatus(err)
 	s.audit(r, clusterID, workloadID, body.Replicas, status, msg)
@@ -415,6 +454,13 @@ func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request, clusterID
 	if reason := s.ScalePolicy.EvaluateNamespace(workloadID); reason != "" {
 		s.audit(r, clusterID, workloadID, nil, http.StatusForbidden, "policy: "+reason)
 		writeError(w, http.StatusForbidden, "policy violation: "+reason)
+		return
+	}
+
+	if s.ApprovalPolicy.Requires(OpRestart) {
+		pr := s.Approvals.Park(OpRestart, clusterID, workloadID, nil, requestIdentity(r))
+		s.auditApproval(r, pr, http.StatusAccepted, "")
+		writeJSON(w, http.StatusAccepted, pr)
 		return
 	}
 
@@ -451,10 +497,7 @@ func (s *Server) audit(r *http.Request, clusterID, workloadID string, replicas *
 	if s.AuditSink == nil {
 		return
 	}
-	identity := clientIP(r)
-	if got := r.Header.Get(AuthHeader); got != "" {
-		identity = truncateToken(got)
-	}
+	identity := requestIdentity(r)
 	s.AuditSink(AuditEntry{
 		Timestamp:  timeNow().UTC().Format("2006-01-02T15:04:05Z07:00"),
 		Identity:   identity,
@@ -466,6 +509,169 @@ func (s *Server) audit(r *http.Request, clusterID, workloadID string, replicas *
 		Status:     status,
 		Error:      errMsg,
 	})
+}
+
+// requestIdentity returns the caller identity used in audit records and as the
+// requester/approver marker on pending approvals: the truncated shared token
+// when auth is on, else the client IP.
+func requestIdentity(r *http.Request) string {
+	if got := r.Header.Get(AuthHeader); got != "" {
+		return truncateToken(got)
+	}
+	return clientIP(r)
+}
+
+// executePending runs the backend mutation captured by an approved request and
+// returns the async result id (drain only) and an error message ("" on success).
+func (s *Server) executePending(ctx context.Context, req PendingRequest) (resultID, errMsg string) {
+	var err error
+	switch req.Op {
+	case OpScale:
+		replicas := 0
+		if req.Replicas != nil {
+			replicas = *req.Replicas
+		}
+		err = s.Backend.ScaleWorkload(ctx, req.ClusterID, req.TargetID, replicas)
+	case OpRestart:
+		err = s.Backend.RestartWorkload(ctx, req.ClusterID, req.TargetID)
+	case OpCordon:
+		err = s.Backend.CordonNode(ctx, req.ClusterID, req.TargetID, true)
+	case OpDrain:
+		var job DrainJob
+		job, err = s.Backend.StartDrain(ctx, req.ClusterID, req.TargetID)
+		if err == nil {
+			resultID = job.ID
+		}
+	default:
+		err = ErrBadRequest
+	}
+	if err != nil {
+		return "", err.Error()
+	}
+	return resultID, ""
+}
+
+// auditApproval records an approval-flow event (park, approve, reject, or
+// execute result). ApprovalID threads one request park → approve → execute.
+func (s *Server) auditApproval(r *http.Request, req PendingRequest, status int, errMsg string) {
+	if s.AuditSink == nil {
+		return
+	}
+	s.AuditSink(AuditEntry{
+		Timestamp:  timeNow().UTC().Format("2006-01-02T15:04:05Z07:00"),
+		Identity:   requestIdentity(r),
+		Method:     r.Method,
+		Path:       r.URL.Path,
+		ClusterID:  req.ClusterID,
+		WorkloadID: req.TargetID,
+		Replicas:   req.Replicas,
+		Status:     status,
+		Error:      errMsg,
+		ApprovalID: req.ID,
+	})
+}
+
+// approvalErrStatus maps store errors to HTTP status codes.
+func approvalErrStatus(err error) int {
+	switch {
+	case errors.Is(err, ErrApprovalNotFound):
+		return http.StatusNotFound
+	case errors.Is(err, ErrSelfApprove), errors.Is(err, ErrApprovalTerminal):
+		return http.StatusConflict
+	default:
+		return http.StatusInternalServerError
+	}
+}
+
+func writeApprovalError(w http.ResponseWriter, err error) {
+	writeError(w, approvalErrStatus(err), err.Error())
+}
+
+// handleListApprovals serves GET /v1/clusters/{id}/approvals.
+func (s *Server) handleListApprovals(w http.ResponseWriter, _ *http.Request, clusterID string) {
+	if s.Approvals == nil {
+		writeJSON(w, http.StatusOK, []PendingRequest{})
+		return
+	}
+	writeJSON(w, http.StatusOK, s.Approvals.List(clusterID))
+}
+
+// handleGetApproval serves GET /v1/clusters/{id}/approvals/{rid}. Read-only,
+// not audited (consistent with snapshot/events GETs).
+func (s *Server) handleGetApproval(w http.ResponseWriter, _ *http.Request, clusterID, rid string) {
+	if rid == "" || s.Approvals == nil {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	pr, ok := s.Approvals.Get(rid)
+	if !ok || pr.ClusterID != clusterID {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, pr)
+}
+
+// handleApprovalAction dispatches POST .../approvals/{rid}/{approve|reject}.
+func (s *Server) handleApprovalAction(w http.ResponseWriter, r *http.Request, clusterID, rest string) {
+	switch {
+	case strings.HasSuffix(rest, "/approve"):
+		s.handleApprove(w, r, clusterID, strings.TrimSuffix(rest, "/approve"))
+	case strings.HasSuffix(rest, "/reject"):
+		s.handleReject(w, r, clusterID, strings.TrimSuffix(rest, "/reject"))
+	default:
+		writeError(w, http.StatusNotFound, "not found")
+	}
+}
+
+// handleApprove serves POST .../approvals/{rid}/approve. Validates cluster
+// ownership, enforces distinct-identity, executes the captured mutation, and
+// finalizes the request. Every outcome is audited.
+func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request, clusterID, rid string) {
+	if rid == "" || s.Approvals == nil {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	// Validate cluster ownership before mutating phase.
+	if pr, ok := s.Approvals.Get(rid); !ok || pr.ClusterID != clusterID {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	approved, err := s.Approvals.Approve(rid, requestIdentity(r))
+	if err != nil {
+		status := approvalErrStatus(err)
+		s.auditApproval(r, PendingRequest{ID: rid, ClusterID: clusterID}, status, err.Error())
+		writeApprovalError(w, err)
+		return
+	}
+	resultID, execMsg := s.executePending(r.Context(), approved)
+	final, _ := s.Approvals.Complete(rid, resultID, execMsg)
+	status := http.StatusOK
+	if execMsg != "" {
+		status = http.StatusBadGateway
+	}
+	s.auditApproval(r, final, status, execMsg)
+	writeJSON(w, http.StatusOK, final)
+}
+
+// handleReject serves POST .../approvals/{rid}/reject. Any authenticated
+// identity may reject (including the requester cancelling).
+func (s *Server) handleReject(w http.ResponseWriter, r *http.Request, clusterID, rid string) {
+	if rid == "" || s.Approvals == nil {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	if pr, ok := s.Approvals.Get(rid); !ok || pr.ClusterID != clusterID {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	final, err := s.Approvals.Reject(rid, "rejected by "+requestIdentity(r))
+	if err != nil {
+		s.auditApproval(r, PendingRequest{ID: rid, ClusterID: clusterID}, approvalErrStatus(err), err.Error())
+		writeApprovalError(w, err)
+		return
+	}
+	s.auditApproval(r, final, http.StatusOK, "")
+	writeJSON(w, http.StatusOK, final)
 }
 
 // truncateToken keeps only the first 6 chars of a shared token so audit
