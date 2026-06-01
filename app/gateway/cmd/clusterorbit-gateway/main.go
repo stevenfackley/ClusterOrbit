@@ -45,14 +45,20 @@ func main() {
 
 	policy, policyLabel := buildScalePolicy()
 	nodePolicy, nodePolicyLabel := buildNodePolicy()
+	approvalPolicy, approvals, approvalLabel := buildApprovalPolicy()
+	if approvalPolicy != nil && len(tokens) < 2 {
+		log.Printf("gateway: WARNING approval policy is set but %d token(s) configured; two-person approval needs >=2 distinct tokens", len(tokens))
+	}
 
 	server := &api.Server{
-		Backend:     backend,
-		Tokens:      tokens,
-		Limiter:     limiter,
-		AuditSink:   auditSink,
-		ScalePolicy: policy,
-		NodePolicy:  nodePolicy,
+		Backend:        backend,
+		Tokens:         tokens,
+		Limiter:        limiter,
+		AuditSink:      auditSink,
+		ScalePolicy:    policy,
+		NodePolicy:     nodePolicy,
+		ApprovalPolicy: approvalPolicy,
+		Approvals:      approvals,
 	}
 
 	tlsCfg, tlsLabel, err := buildTLS()
@@ -70,8 +76,8 @@ func main() {
 		TLSConfig:         tlsCfg,
 	}
 
-	fmt.Printf("%s listening on %s (auth=%s backend=%s tls=%s rate=%s audit=%s policy=%s nodePolicy=%s)\n",
-		startupBanner, addr, authLabel(tokens), backendLabel, tlsLabel, rateLabel(limiter), auditLabel, policyLabel, nodePolicyLabel)
+	fmt.Printf("%s listening on %s (auth=%s backend=%s tls=%s rate=%s audit=%s policy=%s nodePolicy=%s approval=%s)\n",
+		startupBanner, addr, authLabel(tokens), backendLabel, tlsLabel, rateLabel(limiter), auditLabel, policyLabel, nodePolicyLabel, approvalLabel)
 
 	// Serve in a goroutine; main goroutine waits for SIGTERM/SIGINT then
 	// triggers a graceful shutdown so in-flight requests and the audit
@@ -238,6 +244,30 @@ func buildNodePolicy() (*api.NodePolicy, string) {
 		ProtectedNodes: protected,
 		DisableDrain:   disableDrain,
 	}, strings.Join(parts, ",")
+}
+
+// buildApprovalPolicy assembles an ApprovalPolicy + store from env. Returns
+// (nil, nil, "off") when no op-classes are gated so mutation handlers take the
+// no-approval fast path.
+//
+//	CLUSTERORBIT_GATEWAY_POLICY_REQUIRE_APPROVAL  comma list of scale,restart,cordon,drain
+//	CLUSTERORBIT_GATEWAY_POLICY_APPROVAL_TTL      Go duration, default 15m
+func buildApprovalPolicy() (*api.ApprovalPolicy, *api.ApprovalStore, string) {
+	ops := splitCSV(os.Getenv("CLUSTERORBIT_GATEWAY_POLICY_REQUIRE_APPROVAL"))
+	if len(ops) == 0 {
+		return nil, nil, "off"
+	}
+	required := make(map[string]bool, len(ops))
+	for _, op := range ops {
+		required[op] = true
+	}
+	ttl := 15 * time.Minute
+	if raw := strings.TrimSpace(os.Getenv("CLUSTERORBIT_GATEWAY_POLICY_APPROVAL_TTL")); raw != "" {
+		if d, err := time.ParseDuration(raw); err == nil && d > 0 {
+			ttl = d
+		}
+	}
+	return &api.ApprovalPolicy{RequiredOps: required}, api.NewApprovalStore(ttl), fmt.Sprintf("ops=%d ttl=%s", len(ops), ttl)
 }
 
 // splitCSV parses a comma-separated env value into a trimmed, non-empty slice.
