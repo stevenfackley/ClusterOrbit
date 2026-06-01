@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log"
@@ -55,6 +56,12 @@ type Server struct {
 	// backend is called. Violations return 403 and are audited. nil skips the
 	// check. Uncordon is never gated (recovery action).
 	NodePolicy *NodePolicy
+	// ApprovalPolicy, if set, parks mutations whose op-class requires a
+	// second-person approval instead of executing them inline. When non-nil,
+	// Approvals MUST also be non-nil (main wires the two together).
+	ApprovalPolicy *ApprovalPolicy
+	// Approvals is the pending-request registry for the approval flow.
+	Approvals *ApprovalStore
 }
 
 // AuditEntry is one row of the mutation log. Captured fields intentionally
@@ -69,6 +76,7 @@ type AuditEntry struct {
 	Replicas   *int   `json:"replicas,omitempty"`
 	Status     int    `json:"status"`
 	Error      string `json:"error,omitempty"`
+	ApprovalID string `json:"approvalId,omitempty"`
 }
 
 // Handler returns the root http.Handler for the gateway API.
@@ -451,10 +459,7 @@ func (s *Server) audit(r *http.Request, clusterID, workloadID string, replicas *
 	if s.AuditSink == nil {
 		return
 	}
-	identity := clientIP(r)
-	if got := r.Header.Get(AuthHeader); got != "" {
-		identity = truncateToken(got)
-	}
+	identity := requestIdentity(r)
 	s.AuditSink(AuditEntry{
 		Timestamp:  timeNow().UTC().Format("2006-01-02T15:04:05Z07:00"),
 		Identity:   identity,
@@ -466,6 +471,82 @@ func (s *Server) audit(r *http.Request, clusterID, workloadID string, replicas *
 		Status:     status,
 		Error:      errMsg,
 	})
+}
+
+// requestIdentity returns the caller identity used in audit records and as the
+// requester/approver marker on pending approvals: the truncated shared token
+// when auth is on, else the client IP.
+func requestIdentity(r *http.Request) string {
+	if got := r.Header.Get(AuthHeader); got != "" {
+		return truncateToken(got)
+	}
+	return clientIP(r)
+}
+
+// executePending runs the backend mutation captured by an approved request and
+// returns the async result id (drain only) and an error message ("" on success).
+func (s *Server) executePending(ctx context.Context, req PendingRequest) (resultID, errMsg string) {
+	var err error
+	switch req.Op {
+	case OpScale:
+		replicas := 0
+		if req.Replicas != nil {
+			replicas = *req.Replicas
+		}
+		err = s.Backend.ScaleWorkload(ctx, req.ClusterID, req.TargetID, replicas)
+	case OpRestart:
+		err = s.Backend.RestartWorkload(ctx, req.ClusterID, req.TargetID)
+	case OpCordon:
+		err = s.Backend.CordonNode(ctx, req.ClusterID, req.TargetID, true)
+	case OpDrain:
+		var job DrainJob
+		job, err = s.Backend.StartDrain(ctx, req.ClusterID, req.TargetID)
+		if err == nil {
+			resultID = job.ID
+		}
+	default:
+		err = ErrBadRequest
+	}
+	if err != nil {
+		return "", err.Error()
+	}
+	return resultID, ""
+}
+
+// auditApproval records an approval-flow event (park, approve, reject, or
+// execute result). ApprovalID threads one request park → approve → execute.
+func (s *Server) auditApproval(r *http.Request, req PendingRequest, status int, errMsg string) {
+	if s.AuditSink == nil {
+		return
+	}
+	s.AuditSink(AuditEntry{
+		Timestamp:  timeNow().UTC().Format("2006-01-02T15:04:05Z07:00"),
+		Identity:   requestIdentity(r),
+		Method:     r.Method,
+		Path:       r.URL.Path,
+		ClusterID:  req.ClusterID,
+		WorkloadID: req.TargetID,
+		Replicas:   req.Replicas,
+		Status:     status,
+		Error:      errMsg,
+		ApprovalID: req.ID,
+	})
+}
+
+// approvalErrStatus maps store errors to HTTP status codes.
+func approvalErrStatus(err error) int {
+	switch {
+	case errors.Is(err, ErrApprovalNotFound):
+		return http.StatusNotFound
+	case errors.Is(err, ErrSelfApprove), errors.Is(err, ErrApprovalTerminal):
+		return http.StatusConflict
+	default:
+		return http.StatusInternalServerError
+	}
+}
+
+func writeApprovalError(w http.ResponseWriter, err error) {
+	writeError(w, approvalErrStatus(err), err.Error())
 }
 
 // truncateToken keeps only the first 6 chars of a shared token so audit
