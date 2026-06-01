@@ -171,3 +171,67 @@ func copyRequest(r *PendingRequest) PendingRequest {
 	}
 	return out
 }
+
+// Approve transitions a pending request to approved, recording the approver.
+// The approver must differ from the requester. The handler executes the
+// captured mutation and then calls Complete. Returns a copy of the approved
+// request.
+func (s *ApprovalStore) Approve(id, approver string) (PendingRequest, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.reqs[id]
+	if !ok {
+		return PendingRequest{}, ErrApprovalNotFound
+	}
+	s.expireLocked(r)
+	if r.Phase != ApprovalPhasePending {
+		return PendingRequest{}, ErrApprovalTerminal
+	}
+	if approver == r.Requester {
+		return PendingRequest{}, ErrSelfApprove
+	}
+	r.Approver = approver
+	r.Phase = ApprovalPhaseApproved
+	r.UpdatedAt = s.now().UnixMilli()
+	return copyRequest(r), nil
+}
+
+// Reject resolves a pending request as rejected. Any identity may reject,
+// including the requester cancelling their own request. reason is optional.
+func (s *ApprovalStore) Reject(id, reason string) (PendingRequest, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.reqs[id]
+	if !ok {
+		return PendingRequest{}, ErrApprovalNotFound
+	}
+	s.expireLocked(r)
+	if r.Phase != ApprovalPhasePending {
+		return PendingRequest{}, ErrApprovalTerminal
+	}
+	r.Phase = ApprovalPhaseRejected
+	r.Reason = reason
+	r.UpdatedAt = s.now().UnixMilli()
+	return copyRequest(r), nil
+}
+
+// Complete moves an approved request to a terminal phase after execution.
+// errMsg == "" → succeeded (resultID carried for async ops like drain); a
+// non-empty errMsg → failed with the message in Reason. Returns a copy.
+func (s *ApprovalStore) Complete(id, resultID, errMsg string) (PendingRequest, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.reqs[id]
+	if !ok {
+		return PendingRequest{}, ErrApprovalNotFound
+	}
+	if errMsg != "" {
+		r.Phase = ApprovalPhaseFailed
+		r.Reason = errMsg
+	} else {
+		r.Phase = ApprovalPhaseSucceeded
+		r.ResultID = resultID
+	}
+	r.UpdatedAt = s.now().UnixMilli()
+	return copyRequest(r), nil
+}

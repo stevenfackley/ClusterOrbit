@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"testing"
 	"time"
 )
@@ -85,3 +86,86 @@ func TestPendingRequestExpiresOnRead(t *testing.T) {
 		t.Fatalf("phase = %q, want expired after TTL", got.Phase)
 	}
 }
+
+func TestApproveByDistinctIdentitySucceeds(t *testing.T) {
+	st := NewApprovalStore(time.Minute)
+	req := st.Park(OpScale, "demo", "deployment:ns/a", intPtr(2), "tok-a")
+
+	approved, err := st.Approve(req.ID, "tok-b")
+	if err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	if approved.Phase != ApprovalPhaseApproved {
+		t.Fatalf("phase = %q, want approved", approved.Phase)
+	}
+	if approved.Approver != "tok-b" {
+		t.Fatalf("approver = %q", approved.Approver)
+	}
+}
+
+func TestApproveBySameIdentityRejected(t *testing.T) {
+	st := NewApprovalStore(time.Minute)
+	req := st.Park(OpDrain, "demo", "worker-1", nil, "tok-a")
+	if _, err := st.Approve(req.ID, "tok-a"); !errors.Is(err, ErrSelfApprove) {
+		t.Fatalf("err = %v, want ErrSelfApprove", err)
+	}
+}
+
+func TestApproveUnknownIsNotFound(t *testing.T) {
+	st := NewApprovalStore(time.Minute)
+	if _, err := st.Approve("nope", "tok-b"); !errors.Is(err, ErrApprovalNotFound) {
+		t.Fatalf("err = %v, want ErrApprovalNotFound", err)
+	}
+}
+
+func TestApproveTerminalIsConflict(t *testing.T) {
+	st := NewApprovalStore(time.Minute)
+	req := st.Park(OpScale, "demo", "deployment:ns/a", intPtr(1), "tok-a")
+	if _, err := st.Reject(req.ID, "cancel"); err != nil {
+		t.Fatalf("reject: %v", err)
+	}
+	if _, err := st.Approve(req.ID, "tok-b"); !errors.Is(err, ErrApprovalTerminal) {
+		t.Fatalf("err = %v, want ErrApprovalTerminal", err)
+	}
+}
+
+func TestRejectResolves(t *testing.T) {
+	st := NewApprovalStore(time.Minute)
+	req := st.Park(OpScale, "demo", "deployment:ns/a", intPtr(1), "tok-a")
+	rejected, err := st.Reject(req.ID, "not now")
+	if err != nil {
+		t.Fatalf("reject: %v", err)
+	}
+	if rejected.Phase != ApprovalPhaseRejected || rejected.Reason != "not now" {
+		t.Fatalf("rejected = %+v", rejected)
+	}
+}
+
+func TestCompleteSucceededAndFailed(t *testing.T) {
+	st := NewApprovalStore(time.Minute)
+	req := st.Park(OpDrain, "demo", "worker-1", nil, "tok-a")
+	if _, err := st.Approve(req.ID, "tok-b"); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	done, err := st.Complete(req.ID, "job-9", "")
+	if err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	if done.Phase != ApprovalPhaseSucceeded || done.ResultID != "job-9" {
+		t.Fatalf("done = %+v", done)
+	}
+
+	req2 := st.Park(OpScale, "demo", "deployment:ns/a", intPtr(1), "tok-a")
+	if _, err := st.Approve(req2.ID, "tok-b"); err != nil {
+		t.Fatalf("approve2: %v", err)
+	}
+	failed, err := st.Complete(req2.ID, "", "backend exploded")
+	if err != nil {
+		t.Fatalf("complete2: %v", err)
+	}
+	if failed.Phase != ApprovalPhaseFailed || failed.Reason != "backend exploded" {
+		t.Fatalf("failed = %+v", failed)
+	}
+}
+
+func intPtr(n int) *int { return &n }
