@@ -164,6 +164,16 @@ resolves every kubeconfig context on boot and routes by `cluster_id`. Rate limit
 (token-bucket, per-identity) + optional mTLS + JSON-Lines audit log all shipped. First
 mutation endpoint — POST `/clusters/{id}/workloads/{wid}/scale` — is live and audited.
 
+**Two-person approval flow shipped on the gateway** (`internal/api/approval.go`).
+`ApprovalPolicy` (env `_POLICY_REQUIRE_APPROVAL`, comma list of scale/restart/cordon/drain)
+parks a gated mutation instead of executing it: the handler returns `202` + a pollable
+`PendingRequest`. A *second, distinct* identity calls `…/approvals/{rid}/approve`, which
+runs the mutation inline and resolves the request `succeeded`/`failed` (drain launches a
+DrainJob and carries its id in `ResultID`). Self-approve → 409; self-reject is allowed.
+Lazy TTL expiry (`_POLICY_APPROVAL_TTL`, default 15m). The hard 403 policy gate always
+runs first — approval never relaxes the ceiling. **In-memory only** (dropped on restart)
+and **no mobile UI yet** — listing/approving pending requests from the app is the follow-up.
+
 **Topology engine** is no longer a single file — filtering, LOD (hide labels below 0.9x),
 viewport persistence (TransformationController retained across rebuilds), and a deterministic
 lane layout are all shipped. Still no force-based layout.
@@ -171,19 +181,19 @@ lane layout are all shipped. Still no force-based layout.
 ## Recommended Next Tasks
 
 Prior items 1–5 plus the real Kubernetes backend, gateway hardening, multi-cluster,
-mutation flow, topology engine split, and cache-invalidation UX are all done. New
-priorities:
+mutation flow, topology engine split, cache-invalidation UX, and the gateway-side
+two-person approval flow are all done. New priorities:
 
-1. **Two-person approval flow on the gateway.** Synchronous policy gates now exist:
-   `ScalePolicy` (max replicas + namespace allowlist) gates scale/restart, and
-   `NodePolicy` (node allowlist + protected-node denylist + drain kill-switch) gates
-   cordon/drain — uncordon is deliberately exempt as a recovery op. All violations
-   return 403 and are audited. Still missing is an *asynchronous* approval path
-   (pending-request state + second approver) for the most destructive ops.
+1. **Mobile UI for the approval flow.** The gateway now parks gated mutations (`202` +
+   `PendingRequest`) and exposes `GET …/approvals`, `GET/approve/reject …/approvals/{rid}`.
+   The app needs: a pending-approvals list, a poll-and-show on a `202` response, and an
+   approve/reject action that surfaces the distinct-identity (409 self-approve) rule.
+   Gateway contract lives in `app/gateway/internal/api/approval.go` + `handlers.go`.
 
 2. **More mutation endpoints.** Cordon/drain nodes, restart deployments, rolling-update
    image. Each one needs an explicit confirmation dialog on the mobile side and an audit
-   record on the gateway.
+   record on the gateway. (Cordon/restart/drain are already wired through the approval
+   gate server-side.)
 
 3. **Force-directed layout** as an optional topology mode — the deterministic lane
    layout reads fine for small clusters but doesn't scale past ~40 nodes.
