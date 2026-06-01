@@ -1,7 +1,12 @@
 package api
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 )
@@ -169,3 +174,99 @@ func TestCompleteSucceededAndFailed(t *testing.T) {
 }
 
 func intPtr(n int) *int { return &n }
+
+func newApprovalServer(rb *recordingBackend, ops ...string) *Server {
+	required := map[string]bool{}
+	for _, op := range ops {
+		required[op] = true
+	}
+	return &Server{
+		Backend:        rb,
+		Tokens:         []string{"tok-a", "tok-b"},
+		ApprovalPolicy: &ApprovalPolicy{RequiredOps: required},
+		Approvals:      NewApprovalStore(15 * time.Minute),
+	}
+}
+
+func postAs(t *testing.T, url, token, body string) *http.Response {
+	t.Helper()
+	var rdr io.Reader
+	if body != "" {
+		rdr = bytes.NewBufferString(body)
+	}
+	req, _ := http.NewRequest(http.MethodPost, url, rdr)
+	req.Header.Set(AuthHeader, token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("post %s: %v", url, err)
+	}
+	return resp
+}
+
+func decodePending(t *testing.T, resp *http.Response) PendingRequest {
+	t.Helper()
+	defer resp.Body.Close()
+	var pr PendingRequest
+	if err := json.NewDecoder(resp.Body).Decode(&pr); err != nil {
+		t.Fatalf("decode pending: %v", err)
+	}
+	return pr
+}
+
+func TestScaleParksWhenApprovalRequired(t *testing.T) {
+	rb := &recordingBackend{ClusterBackend: NewSampleBackend()}
+	s := newApprovalServer(rb, OpScale)
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	resp := postAs(t, ts.URL+"/v1/clusters/demo/workloads/deployment:platform/api/scale", "tok-a", `{"replicas":5}`)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", resp.StatusCode)
+	}
+	pr := decodePending(t, resp)
+	if pr.Phase != ApprovalPhasePending || pr.Op != OpScale {
+		t.Fatalf("pending = %+v", pr)
+	}
+	if rb.scaleCalls != 0 {
+		t.Fatalf("backend must NOT be called on park, got %d", rb.scaleCalls)
+	}
+}
+
+func TestScaleExecutesInlineWhenNotGated(t *testing.T) {
+	rb := &recordingBackend{ClusterBackend: NewSampleBackend()}
+	s := newApprovalServer(rb, OpDrain) // scale NOT gated
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	resp := postAs(t, ts.URL+"/v1/clusters/demo/workloads/deployment:platform/api/scale", "tok-a", `{"replicas":2}`)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (not gated)", resp.StatusCode)
+	}
+	if rb.scaleCalls != 1 {
+		t.Fatalf("backend should execute inline, got %d", rb.scaleCalls)
+	}
+}
+
+func TestDrainParksWhenApprovalRequired(t *testing.T) {
+	rb := &recordingBackend{
+		ClusterBackend: NewSampleBackend(),
+		drainJob:       DrainJob{ID: "job-1", NodeID: "worker-1", Phase: DrainPhasePending},
+	}
+	s := newApprovalServer(rb, OpDrain)
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	resp := postAs(t, ts.URL+"/v1/clusters/demo/nodes/worker-1/drain", "tok-a", "")
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", resp.StatusCode)
+	}
+	pr := decodePending(t, resp)
+	if pr.Op != OpDrain || pr.TargetID != "worker-1" {
+		t.Fatalf("pending = %+v", pr)
+	}
+	if rb.startDrainCalls != 0 {
+		t.Fatalf("StartDrain must NOT run on park, got %d", rb.startDrainCalls)
+	}
+}

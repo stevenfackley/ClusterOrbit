@@ -309,6 +309,13 @@ func (s *Server) handleStartDrain(w http.ResponseWriter, r *http.Request, cluste
 		return
 	}
 
+	if s.ApprovalPolicy.Requires(OpDrain) {
+		pr := s.Approvals.Park(OpDrain, clusterID, nodeID, nil, requestIdentity(r))
+		s.auditApproval(r, pr, http.StatusAccepted, "")
+		writeJSON(w, http.StatusAccepted, pr)
+		return
+	}
+
 	job, err := s.Backend.StartDrain(r.Context(), clusterID, nodeID)
 	status := http.StatusAccepted
 	msg := ""
@@ -354,6 +361,13 @@ func (s *Server) handleCordon(w http.ResponseWriter, r *http.Request, clusterID,
 		return
 	}
 
+	if unschedulable && s.ApprovalPolicy.Requires(OpCordon) {
+		pr := s.Approvals.Park(OpCordon, clusterID, nodeID, nil, requestIdentity(r))
+		s.auditApproval(r, pr, http.StatusAccepted, "")
+		writeJSON(w, http.StatusAccepted, pr)
+		return
+	}
+
 	err := s.Backend.CordonNode(r.Context(), clusterID, nodeID, unschedulable)
 	status, msg := scaleStatus(err)
 	s.audit(r, clusterID, nodeID, nil, status, msg)
@@ -396,6 +410,13 @@ func (s *Server) handleScale(w http.ResponseWriter, r *http.Request, clusterID, 
 		return
 	}
 
+	if s.ApprovalPolicy.Requires(OpScale) {
+		pr := s.Approvals.Park(OpScale, clusterID, workloadID, body.Replicas, requestIdentity(r))
+		s.auditApproval(r, pr, http.StatusAccepted, "")
+		writeJSON(w, http.StatusAccepted, pr)
+		return
+	}
+
 	err := s.Backend.ScaleWorkload(r.Context(), clusterID, workloadID, *body.Replicas)
 	status, msg := scaleStatus(err)
 	s.audit(r, clusterID, workloadID, body.Replicas, status, msg)
@@ -423,6 +444,13 @@ func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request, clusterID
 	if reason := s.ScalePolicy.EvaluateNamespace(workloadID); reason != "" {
 		s.audit(r, clusterID, workloadID, nil, http.StatusForbidden, "policy: "+reason)
 		writeError(w, http.StatusForbidden, "policy violation: "+reason)
+		return
+	}
+
+	if s.ApprovalPolicy.Requires(OpRestart) {
+		pr := s.Approvals.Park(OpRestart, clusterID, workloadID, nil, requestIdentity(r))
+		s.auditApproval(r, pr, http.StatusAccepted, "")
+		writeJSON(w, http.StatusAccepted, pr)
 		return
 	}
 
