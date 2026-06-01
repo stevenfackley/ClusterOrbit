@@ -64,3 +64,24 @@ func TestParkReturnsCopy(t *testing.T) {
 		t.Fatalf("stored replicas mutated through returned copy: %d", *got.Replicas)
 	}
 }
+
+func TestPendingRequestExpiresOnRead(t *testing.T) {
+	st := NewApprovalStore(10 * time.Minute)
+	clock := time.Unix(1_700_000_000, 0)
+	st.now = func() time.Time { return clock }
+
+	req := st.Park(OpDrain, "demo", "worker-1", nil, "tok-a")
+
+	// Still fresh.
+	got, _ := st.Get(req.ID)
+	if got.Phase != ApprovalPhasePending {
+		t.Fatalf("phase = %q, want pending while fresh", got.Phase)
+	}
+
+	// Advance past TTL.
+	clock = clock.Add(11 * time.Minute)
+	got, _ = st.Get(req.ID)
+	if got.Phase != ApprovalPhaseExpired {
+		t.Fatalf("phase = %q, want expired after TTL", got.Phase)
+	}
+}
