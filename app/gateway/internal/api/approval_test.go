@@ -270,3 +270,125 @@ func TestDrainParksWhenApprovalRequired(t *testing.T) {
 		t.Fatalf("StartDrain must NOT run on park, got %d", rb.startDrainCalls)
 	}
 }
+
+func getAs(t *testing.T, url, token string) *http.Response {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodGet, url, nil)
+	req.Header.Set(AuthHeader, token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("get %s: %v", url, err)
+	}
+	return resp
+}
+
+func TestApproveExecutesAndCompletes(t *testing.T) {
+	rb := &recordingBackend{ClusterBackend: NewSampleBackend()}
+	s := newApprovalServer(rb, OpScale)
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	park := decodePending(t, postAs(t, ts.URL+"/v1/clusters/demo/workloads/deployment:platform/api/scale", "tok-a", `{"replicas":5}`))
+
+	resp := postAs(t, ts.URL+"/v1/clusters/demo/approvals/"+park.ID+"/approve", "tok-b", "")
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		t.Fatalf("status = %d body = %s, want 200", resp.StatusCode, raw)
+	}
+	done := decodePending(t, resp)
+	if done.Phase != ApprovalPhaseSucceeded {
+		t.Fatalf("phase = %q, want succeeded", done.Phase)
+	}
+	if rb.scaleCalls != 1 || rb.gotReplicas != 5 {
+		t.Fatalf("backend not executed correctly: %+v", rb)
+	}
+}
+
+func TestSelfApproveIsConflict(t *testing.T) {
+	rb := &recordingBackend{ClusterBackend: NewSampleBackend()}
+	s := newApprovalServer(rb, OpScale)
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	park := decodePending(t, postAs(t, ts.URL+"/v1/clusters/demo/workloads/deployment:platform/api/scale", "tok-a", `{"replicas":5}`))
+	resp := postAs(t, ts.URL+"/v1/clusters/demo/approvals/"+park.ID+"/approve", "tok-a", "")
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", resp.StatusCode)
+	}
+	if rb.scaleCalls != 0 {
+		t.Fatalf("self-approve must not execute, got %d", rb.scaleCalls)
+	}
+}
+
+func TestRejectBlocksExecution(t *testing.T) {
+	rb := &recordingBackend{ClusterBackend: NewSampleBackend()}
+	s := newApprovalServer(rb, OpScale)
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	park := decodePending(t, postAs(t, ts.URL+"/v1/clusters/demo/workloads/deployment:platform/api/scale", "tok-a", `{"replicas":5}`))
+	resp := postAs(t, ts.URL+"/v1/clusters/demo/approvals/"+park.ID+"/reject", "tok-a", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("reject status = %d, want 200", resp.StatusCode)
+	}
+	if decodePending(t, resp).Phase != ApprovalPhaseRejected {
+		t.Fatal("phase not rejected")
+	}
+	if rb.scaleCalls != 0 {
+		t.Fatalf("rejected request must not execute, got %d", rb.scaleCalls)
+	}
+}
+
+func TestDrainApprovalReturnsDrainJobID(t *testing.T) {
+	rb := &recordingBackend{
+		ClusterBackend: NewSampleBackend(),
+		drainJob:       DrainJob{ID: "job-77", NodeID: "worker-1", Phase: DrainPhasePending},
+	}
+	s := newApprovalServer(rb, OpDrain)
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	park := decodePending(t, postAs(t, ts.URL+"/v1/clusters/demo/nodes/worker-1/drain", "tok-a", ""))
+	done := decodePending(t, postAs(t, ts.URL+"/v1/clusters/demo/approvals/"+park.ID+"/approve", "tok-b", ""))
+	if done.Phase != ApprovalPhaseSucceeded || done.ResultID != "job-77" {
+		t.Fatalf("done = %+v, want succeeded with resultId job-77", done)
+	}
+	if rb.startDrainCalls != 1 {
+		t.Fatalf("StartDrain calls = %d, want 1", rb.startDrainCalls)
+	}
+}
+
+func TestListAndGetApprovals(t *testing.T) {
+	rb := &recordingBackend{ClusterBackend: NewSampleBackend()}
+	s := newApprovalServer(rb, OpScale)
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	park := decodePending(t, postAs(t, ts.URL+"/v1/clusters/demo/workloads/deployment:platform/api/scale", "tok-a", `{"replicas":5}`))
+
+	listResp := getAs(t, ts.URL+"/v1/clusters/demo/approvals", "tok-a")
+	defer listResp.Body.Close()
+	var list []PendingRequest
+	if err := json.NewDecoder(listResp.Body).Decode(&list); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	if len(list) != 1 || list[0].ID != park.ID {
+		t.Fatalf("list = %+v", list)
+	}
+
+	getResp := getAs(t, ts.URL+"/v1/clusters/demo/approvals/"+park.ID, "tok-a")
+	if getResp.StatusCode != http.StatusOK {
+		t.Fatalf("get status = %d", getResp.StatusCode)
+	}
+	if decodePending(t, getResp).ID != park.ID {
+		t.Fatal("get returned wrong request")
+	}
+
+	missing := getAs(t, ts.URL+"/v1/clusters/demo/approvals/nope", "tok-a")
+	missing.Body.Close()
+	if missing.StatusCode != http.StatusNotFound {
+		t.Fatalf("unknown id status = %d, want 404", missing.StatusCode)
+	}
+}

@@ -215,7 +215,15 @@ func (s *Server) handleClusterScoped(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// GET .../approvals/{rid} — single pending request.
+	if rid := strings.TrimPrefix(subpath, "approvals/"); rid != subpath {
+		s.handleGetApproval(w, r, clusterID, rid)
+		return
+	}
+
 	switch subpath {
+	case "approvals":
+		s.handleListApprovals(w, r, clusterID)
 	case "snapshot":
 		snapshot, err := s.Backend.LoadSnapshot(r.Context(), clusterID)
 		if err != nil {
@@ -260,6 +268,8 @@ func (s *Server) handleMutation(w http.ResponseWriter, r *http.Request, clusterI
 		s.handleWorkloadMutation(w, r, clusterID, strings.TrimPrefix(subpath, "workloads/"))
 	case strings.HasPrefix(subpath, "nodes/"):
 		s.handleNodeMutation(w, r, clusterID, strings.TrimPrefix(subpath, "nodes/"))
+	case strings.HasPrefix(subpath, "approvals/"):
+		s.handleApprovalAction(w, r, clusterID, strings.TrimPrefix(subpath, "approvals/"))
 	default:
 		writeError(w, http.StatusNotFound, "not found")
 	}
@@ -575,6 +585,93 @@ func approvalErrStatus(err error) int {
 
 func writeApprovalError(w http.ResponseWriter, err error) {
 	writeError(w, approvalErrStatus(err), err.Error())
+}
+
+// handleListApprovals serves GET /v1/clusters/{id}/approvals.
+func (s *Server) handleListApprovals(w http.ResponseWriter, _ *http.Request, clusterID string) {
+	if s.Approvals == nil {
+		writeJSON(w, http.StatusOK, []PendingRequest{})
+		return
+	}
+	writeJSON(w, http.StatusOK, s.Approvals.List(clusterID))
+}
+
+// handleGetApproval serves GET /v1/clusters/{id}/approvals/{rid}. Read-only,
+// not audited (consistent with snapshot/events GETs).
+func (s *Server) handleGetApproval(w http.ResponseWriter, _ *http.Request, clusterID, rid string) {
+	if rid == "" || s.Approvals == nil {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	pr, ok := s.Approvals.Get(rid)
+	if !ok || pr.ClusterID != clusterID {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, pr)
+}
+
+// handleApprovalAction dispatches POST .../approvals/{rid}/{approve|reject}.
+func (s *Server) handleApprovalAction(w http.ResponseWriter, r *http.Request, clusterID, rest string) {
+	switch {
+	case strings.HasSuffix(rest, "/approve"):
+		s.handleApprove(w, r, clusterID, strings.TrimSuffix(rest, "/approve"))
+	case strings.HasSuffix(rest, "/reject"):
+		s.handleReject(w, r, clusterID, strings.TrimSuffix(rest, "/reject"))
+	default:
+		writeError(w, http.StatusNotFound, "not found")
+	}
+}
+
+// handleApprove serves POST .../approvals/{rid}/approve. Validates cluster
+// ownership, enforces distinct-identity, executes the captured mutation, and
+// finalizes the request. Every outcome is audited.
+func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request, clusterID, rid string) {
+	if rid == "" || s.Approvals == nil {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	// Validate cluster ownership before mutating phase.
+	if pr, ok := s.Approvals.Get(rid); !ok || pr.ClusterID != clusterID {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	approved, err := s.Approvals.Approve(rid, requestIdentity(r))
+	if err != nil {
+		status := approvalErrStatus(err)
+		s.auditApproval(r, PendingRequest{ID: rid, ClusterID: clusterID}, status, err.Error())
+		writeApprovalError(w, err)
+		return
+	}
+	resultID, execMsg := s.executePending(r.Context(), approved)
+	final, _ := s.Approvals.Complete(rid, resultID, execMsg)
+	status := http.StatusOK
+	if execMsg != "" {
+		status = http.StatusBadGateway
+	}
+	s.auditApproval(r, final, status, execMsg)
+	writeJSON(w, http.StatusOK, final)
+}
+
+// handleReject serves POST .../approvals/{rid}/reject. Any authenticated
+// identity may reject (including the requester cancelling).
+func (s *Server) handleReject(w http.ResponseWriter, r *http.Request, clusterID, rid string) {
+	if rid == "" || s.Approvals == nil {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	if pr, ok := s.Approvals.Get(rid); !ok || pr.ClusterID != clusterID {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	final, err := s.Approvals.Reject(rid, "rejected by "+requestIdentity(r))
+	if err != nil {
+		s.auditApproval(r, PendingRequest{ID: rid, ClusterID: clusterID}, approvalErrStatus(err), err.Error())
+		writeApprovalError(w, err)
+		return
+	}
+	s.auditApproval(r, final, http.StatusOK, "")
+	writeJSON(w, http.StatusOK, final)
 }
 
 // truncateToken keeps only the first 6 chars of a shared token so audit
