@@ -1,0 +1,22 @@
+[tasks]
+"go-test" = "go test ./..."
+"go-vet" = "go vet ./..."
+"go-fmt" = "gofmt -l ."
+"go-mod-tidy" = "go mod tidy"
+"go-build" = "go build ./app/gateway/cmd/clusterorbit-gateway/"
+"go-run" = "go run ./app/gateway/cmd/clusterorbit-gateway/"
+
+[tasks.flutter-test]
+run = "flutter test"
+dir = "app/mobile"
+
+[tasks.flutter-analyze]
+run = "flutter analyze"
+dir = "app/mobile"
+
+[tasks.flutter-run]
+run = "flutter run"
+dir = "app/mobile"
+
+[env]
+# non-secret config
