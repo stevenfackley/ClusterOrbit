@@ -25,7 +25,7 @@ jobs:
       BUNDLE_ID: com.qavren.clusterorbit
       KEYCHAIN_NAME: clusterorbit-mac-build.keychain
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Setup PATH for Homebrew tools
         run: echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
