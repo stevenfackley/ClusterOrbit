@@ -53,7 +53,7 @@ Most existing Kubernetes tools are desktop-first, list-heavy, or weak at showing
 - [`docs/architecture`](./docs/architecture/system-overview.md) — technical architecture.
 - [`docs/design`](./docs/design/design-principles.md) — UI direction and topology UX.
 - [`docs/engineering`](./docs/engineering/local-development.md) — setup, testing, release, standards.
-- [`PROJECT_PLAN.md`](./PROJECT_PLAN.md) — full approved implementation plan.
+- [`docs/PROJECT_PLAN.md`](./docs/PROJECT_PLAN.md) — full approved implementation plan.
 
 ## Getting Started
 
