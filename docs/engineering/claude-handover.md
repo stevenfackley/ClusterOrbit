@@ -237,7 +237,7 @@ read through the controller via `ListenableBuilder`.
 
 ## Quick Resume Checklist
 
-1. Read `PROJECT_PLAN.md`.
+1. Read `docs/PROJECT_PLAN.md`.
 2. Read `app/mobile/lib/shared/state/cluster_session_controller.dart` — session state.
 3. Read `app/mobile/lib/shared/widgets/orbit_shell.dart` — nav shell wrapping the controller.
 4. Read `app/mobile/lib/core/sync_cache/snapshot_store.dart` — cache layer.

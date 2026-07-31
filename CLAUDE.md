@@ -82,7 +82,7 @@ Key env vars: `CLUSTERORBIT_GATEWAY_ADDR`, `_MODE` (`sample`|`kube`), `_TOKEN` /
 - `docs/engineering/claude-handover.md` — session handover, known issues, recommended next tasks
 - `docs/architecture/mobile-architecture.md` — layer responsibilities, state strategy
 - `docs/architecture/system-overview.md` — direct vs gateway mode
-- `PROJECT_PLAN.md` — full implementation roadmap
+- `docs/PROJECT_PLAN.md` — full implementation roadmap
 
 ## CI workflows (`.github/workflows/`)
 
