@@ -37,4 +37,8 @@ jobs:
     uses: stevenfackley/gh-actions/.github/workflows/ci-go.yml@v1
     with:
       project-name: clusterorbit-gateway
+      # govulncheck flags stdlib CVEs against whatever toolchain setup-go
+      # resolves; with no version passed it landed on a stale default and
+      # has failed every PR since 2026-08-15. Track latest stable instead.
+      go-version: stable
     secrets: inherit
