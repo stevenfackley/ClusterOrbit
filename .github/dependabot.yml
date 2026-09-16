@@ -12,7 +12,7 @@ updates:
   # ── Added by the project-wide Dependabot sweep ──────────────────────────
   # Ecosystems present in the repo that no existing entry covered.
   - package-ecosystem: "gradle"
-    directory: "/"
+    directory: "/app/mobile/android"
     schedule:
       interval: "weekly"
       day: "monday"
