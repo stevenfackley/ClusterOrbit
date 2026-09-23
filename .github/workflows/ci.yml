@@ -33,6 +33,34 @@ jobs:
           name: mobile-coverage
           path: app/mobile/coverage/lcov.info
 
+  # Builds the Android host app so Gradle/AGP/Kotlin bumps in
+  # app/mobile/android are actually exercised (the mobile job never runs Gradle).
+  android:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app/mobile
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+          cache-dependency-path: |
+            app/mobile/android/*.gradle*
+            app/mobile/android/gradle/wrapper/gradle-wrapper.properties
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Seed mobile env
+        run: cp .env.example .env
+      - name: Install mobile deps
+        run: flutter pub get
+      - name: Build debug APK
+        run: flutter build apk --debug
+
   gateway:
     uses: stevenfackley/gh-actions/.github/workflows/ci-go.yml@v1
     with:
