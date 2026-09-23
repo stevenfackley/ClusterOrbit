@@ -11,3 +11,13 @@
 - markdownlint-cli2-action 24.1 → 24.2 (#17): routine.
 
 **Why no review:** sweep policy — CI gates, revert cheap.
+
+## 2026-09-22 — Dependabot sweep: Android build fix + Gradle 9 / AGP 9
+
+**Status:** accepted (awareness-only stub per saved sweep policy)
+**Decision:** fixed the Android build on main, added a CI lane for it, then landed the interlocked Gradle/AGP majors together.
+
+- **Root cause:** KGP 2.2.20 → 2.4.20 (#23) turned `kotlinOptions.jvmTarget` into a hard error, which broke `flutter build apk` on main. CI stayed green because no job ran Gradle. Fixed by moving to `kotlin { compilerOptions }`, and a new `android` CI job (`flutter build apk --debug`) now covers app/mobile/android (#26).
+- **Gradle wrapper 8.14 → 9.7.1 + AGP 8.11.1 → 9.4.1** (#27, replaces #25/#24): interlocked majors, because AGP 9 needs Gradle 9. KGP is still applied, with `android.builtInKotlin=false` / `android.newDsl=false` (the Flutter migrator's flags). Flutter warns that applying KGP will break in a future release, so migrating to built-in Kotlin is owed.
+
+**Why no review:** sweep policy says CI gates the change and reverting is cheap. The Android lane now makes that true for Gradle bumps too.
