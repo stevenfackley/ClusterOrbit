@@ -105,16 +105,19 @@ class _OrbitShellState extends State<OrbitShell> {
       ResourcesScreen(
         snapshot: _session.snapshot,
         isLoading: _session.isLoading,
+        error: _session.loadError,
         onRefresh: _onRefresh,
       ),
       ChangesScreen(
         snapshot: _session.snapshot,
         isLoading: _session.isLoading,
+        error: _session.loadError,
         onRefresh: _onRefresh,
       ),
       AlertsScreen(
         snapshot: _session.snapshot,
         isLoading: _session.isLoading,
+        error: _session.loadError,
         onRefresh: _onRefresh,
       ),
       SettingsScreen(

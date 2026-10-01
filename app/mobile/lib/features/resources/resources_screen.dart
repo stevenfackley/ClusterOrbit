@@ -1,17 +1,20 @@
 import 'package:flutter/material.dart';
 
 import '../../core/cluster_domain/cluster_models.dart';
+import '../../shared/widgets/refreshable.dart';
 
 class ResourcesScreen extends StatefulWidget {
   const ResourcesScreen({
     super.key,
     this.snapshot,
     this.isLoading = false,
+    this.error,
     this.onRefresh,
   });
 
   final ClusterSnapshot? snapshot;
   final bool isLoading;
+  final Object? error;
   final Future<void> Function()? onRefresh;
 
   @override
@@ -37,16 +40,17 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
     setState(() => _query = '');
   }
 
-  Widget _refreshWrap(Widget child) {
-    if (widget.onRefresh == null) return child;
-    return RefreshIndicator(onRefresh: widget.onRefresh!, child: child);
-  }
-
   @override
   Widget build(BuildContext context) {
     final snapshot = widget.snapshot;
     if (snapshot == null) {
-      return _refreshWrap(const _EmptyResourcesState());
+      return NoSnapshotView(
+        isLoading: widget.isLoading,
+        error: widget.error,
+        onRefresh: widget.onRefresh,
+        emptyMessage:
+            'No cluster snapshot yet. Resources will appear when a cluster is connected.',
+      );
     }
 
     final q = _query;
@@ -85,12 +89,18 @@ class _ResourcesScreenState extends State<ResourcesScreen> {
           Expanded(
             child: TabBarView(
               children: [
-                _refreshWrap(
-                    _NodeList(nodes: filteredNodes, hasQuery: q.isNotEmpty)),
-                _refreshWrap(_WorkloadList(
-                    workloads: filteredWorkloads, hasQuery: q.isNotEmpty)),
-                _refreshWrap(_ServiceList(
-                    services: filteredServices, hasQuery: q.isNotEmpty)),
+                MaybeRefreshIndicator(
+                    onRefresh: widget.onRefresh,
+                    child: _NodeList(
+                        nodes: filteredNodes, hasQuery: q.isNotEmpty)),
+                MaybeRefreshIndicator(
+                    onRefresh: widget.onRefresh,
+                    child: _WorkloadList(
+                        workloads: filteredWorkloads, hasQuery: q.isNotEmpty)),
+                MaybeRefreshIndicator(
+                    onRefresh: widget.onRefresh,
+                    child: _ServiceList(
+                        services: filteredServices, hasQuery: q.isNotEmpty)),
               ],
             ),
           ),
@@ -149,27 +159,6 @@ class _SearchField extends StatelessWidget {
           border: const OutlineInputBorder(),
         ),
       ),
-    );
-  }
-}
-
-class _EmptyResourcesState extends StatelessWidget {
-  const _EmptyResourcesState();
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return ListView(
-      physics: const AlwaysScrollableScrollPhysics(),
-      padding: const EdgeInsets.all(24),
-      children: [
-        const SizedBox(height: 120),
-        Text(
-          'No cluster snapshot yet. Resources will appear when a cluster is connected.',
-          style: theme.textTheme.bodyLarge,
-          textAlign: TextAlign.center,
-        ),
-      ],
     );
   }
 }

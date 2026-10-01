@@ -112,4 +112,56 @@ void main() {
       tester.view.resetDevicePixelRatio();
     });
   });
+
+  group('loading and error states without a snapshot', () {
+    final screens =
+        <String, Widget Function(bool, Object?, Future<void> Function()?)>{
+      'ResourcesScreen': (loading, error, refresh) => ResourcesScreen(
+            isLoading: loading,
+            error: error,
+            onRefresh: refresh,
+          ),
+      'ChangesScreen': (loading, error, refresh) => ChangesScreen(
+            isLoading: loading,
+            error: error,
+            onRefresh: refresh,
+          ),
+      'AlertsScreen': (loading, error, refresh) => AlertsScreen(
+            isLoading: loading,
+            error: error,
+            onRefresh: refresh,
+          ),
+    };
+
+    for (final entry in screens.entries) {
+      testWidgets('${entry.key} shows a spinner while loading', (tester) async {
+        await tester.pumpWidget(_wrap(entry.value(true, null, null)));
+        await tester.pump();
+
+        expect(find.byType(CircularProgressIndicator), findsOneWidget);
+        expect(find.textContaining('No '), findsNothing);
+      });
+
+      testWidgets('${entry.key} shows the load error and pull-to-retry',
+          (tester) async {
+        var refreshes = 0;
+        await tester.pumpWidget(_wrap(entry.value(
+          false,
+          'gateway unreachable',
+          () async => refreshes++,
+        )));
+        await tester.pumpAndSettle();
+
+        expect(find.textContaining('gateway unreachable'), findsOneWidget);
+        expect(find.textContaining('Pull to retry'), findsOneWidget);
+        expect(find.byType(CircularProgressIndicator), findsNothing);
+
+        await tester.fling(find.byType(ListView), const Offset(0, 400), 1000);
+        await tester.pump();
+        await tester.pump(const Duration(seconds: 1));
+        await tester.pumpAndSettle();
+        expect(refreshes, 1);
+      });
+    }
+  });
 }

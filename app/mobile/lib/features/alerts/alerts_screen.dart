@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/cluster_domain/cluster_models.dart';
+import '../../shared/widgets/refreshable.dart';
 import 'alert_detail_sheet.dart';
 
 class AlertsScreen extends StatelessWidget {
@@ -8,36 +9,25 @@ class AlertsScreen extends StatelessWidget {
     super.key,
     this.snapshot,
     this.isLoading = false,
+    this.error,
     this.onRefresh,
   });
 
   final ClusterSnapshot? snapshot;
   final bool isLoading;
+  final Object? error;
   final Future<void> Function()? onRefresh;
-
-  Widget _refreshWrap(Widget child) {
-    if (onRefresh == null) return child;
-    return RefreshIndicator(onRefresh: onRefresh!, child: child);
-  }
 
   @override
   Widget build(BuildContext context) {
     final snapshot = this.snapshot;
     if (snapshot == null) {
-      return _refreshWrap(
-        ListView(
-          physics: const AlwaysScrollableScrollPhysics(),
-          children: const [
-            SizedBox(height: 120),
-            Center(
-              child: Padding(
-                padding: EdgeInsets.all(24),
-                child: Text(
-                    'No snapshot yet. Alerts will appear when a cluster is connected.'),
-              ),
-            ),
-          ],
-        ),
+      return NoSnapshotView(
+        isLoading: isLoading,
+        error: error,
+        onRefresh: onRefresh,
+        emptyMessage:
+            'No snapshot yet. Alerts will appear when a cluster is connected.',
       );
     }
 
@@ -49,8 +39,9 @@ class AlertsScreen extends StatelessWidget {
 
     if (alerts.isEmpty) {
       final theme = Theme.of(context);
-      return _refreshWrap(
-        ListView(
+      return MaybeRefreshIndicator(
+        onRefresh: onRefresh,
+        child: ListView(
           physics: const AlwaysScrollableScrollPhysics(),
           padding: const EdgeInsets.all(24),
           children: [
@@ -71,37 +62,39 @@ class AlertsScreen extends StatelessWidget {
       );
     }
 
-    return _refreshWrap(ListView.separated(
-      physics: const AlwaysScrollableScrollPhysics(),
-      padding: const EdgeInsets.all(16),
-      itemCount: alerts.length,
-      separatorBuilder: (_, __) => const SizedBox(height: 8),
-      itemBuilder: (context, i) {
-        final a = alerts[i];
-        return Card(
-          child: ListTile(
-            leading: Icon(
-              _icon(a.level),
-              color: _color(a.level),
-            ),
-            title: Text(a.title),
-            subtitle: Text('${a.summary}\nScope: ${a.scope}'),
-            isThreeLine: true,
-            trailing: Chip(
-              label: Text(a.level.name),
-              backgroundColor: _color(a.level).withValues(alpha: 0.15),
-            ),
-            onTap: () => showModalBottomSheet<void>(
-              context: context,
-              isScrollControlled: true,
-              useSafeArea: true,
-              showDragHandle: true,
-              builder: (_) => AlertDetailSheet(alert: a),
-            ),
-          ),
-        );
-      },
-    ));
+    return MaybeRefreshIndicator(
+        onRefresh: onRefresh,
+        child: ListView.separated(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.all(16),
+          itemCount: alerts.length,
+          separatorBuilder: (_, __) => const SizedBox(height: 8),
+          itemBuilder: (context, i) {
+            final a = alerts[i];
+            return Card(
+              child: ListTile(
+                leading: Icon(
+                  _icon(a.level),
+                  color: _color(a.level),
+                ),
+                title: Text(a.title),
+                subtitle: Text('${a.summary}\nScope: ${a.scope}'),
+                isThreeLine: true,
+                trailing: Chip(
+                  label: Text(a.level.name),
+                  backgroundColor: _color(a.level).withValues(alpha: 0.15),
+                ),
+                onTap: () => showModalBottomSheet<void>(
+                  context: context,
+                  isScrollControlled: true,
+                  useSafeArea: true,
+                  showDragHandle: true,
+                  builder: (_) => AlertDetailSheet(alert: a),
+                ),
+              ),
+            );
+          },
+        ));
   }
 
   int _priority(ClusterHealthLevel level) => switch (level) {
