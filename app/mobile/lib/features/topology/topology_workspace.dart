@@ -215,6 +215,7 @@ class TopologyWorkspace extends StatelessWidget {
                                         CanvasNode(
                                           offset: layout.positions[node.id]!,
                                           onTap: () => onEntityTap(node),
+                                          selected: selectedEntity == node,
                                           child: NodeOrb(
                                             node: node,
                                             palette: palette,
@@ -229,6 +230,7 @@ class TopologyWorkspace extends StatelessWidget {
                                           offset:
                                               layout.positions[workload.id]!,
                                           onTap: () => onEntityTap(workload),
+                                          selected: selectedEntity == workload,
                                           child: WorkloadOrb(
                                             workload: workload,
                                             palette: palette,
@@ -243,6 +245,7 @@ class TopologyWorkspace extends StatelessWidget {
                                         CanvasNode(
                                           offset: layout.positions[service.id]!,
                                           onTap: () => onEntityTap(service),
+                                          selected: selectedEntity == service,
                                           child: ServiceOrb(
                                             service: service,
                                             palette: palette,

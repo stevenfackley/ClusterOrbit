@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../../core/cluster_domain/cluster_models.dart';
+import '../../core/theme/clusterorbit_theme.dart';
+import '../../core/theme/health_style.dart';
 import '../../shared/widgets/refreshable.dart';
 
 class ResourcesScreen extends StatefulWidget {
@@ -305,18 +307,12 @@ class _HealthDot extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = switch (level) {
-      ClusterHealthLevel.healthy => Colors.green,
-      ClusterHealthLevel.warning => Colors.amber,
-      ClusterHealthLevel.critical => Colors.redAccent,
-    };
-    return Container(
-      width: 12,
-      height: 12,
-      decoration: BoxDecoration(
-        color: color,
-        shape: BoxShape.circle,
-      ),
+    final palette = Theme.of(context).extension<ClusterOrbitPalette>()!;
+    return Icon(
+      level.icon,
+      size: 20,
+      color: level.color(palette),
+      semanticLabel: level.label,
     );
   }
 }

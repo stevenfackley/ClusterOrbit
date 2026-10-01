@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../../core/cluster_domain/cluster_models.dart';
+import '../../core/theme/clusterorbit_theme.dart';
+import '../../core/theme/health_style.dart';
 import '../../shared/widgets/refreshable.dart';
 import 'alert_detail_sheet.dart';
 
@@ -31,6 +33,7 @@ class AlertsScreen extends StatelessWidget {
       );
     }
 
+    final palette = Theme.of(context).extension<ClusterOrbitPalette>()!;
     final alerts = [...snapshot.alerts]..sort((a, b) {
         final aPri = _priority(a.level);
         final bPri = _priority(b.level);
@@ -49,7 +52,9 @@ class AlertsScreen extends StatelessWidget {
             Icon(
               Icons.check_circle_outline,
               size: 48,
-              color: Colors.green.withValues(alpha: 0.8),
+              color: ClusterHealthLevel.healthy
+                  .color(palette)
+                  .withValues(alpha: 0.8),
             ),
             const SizedBox(height: 12),
             Text(
@@ -74,15 +79,16 @@ class AlertsScreen extends StatelessWidget {
             return Card(
               child: ListTile(
                 leading: Icon(
-                  _icon(a.level),
-                  color: _color(a.level),
+                  a.level.icon,
+                  color: a.level.color(palette),
                 ),
                 title: Text(a.title),
                 subtitle: Text('${a.summary}\nScope: ${a.scope}'),
                 isThreeLine: true,
                 trailing: Chip(
                   label: Text(a.level.name),
-                  backgroundColor: _color(a.level).withValues(alpha: 0.15),
+                  backgroundColor:
+                      a.level.color(palette).withValues(alpha: 0.15),
                 ),
                 onTap: () => showModalBottomSheet<void>(
                   context: context,
@@ -101,17 +107,5 @@ class AlertsScreen extends StatelessWidget {
         ClusterHealthLevel.critical => 2,
         ClusterHealthLevel.warning => 1,
         ClusterHealthLevel.healthy => 0,
-      };
-
-  IconData _icon(ClusterHealthLevel level) => switch (level) {
-        ClusterHealthLevel.critical => Icons.error_outline,
-        ClusterHealthLevel.warning => Icons.warning_amber_outlined,
-        ClusterHealthLevel.healthy => Icons.check_circle_outline,
-      };
-
-  Color _color(ClusterHealthLevel level) => switch (level) {
-        ClusterHealthLevel.critical => Colors.redAccent,
-        ClusterHealthLevel.warning => Colors.amber,
-        ClusterHealthLevel.healthy => Colors.green,
       };
 }

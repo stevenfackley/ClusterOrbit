@@ -4,6 +4,7 @@ import '../../core/cluster_domain/cluster_models.dart';
 import '../../core/connectivity/cluster_connection.dart';
 import '../../core/sync_cache/snapshot_store.dart';
 import '../../core/theme/clusterorbit_theme.dart';
+import '../../core/theme/health_style.dart';
 import 'entity_detail_panel.dart';
 import 'topology_orbs.dart';
 
@@ -88,12 +89,6 @@ void _openDetail(
   );
 }
 
-Color _healthColor(ClusterHealthLevel level) => switch (level) {
-      ClusterHealthLevel.healthy => const Color(0xFF49D8D0),
-      ClusterHealthLevel.warning => const Color(0xFFFFB86B),
-      ClusterHealthLevel.critical => const Color(0xFFFF6F7A),
-    };
-
 Widget _badge(String label, Color bg) => Container(
       padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
       decoration: BoxDecoration(
@@ -172,7 +167,9 @@ class _NodeRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final healthColor = _healthColor(node.health);
+    final healthColor = node.health.color(
+      Theme.of(context).extension<ClusterOrbitPalette>()!,
+    );
     return ListTile(
       dense: true,
       leading: StatusDot(color: healthColor),
@@ -262,7 +259,9 @@ class _WorkloadRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final healthColor = _healthColor(workload.health);
+    final healthColor = workload.health.color(
+      Theme.of(context).extension<ClusterOrbitPalette>()!,
+    );
     return ListTile(
       dense: true,
       leading: StatusDot(color: healthColor),
@@ -347,7 +346,9 @@ class _ServiceRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final healthColor = _healthColor(service.health);
+    final healthColor = service.health.color(
+      Theme.of(context).extension<ClusterOrbitPalette>()!,
+    );
     return ListTile(
       dense: true,
       leading: StatusDot(color: healthColor),

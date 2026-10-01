@@ -2,18 +2,11 @@ import 'package:flutter/material.dart';
 
 import '../../core/cluster_domain/cluster_models.dart';
 import '../../core/theme/clusterorbit_theme.dart';
+import '../../core/theme/health_style.dart';
 
 /// Tints an entity by its health level using the active palette.
-Color healthTint(ClusterHealthLevel level, ClusterOrbitPalette palette) {
-  switch (level) {
-    case ClusterHealthLevel.healthy:
-      return palette.accentTeal;
-    case ClusterHealthLevel.warning:
-      return palette.warning;
-    case ClusterHealthLevel.critical:
-      return const Color(0xFFFF6F7A);
-  }
-}
+Color healthTint(ClusterHealthLevel level, ClusterOrbitPalette palette) =>
+    level.color(palette);
 
 /// Positions an orb on the canvas at [offset] and wires tap handling.
 class CanvasNode extends StatelessWidget {
@@ -22,21 +15,27 @@ class CanvasNode extends StatelessWidget {
     required this.offset,
     required this.child,
     this.onTap,
+    this.selected = false,
   });
 
   final Offset offset;
   final Widget child;
   final VoidCallback? onTap;
+  final bool selected;
 
   @override
   Widget build(BuildContext context) {
     return Positioned(
       left: offset.dx,
       top: offset.dy,
-      child: GestureDetector(
-        onTap: onTap,
-        behavior: HitTestBehavior.opaque,
-        child: child,
+      child: Semantics(
+        button: true,
+        selected: selected,
+        child: GestureDetector(
+          onTap: onTap,
+          behavior: HitTestBehavior.opaque,
+          child: child,
+        ),
       ),
     );
   }
@@ -271,7 +270,7 @@ class LegendCard extends StatelessWidget {
             const SizedBox(height: 10),
             LegendRow(label: 'Healthy', color: palette.accentTeal),
             LegendRow(label: 'Warning', color: palette.warning),
-            const LegendRow(label: 'Critical', color: Color(0xFFFF6F7A)),
+            LegendRow(label: 'Critical', color: palette.danger),
           ],
         ),
       ),
