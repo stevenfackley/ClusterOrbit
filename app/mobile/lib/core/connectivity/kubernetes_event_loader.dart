@@ -1,6 +1,6 @@
 import '../cluster_domain/cluster_models.dart';
+import 'kube_transport.dart';
 import 'kubeconfig_repository.dart';
-import 'kubernetes_snapshot_loader.dart';
 
 /// Fetches Kubernetes events for a single involved object.
 ///

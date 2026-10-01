@@ -65,11 +65,6 @@ final class TestClusterConnection implements ClusterConnection {
   }
 
   @override
-  Stream<ClusterSnapshot> watchSnapshot(String clusterId) async* {
-    yield await loadSnapshot(clusterId);
-  }
-
-  @override
   Future<List<ClusterEvent>> loadEvents({
     required String clusterId,
     required TopologyEntityKind kind,

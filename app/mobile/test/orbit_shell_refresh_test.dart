@@ -68,11 +68,6 @@ final class _ControllableConnection implements ClusterConnection {
       loadSnapshotFuture();
 
   @override
-  Stream<ClusterSnapshot> watchSnapshot(String clusterId) async* {
-    yield await loadSnapshot(clusterId);
-  }
-
-  @override
   Future<List<ClusterEvent>> loadEvents({
     required String clusterId,
     required TopologyEntityKind kind,

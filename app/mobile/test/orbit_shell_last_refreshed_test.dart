@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:clusterorbit_mobile/app/clusterorbit_app.dart';
 import 'package:clusterorbit_mobile/core/cluster_domain/cluster_models.dart';
 import 'package:clusterorbit_mobile/core/connectivity/cluster_connection.dart';
@@ -90,11 +88,6 @@ final class _CountingConnection implements ClusterConnection {
   Future<ClusterSnapshot> loadSnapshot(String clusterId) async {
     loadSnapshotCalls++;
     return snapshot;
-  }
-
-  @override
-  Stream<ClusterSnapshot> watchSnapshot(String clusterId) async* {
-    yield await loadSnapshot(clusterId);
   }
 
   @override

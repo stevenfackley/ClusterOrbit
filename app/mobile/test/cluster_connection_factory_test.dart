@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:clusterorbit_mobile/core/cluster_domain/cluster_models.dart';
 import 'package:clusterorbit_mobile/core/connectivity/cluster_connection.dart';
 import 'package:clusterorbit_mobile/core/connectivity/cluster_connection_factory.dart';
+import 'package:clusterorbit_mobile/core/connectivity/kube_transport.dart';
 import 'package:clusterorbit_mobile/core/connectivity/kubeconfig_repository.dart';
 import 'package:clusterorbit_mobile/core/connectivity/kubernetes_snapshot_loader.dart';
 import 'package:clusterorbit_mobile/core/connectivity/kubernetes_workload_scaler.dart';

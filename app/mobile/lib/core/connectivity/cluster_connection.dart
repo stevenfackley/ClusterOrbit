@@ -7,8 +7,6 @@ abstract interface class ClusterConnection {
 
   Future<ClusterSnapshot> loadSnapshot(String clusterId);
 
-  Stream<ClusterSnapshot> watchSnapshot(String clusterId);
-
   /// Fetch the most recent events for a single entity.
   ///
   /// [namespace] must be null for node-scoped lookups and non-null for

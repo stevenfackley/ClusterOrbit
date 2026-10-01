@@ -1,8 +1,8 @@
 import 'dart:convert';
 
 import 'cluster_connection.dart';
+import 'kube_transport.dart';
 import 'kubeconfig_repository.dart';
-import 'kubernetes_snapshot_loader.dart';
 
 /// Scales a single workload on a live cluster by PATCH-ing the `scale`
 /// subresource of the relevant apps/v1 collection. Only Deployment and

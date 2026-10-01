@@ -197,11 +197,6 @@ final class _RecordingConnection implements ClusterConnection {
       SampleClusterData.snapshotFor(_profiles.first);
 
   @override
-  Stream<ClusterSnapshot> watchSnapshot(String clusterId) async* {
-    yield await loadSnapshot(clusterId);
-  }
-
-  @override
   Future<List<ClusterEvent>> loadEvents({
     required String clusterId,
     required TopologyEntityKind kind,
