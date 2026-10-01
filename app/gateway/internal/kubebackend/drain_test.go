@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -70,9 +71,10 @@ func newDrainBackend(t *testing.T, serverURL string) *KubeBackend {
 	if err != nil {
 		t.Fatalf("new backend: %v", err)
 	}
-	// Keep PDB-retry backoff tiny so the test runs fast.
+	// Keep PDB-retry backoff and pod-gone polling tiny so the test runs fast.
 	b.drainBackoff = time.Millisecond
 	b.drainMaxBackoff = 5 * time.Millisecond
+	b.drainPollInterval = time.Millisecond
 	b.newJobID = func() string { return "job-1" }
 	return b
 }
@@ -92,6 +94,32 @@ func waitDrain(t *testing.T, b *KubeBackend, node, jobID string) api.DrainJob {
 	}
 	t.Fatalf("drain did not reach a terminal phase in time")
 	return api.DrainJob{}
+}
+
+// waitUntil polls cond until it holds, failing the test after 3s.
+func waitUntil(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", what)
+}
+
+// managedPod is a running, ReplicaSet-controlled pod in namespace platform.
+func managedPod(name, uid string) map[string]any {
+	return map[string]any{
+		"metadata": map[string]any{
+			"namespace":       "platform",
+			"name":            name,
+			"uid":             uid,
+			"ownerReferences": []any{map[string]any{"kind": "ReplicaSet", "name": "api-rs", "controller": true}},
+		},
+		"status": map[string]any{"phase": "Running"},
+	}
 }
 
 func TestKubeBackendDrainCordonsAndEvictsWithPDBRetry(t *testing.T) {
@@ -213,6 +241,151 @@ func TestKubeBackendDrainFailsWhenEvictionErrors(t *testing.T) {
 	}
 	if final.Error == "" {
 		t.Fatalf("expected an error message on failed drain")
+	}
+}
+
+func TestKubeBackendDrainWaitsUntilEvictedPodIsGone(t *testing.T) {
+	// Once released, the pod GET reports the pod gone in one of the two ways
+	// kubectl accepts: deleted, or replaced by a same-named pod (new UID).
+	cases := map[string]func(http.ResponseWriter){
+		"deleted": func(w http.ResponseWriter) { http.Error(w, "not found", http.StatusNotFound) },
+		"replaced": func(w http.ResponseWriter) {
+			_, _ = w.Write([]byte(`{"metadata":{"name":"api-1","uid":"uid-2"}}`))
+		},
+	}
+	for name, gone := range cases {
+		t.Run(name, func(t *testing.T) {
+			var released atomic.Bool
+			var polls atomic.Int32
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.Method == http.MethodPatch:
+					_, _ = w.Write([]byte(`{"kind":"Node"}`))
+				case r.Method == http.MethodGet && r.URL.Path == "/api/v1/pods":
+					_ = json.NewEncoder(w).Encode(list(managedPod("api-1", "uid-1")))
+				case r.Method == http.MethodPost && r.URL.Path == "/api/v1/namespaces/platform/pods/api-1/eviction":
+					w.WriteHeader(http.StatusCreated)
+				case r.Method == http.MethodGet && r.URL.Path == "/api/v1/namespaces/platform/pods/api-1":
+					polls.Add(1)
+					if released.Load() {
+						gone(w)
+						return
+					}
+					_, _ = w.Write([]byte(`{"metadata":{"name":"api-1","uid":"uid-1"}}`))
+				default:
+					http.Error(w, "not routed", http.StatusNotFound)
+				}
+			}))
+			defer ts.Close()
+
+			b := newDrainBackend(t, ts.URL)
+			if _, err := b.StartDrain(context.Background(), "test", "worker-1"); err != nil {
+				t.Fatalf("StartDrain: %v", err)
+			}
+			var job api.DrainJob
+			waitUntil(t, "the evicted pod to be polled", func() bool {
+				job, _ = b.DrainStatus(context.Background(), "test", "worker-1", "job-1")
+				if job.Phase == api.DrainPhaseSucceeded || job.Phase == api.DrainPhaseFailed {
+					t.Fatalf("drain finished while the evicted pod still exists: %+v", job)
+				}
+				return polls.Load() >= 2
+			})
+			if job.Phase != api.DrainPhaseRunning || job.Remaining != 1 || len(job.Evicted) != 0 {
+				t.Fatalf("while the pod lingers, job = %+v", job)
+			}
+
+			released.Store(true)
+			final := waitDrain(t, b, "worker-1", "job-1")
+			if final.Phase != api.DrainPhaseSucceeded || final.Remaining != 0 {
+				t.Fatalf("phase = %q, remaining = %d, error = %q", final.Phase, final.Remaining, final.Error)
+			}
+			if !containsAll(final.Evicted, "platform/api-1") {
+				t.Fatalf("evicted = %+v", final.Evicted)
+			}
+		})
+	}
+}
+
+func TestKubeBackendDrainFailsWhenEvictedPodLingers(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPatch:
+			_, _ = w.Write([]byte(`{"kind":"Node"}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/pods":
+			_ = json.NewEncoder(w).Encode(list(managedPod("api-1", "uid-1")))
+		case strings.HasSuffix(r.URL.Path, "/eviction"):
+			w.WriteHeader(http.StatusCreated)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/namespaces/platform/pods/api-1":
+			_, _ = w.Write([]byte(`{"metadata":{"name":"api-1","uid":"uid-1"}}`))
+		default:
+			http.Error(w, "not routed", http.StatusNotFound)
+		}
+	}))
+	defer ts.Close()
+
+	b := newDrainBackend(t, ts.URL)
+	b.drainTimeout = 50 * time.Millisecond
+	if _, err := b.StartDrain(context.Background(), "test", "worker-1"); err != nil {
+		t.Fatalf("StartDrain: %v", err)
+	}
+	final := waitDrain(t, b, "worker-1", "job-1")
+	if final.Phase != api.DrainPhaseFailed || !strings.Contains(final.Error, "waiting for pod deletion") {
+		t.Fatalf("phase = %q, error = %q, want a deletion timeout", final.Phase, final.Error)
+	}
+	if len(final.Evicted) != 0 || final.Remaining != 1 {
+		t.Fatalf("lingering pod must not count as evicted: %+v", final)
+	}
+}
+
+func TestKubeBackendDrainEvictsPastAPDBBlockedPod(t *testing.T) {
+	var released atomic.Bool
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPatch:
+			_, _ = w.Write([]byte(`{"kind":"Node"}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/pods":
+			_ = json.NewEncoder(w).Encode(list(
+				managedPod("api-1", "uid-1"),
+				managedPod("api-2", "uid-2"),
+				managedPod("api-3", "uid-3"),
+			))
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/eviction"):
+			// api-1 is held by its PodDisruptionBudget until released.
+			if strings.Contains(r.URL.Path, "/pods/api-1/") && !released.Load() {
+				http.Error(w, "would violate the pod's disruption budget", http.StatusTooManyRequests)
+				return
+			}
+			w.WriteHeader(http.StatusCreated)
+		default:
+			// Includes the pod GETs: 404 means the evicted pod is gone.
+			http.Error(w, "not routed", http.StatusNotFound)
+		}
+	}))
+	defer ts.Close()
+
+	b := newDrainBackend(t, ts.URL)
+	if _, err := b.StartDrain(context.Background(), "test", "worker-1"); err != nil {
+		t.Fatalf("StartDrain: %v", err)
+	}
+	var job api.DrainJob
+	waitUntil(t, "api-2 and api-3 to be evicted past the blocked api-1", func() bool {
+		job, _ = b.DrainStatus(context.Background(), "test", "worker-1", "job-1")
+		if job.Phase == api.DrainPhaseSucceeded || job.Phase == api.DrainPhaseFailed {
+			t.Fatalf("drain finished while api-1 is still blocked: %+v", job)
+		}
+		return containsAll(job.Evicted, "platform/api-2", "platform/api-3")
+	})
+	if containsAll(job.Evicted, "platform/api-1") || job.Remaining != 1 {
+		t.Fatalf("api-1 should still be pending, job = %+v", job)
+	}
+
+	released.Store(true)
+	final := waitDrain(t, b, "worker-1", "job-1")
+	if final.Phase != api.DrainPhaseSucceeded {
+		t.Fatalf("phase = %q, error = %q", final.Phase, final.Error)
+	}
+	if !containsAll(final.Evicted, "platform/api-1", "platform/api-2", "platform/api-3") {
+		t.Fatalf("evicted = %+v", final.Evicted)
 	}
 }
 

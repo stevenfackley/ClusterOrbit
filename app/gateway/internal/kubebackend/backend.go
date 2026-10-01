@@ -32,11 +32,13 @@ type KubeBackend struct {
 	drainMu   sync.Mutex
 	drainJobs map[string]*api.DrainJob
 	// drainBackoff is the initial wait before retrying a PDB-blocked (429)
-	// eviction; it doubles up to drainMaxBackoff. drainTimeout caps the whole
-	// drain. Overridable in tests to keep them fast.
-	drainBackoff    time.Duration
-	drainMaxBackoff time.Duration
-	drainTimeout    time.Duration
+	// eviction; it doubles up to drainMaxBackoff. drainPollInterval spaces the
+	// checks for an evicted pod to be gone. drainTimeout caps the whole drain.
+	// Overridable in tests to keep them fast.
+	drainBackoff      time.Duration
+	drainMaxBackoff   time.Duration
+	drainPollInterval time.Duration
+	drainTimeout      time.Duration
 	// newJobID mints unique job identifiers; overridable in tests for
 	// deterministic IDs.
 	newJobID func() string
@@ -54,15 +56,16 @@ func NewKubeBackend(cluster *kubeconfig.ResolvedCluster) (*KubeBackend, error) {
 		return nil, err
 	}
 	return &KubeBackend{
-		client:          client,
-		cluster:         cluster,
-		profile:         profileFromCluster(cluster),
-		now:             time.Now,
-		drainJobs:       map[string]*api.DrainJob{},
-		drainBackoff:    1 * time.Second,
-		drainMaxBackoff: 15 * time.Second,
-		drainTimeout:    5 * time.Minute,
-		newJobID:        randomJobID,
+		client:            client,
+		cluster:           cluster,
+		profile:           profileFromCluster(cluster),
+		now:               time.Now,
+		drainJobs:         map[string]*api.DrainJob{},
+		drainBackoff:      1 * time.Second,
+		drainMaxBackoff:   15 * time.Second,
+		drainPollInterval: 1 * time.Second,
+		drainTimeout:      5 * time.Minute,
+		newJobID:          randomJobID,
 	}, nil
 }
 
