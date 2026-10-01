@@ -1,7 +1,6 @@
 package api
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -252,42 +251,6 @@ func TestCompleteSucceededAndFailed(t *testing.T) {
 	}
 }
 
-func intPtr(n int) *int { return &n }
-
-func newApprovalServer(rb *recordingBackend, ops ...string) *Server {
-	return &Server{
-		Backend:   rb,
-		Tokens:    []string{"tok-a", "tok-b"},
-		Approvals: NewApprovalStore(15*time.Minute, ops...),
-	}
-}
-
-func postAs(t *testing.T, url, token, body string) *http.Response {
-	t.Helper()
-	var rdr io.Reader
-	if body != "" {
-		rdr = bytes.NewBufferString(body)
-	}
-	req, _ := http.NewRequest(http.MethodPost, url, rdr)
-	req.Header.Set(AuthHeader, token)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("post %s: %v", url, err)
-	}
-	return resp
-}
-
-func decodePending(t *testing.T, resp *http.Response) PendingRequest {
-	t.Helper()
-	defer resp.Body.Close()
-	var pr PendingRequest
-	if err := json.NewDecoder(resp.Body).Decode(&pr); err != nil {
-		t.Fatalf("decode pending: %v", err)
-	}
-	return pr
-}
-
 func TestScaleParksWhenApprovalRequired(t *testing.T) {
 	rb := &recordingBackend{ClusterBackend: NewSampleBackend()}
 	s := newApprovalServer(rb, OpScale)
@@ -343,17 +306,6 @@ func TestDrainParksWhenApprovalRequired(t *testing.T) {
 	if rb.startDrainCalls != 0 {
 		t.Fatalf("StartDrain must NOT run on park, got %d", rb.startDrainCalls)
 	}
-}
-
-func getAs(t *testing.T, url, token string) *http.Response {
-	t.Helper()
-	req, _ := http.NewRequest(http.MethodGet, url, nil)
-	req.Header.Set(AuthHeader, token)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("get %s: %v", url, err)
-	}
-	return resp
 }
 
 func TestApproveExecutesAndCompletes(t *testing.T) {
@@ -639,5 +591,124 @@ func TestApprovedScaleWithoutReplicasFails(t *testing.T) {
 	}
 	if rb.scaleCalls != 0 {
 		t.Fatalf("scaleCalls = %d, want 0", rb.scaleCalls)
+	}
+}
+
+// Every gated op parks without touching the backend, then runs exactly once,
+// on its original target, when a second identity approves.
+func TestApprovalFlowAllOps(t *testing.T) {
+	for _, tc := range []struct {
+		op, path, body string
+		target         string
+		calls          func(*recordingBackend) (int, string) // count, target
+		wantResultID   string
+	}{
+		{OpScale, "workloads/deployment:platform/api/scale", `{"replicas":5}`, "deployment:platform/api",
+			func(rb *recordingBackend) (int, string) { return rb.scaleCalls, rb.gotWorkload }, ""},
+		{OpRestart, "workloads/deployment:platform/api/restart", "", "deployment:platform/api",
+			func(rb *recordingBackend) (int, string) { return rb.restartCalls, rb.gotWorkload }, ""},
+		{OpCordon, "nodes/worker-1/cordon", "", "worker-1",
+			func(rb *recordingBackend) (int, string) { return rb.cordonCalls, rb.gotNode }, ""},
+		{OpDrain, "nodes/worker-1/drain", "", "worker-1",
+			func(rb *recordingBackend) (int, string) { return rb.startDrainCalls, rb.gotNode }, "job-1"},
+	} {
+		t.Run(tc.op, func(t *testing.T) {
+			rb := &recordingBackend{
+				ClusterBackend: NewSampleBackend(),
+				drainJob:       DrainJob{ID: "job-1", NodeID: "worker-1", Phase: DrainPhasePending},
+			}
+			s := newApprovalServer(rb, tc.op)
+			ts := httptest.NewServer(s.Handler())
+			defer ts.Close()
+
+			resp := postAs(t, ts.URL+"/v1/clusters/demo/"+tc.path, "tok-a", tc.body)
+			park := decodePending(t, resp)
+			if resp.StatusCode != http.StatusAccepted || park.Op != tc.op || park.TargetID != tc.target {
+				t.Fatalf("park status = %d pending = %+v", resp.StatusCode, park)
+			}
+			if n, _ := tc.calls(rb); n != 0 {
+				t.Fatalf("backend called %d times on park, want 0", n)
+			}
+
+			resp = postAs(t, ts.URL+"/v1/clusters/demo/approvals/"+park.ID+"/approve", "tok-b", "")
+			done := decodePending(t, resp)
+			if resp.StatusCode != http.StatusOK || done.Phase != ApprovalPhaseSucceeded || done.ResultID != tc.wantResultID {
+				t.Fatalf("approve status = %d done = %+v", resp.StatusCode, done)
+			}
+			if n, target := tc.calls(rb); n != 1 || target != tc.target || rb.gotCluster != "demo" {
+				t.Fatalf("backend calls = %d target = %q cluster = %q, want 1 on %q in demo", n, target, rb.gotCluster, tc.target)
+			}
+			if tc.op == OpCordon && !rb.gotUnschedulable {
+				t.Fatal("approved cordon must pass unschedulable=true")
+			}
+		})
+	}
+}
+
+// A request is reachable only under the cluster it was parked in.
+func TestApproveWrongCluster404(t *testing.T) {
+	rb := &recordingBackend{ClusterBackend: NewSampleBackend()}
+	s := newApprovalServer(rb, OpScale)
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	park := decodePending(t, postAs(t, ts.URL+"/v1/clusters/demo/workloads/deployment:platform/api/scale", "tok-a", `{"replicas":5}`))
+	for _, action := range []string{"approve", "reject"} {
+		resp := postAs(t, ts.URL+"/v1/clusters/other/approvals/"+park.ID+"/"+action, "tok-b", "")
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusNotFound {
+			t.Fatalf("%s under another cluster: status = %d, want 404", action, resp.StatusCode)
+		}
+	}
+	resp := getAs(t, ts.URL+"/v1/clusters/other/approvals/"+park.ID, "tok-b")
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("get under another cluster: status = %d, want 404", resp.StatusCode)
+	}
+	if got, _ := s.Approvals.Get(park.ID); got.Phase != ApprovalPhasePending || rb.scaleCalls != 0 {
+		t.Fatalf("phase = %q scaleCalls = %d, want untouched", got.Phase, rb.scaleCalls)
+	}
+}
+
+// Uncordon is a recovery action: gating cordon never parks it.
+func TestUncordonBypassesCordonApproval(t *testing.T) {
+	rb := &recordingBackend{ClusterBackend: NewSampleBackend()}
+	s := newApprovalServer(rb, OpCordon)
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	resp := postAs(t, ts.URL+"/v1/clusters/demo/nodes/worker-1/uncordon", "tok-a", "")
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if rb.cordonCalls != 1 || rb.gotUnschedulable {
+		t.Fatalf("cordonCalls = %d unschedulable = %v, want one uncordon", rb.cordonCalls, rb.gotUnschedulable)
+	}
+	if list := s.Approvals.List(""); len(list) != 0 {
+		t.Fatalf("uncordon parked: %+v", list)
+	}
+}
+
+func TestApproveExpired409(t *testing.T) {
+	rb := &recordingBackend{ClusterBackend: NewSampleBackend()}
+	s := newApprovalServer(rb, OpScale)
+	clock := time.Unix(1_700_000_000, 0)
+	s.Approvals.now = func() time.Time { return clock }
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	park := decodePending(t, postAs(t, ts.URL+"/v1/clusters/demo/workloads/deployment:platform/api/scale", "tok-a", `{"replicas":5}`))
+	clock = clock.Add(16 * time.Minute) // TTL is 15m
+	resp := postAs(t, ts.URL+"/v1/clusters/demo/approvals/"+park.ID+"/approve", "tok-b", "")
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", resp.StatusCode)
+	}
+	if got := decodePending(t, getAs(t, ts.URL+"/v1/clusters/demo/approvals/"+park.ID, "tok-a")); got.Phase != ApprovalPhaseExpired {
+		t.Fatalf("phase = %q, want expired", got.Phase)
+	}
+	if rb.scaleCalls != 0 {
+		t.Fatalf("expired request executed: scaleCalls = %d", rb.scaleCalls)
 	}
 }
