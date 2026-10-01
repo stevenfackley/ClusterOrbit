@@ -10,7 +10,8 @@ import 'cluster_connection.dart';
 /// Every call goes to [gatewayBaseUrl] and adds the token header when [token]
 /// is non-empty. A missing or invalid base URL fails each call with a
 /// [GatewayException] rather than serving sample data, so a misconfigured
-/// gateway cannot pass for a working one.
+/// gateway cannot pass for a working one. A mutation the gateway parks for
+/// two-person approval throws [ApprovalPendingException].
 final class GatewayClusterConnection implements ClusterConnection {
   GatewayClusterConnection({
     required this.gatewayBaseUrl,
@@ -90,11 +91,7 @@ final class GatewayClusterConnection implements ClusterConnection {
       workloadId,
       'scale',
     ]);
-    await _httpClient.postJson(
-      target,
-      headers: _headers(),
-      body: {'replicas': replicas},
-    );
+    await _mutate(target, {'replicas': replicas});
   }
 
   @override
@@ -110,11 +107,7 @@ final class GatewayClusterConnection implements ClusterConnection {
       workloadId,
       'restart',
     ]);
-    await _httpClient.postJson(
-      target,
-      headers: _headers(),
-      body: const <String, dynamic>{},
-    );
+    await _mutate(target, const <String, dynamic>{});
   }
 
   @override
@@ -131,11 +124,7 @@ final class GatewayClusterConnection implements ClusterConnection {
       nodeId,
       schedulable ? 'uncordon' : 'cordon',
     ]);
-    await _httpClient.postJson(
-      target,
-      headers: _headers(),
-      body: const <String, dynamic>{},
-    );
+    await _mutate(target, const <String, dynamic>{});
   }
 
   @override
@@ -151,11 +140,7 @@ final class GatewayClusterConnection implements ClusterConnection {
       nodeId,
       'drain',
     ]);
-    final body = await _httpClient.postJson(
-      target,
-      headers: _headers(),
-      body: const <String, dynamic>{},
-    );
+    final body = await _mutate(target, const <String, dynamic>{});
     return DrainJob.fromJson(body as Map<String, dynamic>);
   }
 
@@ -199,17 +184,40 @@ final class GatewayClusterConnection implements ClusterConnection {
     );
   }
 
+  /// POSTs a mutation. A gated mutation comes back as 202 with a
+  /// PendingRequest body; a started drain is also 202, but a DrainJob never
+  /// carries `op`, so that key tells them apart.
+  Future<dynamic> _mutate(Uri target, Map<String, dynamic> body) async {
+    final response = await _httpClient.postJson(
+      target,
+      headers: _headers(),
+      body: body,
+    );
+    final json = response.body;
+    if (response.statusCode == HttpStatus.accepted &&
+        json is Map<String, dynamic> &&
+        json.containsKey('op')) {
+      throw ApprovalPendingException(PendingApproval.fromJson(json));
+    }
+    return json;
+  }
+
   Map<String, String> _headers() => {
         if (token.isNotEmpty) _tokenHeader: token,
       };
 }
 
+/// A 2xx gateway answer: the status (a mutation can be 200 or 202) and the
+/// decoded JSON body, null when empty.
+typedef GatewayResponse = ({int statusCode, dynamic body});
+
 /// Abstraction over HTTP GETs/POSTs so tests can inject deterministic
-/// responses without standing up a real server.
+/// responses without standing up a real server. Non-2xx answers throw
+/// [GatewayException].
 abstract interface class GatewayHttpClient {
   Future<dynamic> getJson(Uri url, {Map<String, String> headers});
 
-  Future<dynamic> postJson(
+  Future<GatewayResponse> postJson(
     Uri url, {
     Map<String, String> headers,
     required Map<String, dynamic> body,
@@ -230,18 +238,19 @@ final class DartIoGatewayHttpClient implements GatewayHttpClient {
   final Duration responseTimeout;
 
   @override
-  Future<dynamic> getJson(Uri url, {Map<String, String> headers = const {}}) =>
-      _send(url, method: 'GET', headers: headers, body: null);
+  Future<dynamic> getJson(Uri url,
+          {Map<String, String> headers = const {}}) async =>
+      (await _send(url, method: 'GET', headers: headers, body: null)).body;
 
   @override
-  Future<dynamic> postJson(
+  Future<GatewayResponse> postJson(
     Uri url, {
     Map<String, String> headers = const {},
     required Map<String, dynamic> body,
   }) =>
       _send(url, method: 'POST', headers: headers, body: body);
 
-  Future<dynamic> _send(
+  Future<GatewayResponse> _send(
     Uri url, {
     required String method,
     required Map<String, String> headers,
@@ -265,7 +274,10 @@ final class DartIoGatewayHttpClient implements GatewayHttpClient {
         throw GatewayException.fromResponse(
             response.statusCode, url, responseBody);
       }
-      return responseBody.isEmpty ? null : jsonDecode(responseBody);
+      return (
+        statusCode: response.statusCode,
+        body: responseBody.isEmpty ? null : jsonDecode(responseBody),
+      );
     } finally {
       client.close(force: true);
     }

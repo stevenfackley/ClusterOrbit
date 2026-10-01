@@ -20,12 +20,12 @@ class _FakeHttpClient implements GatewayHttpClient {
   }
 
   @override
-  Future<dynamic> postJson(
+  Future<GatewayResponse> postJson(
     Uri url, {
     Map<String, String> headers = const {},
     required Map<String, dynamic> body,
   }) async =>
-      null;
+      (statusCode: 200, body: null);
 }
 
 Widget _wrap(AddGatewayScreen screen) {

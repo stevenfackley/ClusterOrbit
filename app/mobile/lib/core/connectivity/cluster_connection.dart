@@ -88,3 +88,47 @@ class UnsupportedWorkloadKindException implements Exception {
   @override
   String toString() => 'UnsupportedWorkloadKindException: $kind';
 }
+
+/// A mutation the gateway parked for a second operator's approval instead of
+/// executing it (the gateway's `PendingRequest`).
+class PendingApproval {
+  const PendingApproval({
+    required this.id,
+    required this.op,
+    required this.targetId,
+    this.expiresAt,
+  });
+
+  factory PendingApproval.fromJson(Map<String, dynamic> json) {
+    final expiresAt = json['expiresAt'];
+    return PendingApproval(
+      id: json['id'] as String? ?? '',
+      op: json['op'] as String? ?? '',
+      targetId: json['targetId'] as String? ?? '',
+      expiresAt: expiresAt is num && expiresAt > 0
+          ? DateTime.fromMillisecondsSinceEpoch(expiresAt.toInt(), isUtc: true)
+          : null,
+    );
+  }
+
+  /// Approval request id (`apr-…`), not a drain job id.
+  final String id;
+
+  /// `scale`, `restart`, `cordon` or `drain`.
+  final String op;
+  final String targetId;
+  final DateTime? expiresAt;
+}
+
+/// Thrown by a mutation the backend accepted but did not execute: it waits
+/// for a second operator to approve [pending]. Not a failure, and not a
+/// success either; callers should say so rather than report the change done.
+class ApprovalPendingException implements Exception {
+  const ApprovalPendingException(this.pending);
+  final PendingApproval pending;
+
+  @override
+  String toString() =>
+      'ApprovalPendingException: ${pending.op} of ${pending.targetId} '
+      'awaits approval (${pending.id})';
+}

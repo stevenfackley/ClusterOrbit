@@ -45,7 +45,7 @@ void main() {
     }, timeout: const Timeout(Duration(seconds: 10)));
   });
 
-  group('DartIoGatewayHttpClient errors', () {
+  group('DartIoGatewayHttpClient responses', () {
     late HttpServer server;
 
     setUp(() async {
@@ -61,6 +61,17 @@ void main() {
         await request.response.close();
       });
     }
+
+    test('a 202 POST reports its status with the decoded body', () async {
+      answer(202, '{"id":"apr-1","op":"scale"}');
+      final url = Uri.parse('http://127.0.0.1:${server.port}/v1/clusters');
+
+      final response = await const DartIoGatewayHttpClient()
+          .postJson(url, body: const {'replicas': 2});
+
+      expect(response.statusCode, 202);
+      expect(response.body, {'id': 'apr-1', 'op': 'scale'});
+    });
 
     test('a 403 carries the status and the gateway error text', () async {
       answer(403, '{"error":"policy violation: replicas 9 exceed max 5"}');

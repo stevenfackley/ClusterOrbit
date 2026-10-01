@@ -428,6 +428,11 @@ class _EntityDetailPanelState extends State<EntityDetailPanel> {
     final DrainJob job;
     try {
       job = await connection.startDrain(clusterId: clusterId, nodeId: n.id);
+    } on ApprovalPendingException catch (e) {
+      messenger?.showSnackBar(SnackBar(
+          content:
+              Text('Awaiting second-operator approval (${e.pending.id})')));
+      return;
     } catch (e) {
       messenger?.showSnackBar(SnackBar(content: Text('Drain failed: $e')));
       return;
@@ -493,6 +498,10 @@ class _EntityDetailPanelState extends State<EntityDetailPanel> {
               'Requested ${verb.toLowerCase()} of ${n.name}. Refresh to see applied state.'),
         ),
       );
+    } on ApprovalPendingException catch (e) {
+      messenger?.showSnackBar(SnackBar(
+          content:
+              Text('Awaiting second-operator approval (${e.pending.id})')));
     } catch (e) {
       messenger?.showSnackBar(
         SnackBar(content: Text('$verb failed: $e')),
@@ -586,6 +595,10 @@ class _EntityDetailPanelState extends State<EntityDetailPanel> {
               'Requested rolling restart of ${w.name}. Refresh to see applied state.'),
         ),
       );
+    } on ApprovalPendingException catch (e) {
+      messenger?.showSnackBar(SnackBar(
+          content:
+              Text('Awaiting second-operator approval (${e.pending.id})')));
     } catch (e) {
       messenger?.showSnackBar(
         SnackBar(content: Text('Restart failed: $e')),
@@ -620,6 +633,10 @@ class _EntityDetailPanelState extends State<EntityDetailPanel> {
               'Requested scale of ${w.name} to $replicas replica(s). Refresh to see applied state.'),
         ),
       );
+    } on ApprovalPendingException catch (e) {
+      messenger?.showSnackBar(SnackBar(
+          content:
+              Text('Awaiting second-operator approval (${e.pending.id})')));
     } catch (e) {
       messenger?.showSnackBar(
         SnackBar(content: Text('Scale failed: $e')),

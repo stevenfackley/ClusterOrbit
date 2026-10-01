@@ -448,7 +448,7 @@ current-context: prod-admin
         'skipped': <String>[],
         'remaining': 0,
       },
-    });
+    }, postStatus: 202);
     final connection = GatewayClusterConnection(
       gatewayBaseUrl: 'https://gateway.example.internal/',
       token: 's3cret',
@@ -466,6 +466,79 @@ current-context: prod-admin
     expect(job.id, 'job-1');
     expect(job.nodeId, 'worker-1');
     expect(job.phase, DrainPhase.pending);
+  });
+
+  group('gateway mutations parked for approval', () {
+    const cluster = 'https://gateway.example.internal/v1/clusters/remote-alpha';
+    Map<String, dynamic> parked(String op, String targetId) => {
+          'id': 'apr-$op',
+          'op': op,
+          'clusterId': 'remote-alpha',
+          'targetId': targetId,
+          'phase': 'pending',
+          'requester': 'tok:abc',
+          'createdAt': 1700000000000,
+          'updatedAt': 1700000000000,
+          'expiresAt': 1700000900000,
+        };
+    Matcher awaitsApproval(String op, String targetId) =>
+        throwsA(isA<ApprovalPendingException>()
+            .having((e) => e.pending.id, 'id', 'apr-$op')
+            .having((e) => e.pending.op, 'op', op)
+            .having((e) => e.pending.targetId, 'targetId', targetId)
+            .having((e) => e.pending.expiresAt, 'expiresAt',
+                DateTime.utc(2023, 11, 14, 22, 28, 20)));
+    GatewayClusterConnection connect(Map<String, dynamic> responses) =>
+        GatewayClusterConnection(
+          gatewayBaseUrl: 'https://gateway.example.internal/',
+          httpClient: _FakeGatewayHttpClient(responses, postStatus: 202),
+        );
+
+    test('scale', () async {
+      const id = 'deployment:platform/api';
+      final connection = connect({
+        '$cluster/workloads/deployment:platform%2Fapi/scale':
+            parked('scale', id),
+      });
+      await expectLater(
+        connection.scaleWorkload(
+            clusterId: 'remote-alpha', workloadId: id, replicas: 3),
+        awaitsApproval('scale', id),
+      );
+    });
+
+    test('restart', () async {
+      const id = 'deployment:platform/api';
+      final connection = connect({
+        '$cluster/workloads/deployment:platform%2Fapi/restart':
+            parked('restart', id),
+      });
+      await expectLater(
+        connection.restartWorkload(clusterId: 'remote-alpha', workloadId: id),
+        awaitsApproval('restart', id),
+      );
+    });
+
+    test('cordon', () async {
+      final connection = connect({
+        '$cluster/nodes/worker-1/cordon': parked('cordon', 'worker-1'),
+      });
+      await expectLater(
+        connection.setNodeSchedulable(
+            clusterId: 'remote-alpha', nodeId: 'worker-1', schedulable: false),
+        awaitsApproval('cordon', 'worker-1'),
+      );
+    });
+
+    test('drain', () async {
+      final connection = connect({
+        '$cluster/nodes/worker-1/drain': parked('drain', 'worker-1'),
+      });
+      await expectLater(
+        connection.startDrain(clusterId: 'remote-alpha', nodeId: 'worker-1'),
+        awaitsApproval('drain', 'worker-1'),
+      );
+    });
   });
 
   test('gateway drainStatus GETs the job subpath and parses progress',
@@ -744,9 +817,10 @@ final class _RecordingTransport implements KubernetesTransport {
 }
 
 final class _FakeGatewayHttpClient implements GatewayHttpClient {
-  _FakeGatewayHttpClient(this._responses);
+  _FakeGatewayHttpClient(this._responses, {this.postStatus = 200});
 
   final Map<String, dynamic> _responses;
+  final int postStatus;
   Map<String, String> lastHeaders = const {};
   final List<Uri> requested = [];
   Uri? lastPostUrl;
@@ -765,7 +839,7 @@ final class _FakeGatewayHttpClient implements GatewayHttpClient {
   }
 
   @override
-  Future<dynamic> postJson(
+  Future<GatewayResponse> postJson(
     Uri url, {
     Map<String, String> headers = const {},
     required Map<String, dynamic> body,
@@ -774,6 +848,6 @@ final class _FakeGatewayHttpClient implements GatewayHttpClient {
     lastHeaders = Map.of(headers);
     lastPostUrl = url;
     lastPostBody = Map.of(body);
-    return _responses[url.toString()];
+    return (statusCode: postStatus, body: _responses[url.toString()]);
   }
 }
