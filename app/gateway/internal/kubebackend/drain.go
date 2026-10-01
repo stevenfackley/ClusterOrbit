@@ -98,6 +98,7 @@ func (b *KubeBackend) update(jobID string, fn func(*api.DrainJob)) {
 
 // runDrain is the background worker: cordon, enumerate pods, then evict the
 // non-skipped ones respecting PodDisruptionBudgets (429 → back off and retry).
+// A node running unmanaged pods fails the job before any eviction.
 func (b *KubeBackend) runDrain(jobID, nodeID string) {
 	ctx, cancel := context.WithTimeout(context.Background(), b.drainTimeout)
 	defer cancel()
@@ -118,16 +119,29 @@ func (b *KubeBackend) runDrain(jobID, nodeID string) {
 	}
 
 	var evictable []podRef
+	var unmanaged []string
 	for _, pod := range listItems(body) {
-		ref, skip := classifyPod(pod)
+		ref, action := classifyPod(pod)
 		if ref.name == "" {
 			continue
 		}
-		if skip {
+		switch action {
+		case podSkip:
 			b.update(jobID, func(j *api.DrainJob) { j.Skipped = append(j.Skipped, ref.key()) })
-			continue
+		case podBlock:
+			unmanaged = append(unmanaged, ref.key())
+		default:
+			evictable = append(evictable, ref)
 		}
-		evictable = append(evictable, ref)
+	}
+
+	// Evicting a pod with no controller deletes it for good, so refuse the
+	// whole drain before touching anything (kubectl drain without --force).
+	// The node stays cordoned.
+	if len(unmanaged) > 0 {
+		b.failDrain(jobID, "refusing to drain: pods without a controller would be lost: "+
+			strings.Join(unmanaged, ", "))
+		return
 	}
 
 	b.update(jobID, func(j *api.DrainJob) { j.Remaining = len(evictable) })
@@ -166,10 +180,23 @@ type podRef struct {
 
 func (p podRef) key() string { return p.namespace + "/" + p.name }
 
-// classifyPod returns the pod's identity and whether drain should skip it.
-// Mirrors kubectl drain: skip DaemonSet-managed pods, mirror/static pods, and
-// already-terminal (Succeeded/Failed) pods.
-func classifyPod(pod map[string]any) (ref podRef, skip bool) {
+// podAction is what drain does with one pod on the node.
+type podAction int
+
+const (
+	podEvict podAction = iota
+	podSkip
+	podBlock
+)
+
+// classifyPod returns the pod's identity and what drain should do with it.
+// Skipped: DaemonSet-managed pods, mirror/static pods, and already-terminal
+// (Succeeded/Failed) pods, which drain leaves in place (kubectl deletes
+// terminal pods instead; they hold no running workload either way). Blocked:
+// any other pod with no controller ownerReference, which nothing would
+// recreate after eviction. Everything else is evicted. emptyDir data is not
+// protected: like kubectl --delete-emptydir-data, eviction discards it.
+func classifyPod(pod map[string]any) (ref podRef, action podAction) {
 	ref = podRef{
 		namespace: stringAt(pod, "metadata", "namespace"),
 		name:      stringAt(pod, "metadata", "name"),
@@ -178,26 +205,33 @@ func classifyPod(pod map[string]any) (ref podRef, skip bool) {
 		ref.namespace = "default"
 	}
 	if ref.name == "" {
-		return podRef{}, false
+		return podRef{}, podSkip
 	}
 
 	if _, ok := mapAt(pod, "metadata", "annotations")["kubernetes.io/config.mirror"]; ok {
-		return ref, true
+		return ref, podSkip
 	}
+	controlled := false
 	for _, owner := range listAt(pod, "metadata", "ownerReferences") {
 		m, ok := owner.(map[string]any)
 		if !ok {
 			continue
 		}
 		if stringAt(m, "kind") == "DaemonSet" {
-			return ref, true
+			return ref, podSkip
+		}
+		if boolAt(m, "controller") {
+			controlled = true
 		}
 	}
 	switch strings.ToLower(stringAt(pod, "status", "phase")) {
 	case "succeeded", "failed":
-		return ref, true
+		return ref, podSkip
 	}
-	return ref, false
+	if !controlled {
+		return ref, podBlock
+	}
+	return ref, podEvict
 }
 
 // evictPod POSTs an Eviction, retrying with exponential backoff while the API

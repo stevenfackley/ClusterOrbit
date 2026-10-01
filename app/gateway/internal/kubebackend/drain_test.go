@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -16,15 +17,15 @@ import (
 )
 
 // drainPods returns a pod list for worker-1 covering each classification:
-// two evictable (ReplicaSet-owned) pods, plus a DaemonSet pod, a mirror/static
-// pod, and an already-Succeeded pod that drain must skip.
+// two evictable (ReplicaSet-controlled) pods, plus a DaemonSet pod, a
+// mirror/static pod, and an already-Succeeded pod that drain must skip.
 func drainPods() map[string]any {
 	return list(
 		map[string]any{
 			"metadata": map[string]any{
 				"namespace":       "platform",
 				"name":            "api-1",
-				"ownerReferences": []any{map[string]any{"kind": "ReplicaSet", "name": "api-rs"}},
+				"ownerReferences": []any{map[string]any{"kind": "ReplicaSet", "name": "api-rs", "controller": true}},
 			},
 			"status": map[string]any{"phase": "Running"},
 		},
@@ -32,7 +33,7 @@ func drainPods() map[string]any {
 			"metadata": map[string]any{
 				"namespace":       "platform",
 				"name":            "api-2",
-				"ownerReferences": []any{map[string]any{"kind": "ReplicaSet", "name": "api-rs"}},
+				"ownerReferences": []any{map[string]any{"kind": "ReplicaSet", "name": "api-rs", "controller": true}},
 			},
 			"status": map[string]any{"phase": "Running"},
 		},
@@ -40,7 +41,7 @@ func drainPods() map[string]any {
 			"metadata": map[string]any{
 				"namespace":       "kube-system",
 				"name":            "ds-1",
-				"ownerReferences": []any{map[string]any{"kind": "DaemonSet", "name": "fluentd"}},
+				"ownerReferences": []any{map[string]any{"kind": "DaemonSet", "name": "fluentd", "controller": true}},
 			},
 			"status": map[string]any{"phase": "Running"},
 		},
@@ -56,7 +57,7 @@ func drainPods() map[string]any {
 			"metadata": map[string]any{
 				"namespace":       "batch",
 				"name":            "job-1",
-				"ownerReferences": []any{map[string]any{"kind": "Job", "name": "nightly"}},
+				"ownerReferences": []any{map[string]any{"kind": "Job", "name": "nightly", "controller": true}},
 			},
 			"status": map[string]any{"phase": "Succeeded"},
 		},
@@ -212,6 +213,76 @@ func TestKubeBackendDrainFailsWhenEvictionErrors(t *testing.T) {
 	}
 	if final.Error == "" {
 		t.Fatalf("expected an error message on failed drain")
+	}
+}
+
+func TestKubeBackendDrainRefusesUnmanagedPods(t *testing.T) {
+	cases := map[string]map[string]any{
+		"bare pod": {
+			"metadata": map[string]any{"namespace": "platform", "name": "bare"},
+			"status":   map[string]any{"phase": "Running"},
+		},
+		"non-controller owner": {
+			"metadata": map[string]any{
+				"namespace":       "platform",
+				"name":            "bare",
+				"ownerReferences": []any{map[string]any{"kind": "ConfigMap", "name": "cfg"}},
+			},
+			"status": map[string]any{"phase": "Running"},
+		},
+	}
+	for name, unmanaged := range cases {
+		t.Run(name, func(t *testing.T) {
+			var mu sync.Mutex
+			var patches []string
+			evictions := 0
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.Method == http.MethodPatch && r.URL.Path == "/api/v1/nodes/worker-1":
+					body, _ := io.ReadAll(r.Body)
+					mu.Lock()
+					patches = append(patches, string(body))
+					mu.Unlock()
+					_, _ = w.Write([]byte(`{"kind":"Node"}`))
+				case r.Method == http.MethodGet && r.URL.Path == "/api/v1/pods":
+					pods := drainPods()
+					pods["items"] = append(pods["items"].([]any), unmanaged)
+					_ = json.NewEncoder(w).Encode(pods)
+				case strings.HasSuffix(r.URL.Path, "/eviction"):
+					mu.Lock()
+					evictions++
+					mu.Unlock()
+					w.WriteHeader(http.StatusCreated)
+				default:
+					http.Error(w, "not routed", http.StatusNotFound)
+				}
+			}))
+			defer ts.Close()
+
+			b := newDrainBackend(t, ts.URL)
+			if _, err := b.StartDrain(context.Background(), "test", "worker-1"); err != nil {
+				t.Fatalf("StartDrain: %v", err)
+			}
+			final := waitDrain(t, b, "worker-1", "job-1")
+			if final.Phase != api.DrainPhaseFailed {
+				t.Fatalf("phase = %q, want failed", final.Phase)
+			}
+			if !strings.Contains(final.Error, "platform/bare") {
+				t.Fatalf("error should name the unmanaged pod, got %q", final.Error)
+			}
+			if len(final.Evicted) != 0 {
+				t.Fatalf("evicted = %+v, want none", final.Evicted)
+			}
+
+			mu.Lock()
+			defer mu.Unlock()
+			if evictions != 0 {
+				t.Fatalf("no pod may be evicted when one is unmanaged, got %d evictions", evictions)
+			}
+			if len(patches) != 1 || !strings.Contains(patches[0], `"unschedulable":true`) {
+				t.Fatalf("node should be cordoned once and left cordoned, patches = %q", patches)
+			}
+		})
 	}
 }
 
