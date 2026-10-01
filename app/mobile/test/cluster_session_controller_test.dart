@@ -108,6 +108,8 @@ void main() {
       expect(controller.isLoading, isFalse);
       expect(controller.isRefreshing, isFalse);
       expect(controller.snapshot, isNull);
+      expect(controller.hasNoClusters, isFalse,
+          reason: 'a failed connection is not an empty cluster list');
     });
 
     test('empty cluster list leaves state idle without crashing', () async {
@@ -126,6 +128,8 @@ void main() {
       expect(controller.isRefreshing, isFalse);
       expect(controller.isLoading, isFalse,
           reason: 'must clear loading when there is nothing to load');
+      expect(controller.loadError, isNull);
+      expect(controller.hasNoClusters, isTrue);
     });
   });
 
@@ -181,15 +185,48 @@ void main() {
       expect(controller.isRefreshing, isFalse);
     });
 
-    test('no-op when no cluster selected', () async {
+    test('no-op while bootstrap is still loading', () async {
+      final connection = _FakeConnection(profiles: const []);
       final controller = ClusterSessionController(
-        connection: _FakeConnection(profiles: const []),
+        connection: connection,
         store: _EmptyStore(),
       );
       addTearDown(controller.dispose);
 
       final error = await controller.refresh();
       expect(error, isNull);
+      expect(connection.listClustersCallCount, 0);
+    });
+
+    test('retries a failed bootstrap until it recovers', () async {
+      final profiles = SampleClusterData.profilesFor(ConnectionMode.direct);
+      var failures = 2;
+      final connection = _FakeConnection(
+        profiles: profiles,
+        listClustersOverride: () async {
+          if (failures-- > 0) throw StateError('unreachable');
+          return profiles;
+        },
+      );
+      final controller = ClusterSessionController(
+        connection: connection,
+        store: _EmptyStore(),
+      );
+      addTearDown(controller.dispose);
+
+      await controller.bootstrap();
+      expect(controller.loadError, isA<StateError>());
+      expect(controller.selectedCluster, isNull);
+
+      expect(await controller.refresh(), contains('unreachable'));
+      expect(controller.loadError, isA<StateError>());
+      expect(connection.listClustersCallCount, 2);
+
+      expect(await controller.refresh(), isNull);
+      expect(controller.loadError, isNull);
+      expect(controller.isLoading, isFalse);
+      expect(controller.selectedCluster, same(profiles.first));
+      expect(controller.snapshot, isNotNull);
     });
   });
 
@@ -413,8 +450,8 @@ void main() {
       expect(connection.loadSnapshotCallCount, equals(baseline));
     });
 
-    test('does not fire before cluster is selected', () async {
-      // Bootstrap fails → no selected cluster → timer should not refresh.
+    test('stays idle on an empty cluster list', () async {
+      // Nothing selected and no error: there is nothing to refresh or retry.
       final connection = _FakeConnection(profiles: const []);
       final controller = ClusterSessionController(
         connection: connection,
@@ -428,6 +465,34 @@ void main() {
 
       await Future<void>.delayed(const Duration(milliseconds: 80));
       expect(connection.loadSnapshotCallCount, equals(baseline));
+      expect(connection.listClustersCallCount, 1);
+    });
+
+    test('recovers from a failed bootstrap', () async {
+      final profiles = SampleClusterData.profilesFor(ConnectionMode.direct);
+      var failures = 1;
+      final connection = _FakeConnection(
+        profiles: profiles,
+        listClustersOverride: () async {
+          if (failures-- > 0) throw StateError('unreachable');
+          return profiles;
+        },
+      );
+      final controller = ClusterSessionController(
+        connection: connection,
+        store: _EmptyStore(),
+        autoRefreshInterval: const Duration(milliseconds: 20),
+      );
+      addTearDown(controller.dispose);
+
+      await controller.bootstrap();
+      expect(controller.loadError, isA<StateError>());
+
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(controller.loadError, isNull);
+      expect(controller.selectedCluster, same(profiles.first));
+      expect(controller.snapshot, isNotNull);
+      expect(controller.isLoading, isFalse);
     });
   });
 
@@ -452,9 +517,12 @@ final class _FakeConnection implements ClusterConnection {
   _FakeConnection({
     required this.profiles,
     this.loadSnapshotOverride,
+    this.listClustersOverride,
   });
 
   final List<ClusterProfile> profiles;
+  final Future<List<ClusterProfile>> Function()? listClustersOverride;
+  int listClustersCallCount = 0;
   final Future<ClusterSnapshot> Function(String clusterId)?
       loadSnapshotOverride;
   int loadSnapshotCallCount = 0;
@@ -470,7 +538,11 @@ final class _FakeConnection implements ClusterConnection {
       };
 
   @override
-  Future<List<ClusterProfile>> listClusters() async => profiles;
+  Future<List<ClusterProfile>> listClusters() {
+    listClustersCallCount++;
+    if (listClustersOverride != null) return listClustersOverride!();
+    return Future.value(profiles);
+  }
 
   @override
   Future<ClusterSnapshot> loadSnapshot(String clusterId) {

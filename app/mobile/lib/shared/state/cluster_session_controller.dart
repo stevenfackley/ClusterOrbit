@@ -29,7 +29,12 @@ class ClusterSessionController extends ChangeNotifier {
     if (autoRefreshInterval != null && autoRefreshInterval > Duration.zero) {
       _autoRefreshTimer = Timer.periodic(autoRefreshInterval, (_) {
         if (_disposed || _isLoading || _isRefreshing) return;
-        if (_selectedCluster == null) return;
+        if (_selectedCluster == null) {
+          // A failed bootstrap retries on the next tick. An empty cluster
+          // list is not an error and waits for a manual refresh.
+          if (_loadError != null) retry();
+          return;
+        }
         // Fire-and-forget; refresh() is safe to call and self-gated.
         refresh();
       });
@@ -65,6 +70,12 @@ class ClusterSessionController extends ChangeNotifier {
   bool get isLoading => _isLoading;
   bool get isRefreshing => _isRefreshing;
   DateTime? get lastRefreshedAt => _lastRefreshedAt;
+
+  /// The live cluster list came back empty: nothing to show, yet not a
+  /// failure. Tells "no clusters" apart from a failed connection, which
+  /// leaves nothing selected too but sets [loadError].
+  bool get hasNoClusters =>
+      !_isLoading && _loadError == null && _selectedCluster == null;
 
   bool _isCurrent(int gen) => !_disposed && gen == _generation;
 
@@ -111,12 +122,30 @@ class ClusterSessionController extends ChangeNotifier {
     );
   }
 
-  /// Re-fetch the snapshot for the currently selected cluster. Returns an
-  /// error string if the refresh failed and no-ops if one is already in
-  /// flight, so callers can surface a SnackBar without peeking at state.
+  /// Re-runs [bootstrap] from scratch, superseding any load in flight. The
+  /// way out of a failed bootstrap, which leaves no cluster to refresh.
+  Future<void> retry() {
+    if (_disposed) return Future.value();
+    _loadError = null;
+    _isLoading = true;
+    notifyListeners();
+    return bootstrap();
+  }
+
+  /// Re-fetch the snapshot for the currently selected cluster, or [retry]
+  /// the bootstrap when none is selected. Returns an error string if the
+  /// refresh failed and no-ops if one is already in flight, so callers can
+  /// surface a SnackBar without peeking at state.
   Future<String?> refresh() async {
+    if (_isRefreshing || _disposed) return null;
     final cluster = _selectedCluster;
-    if (cluster == null || _isRefreshing || _disposed) return null;
+    if (cluster == null) {
+      // Bootstrap is still running: let it finish rather than restart it.
+      if (_isLoading) return null;
+      await retry();
+      final error = _loadError;
+      return error == null || _disposed ? null : 'Refresh failed: $error';
+    }
 
     final gen = _generation;
     // A cluster switch meanwhile makes the result stale. The switch then
