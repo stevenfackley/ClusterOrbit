@@ -223,18 +223,14 @@ class _OrbitShellState extends State<OrbitShell> {
             titles: _titles,
             clusterCount: _session.clusters.length,
             nodeCount: _session.snapshot?.nodes.length ?? 0,
+            controlPlaneCount: _session.snapshot?.controlPlaneCount ?? 0,
+            workerCount: _session.snapshot?.workerCount ?? 0,
+            unschedulableCount: _session.snapshot?.unschedulableNodeCount ?? 0,
             alertCount: _session.snapshot?.alerts.length ?? 0,
             onChanged: (value) => setState(() => _index = value),
           ),
         ),
         Expanded(child: screens[_index]),
-        SizedBox(
-          width: 360,
-          child: _InspectorPanel(
-            snapshot: _session.snapshot,
-            isLoading: _session.isLoading,
-          ),
-        ),
       ],
     );
   }
@@ -331,6 +327,9 @@ class _SideRail extends StatelessWidget {
     required this.titles,
     required this.clusterCount,
     required this.nodeCount,
+    required this.controlPlaneCount,
+    required this.workerCount,
+    required this.unschedulableCount,
     required this.alertCount,
     required this.onChanged,
   });
@@ -339,6 +338,9 @@ class _SideRail extends StatelessWidget {
   final List<String> titles;
   final int clusterCount;
   final int nodeCount;
+  final int controlPlaneCount;
+  final int workerCount;
+  final int unschedulableCount;
   final int alertCount;
   final ValueChanged<int> onChanged;
 
@@ -350,124 +352,63 @@ class _SideRail extends StatelessWidget {
       child: Card(
         child: Padding(
           padding: const EdgeInsets.all(20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('ClusterOrbit', style: theme.textTheme.titleLarge),
-              const SizedBox(height: 8),
-              Text(
-                'Machine-first cluster visibility with guarded operations.',
-                style: theme.textTheme.bodyMedium,
-              ),
-              const SizedBox(height: 20),
-              for (var i = 0; i < titles.length; i++)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 10),
-                  child: FilledButton.tonal(
-                    onPressed: () => onChanged(i),
-                    style: FilledButton.styleFrom(
-                      minimumSize: const Size.fromHeight(52),
-                      alignment: Alignment.centerLeft,
-                      backgroundColor: i == selectedIndex
-                          ? theme.colorScheme.primary.withValues(alpha: 0.16)
-                          : Colors.white.withValues(alpha: 0.04),
-                    ),
-                    child: Text(titles[i]),
+          // Scrolls when the rail is taller than the pane (short tablets,
+          // keyboard up, large text); otherwise the chips stay pinned low.
+          child: LayoutBuilder(
+            builder: (context, box) => SingleChildScrollView(
+              child: ConstrainedBox(
+                constraints: BoxConstraints(minHeight: box.maxHeight),
+                child: IntrinsicHeight(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('ClusterOrbit', style: theme.textTheme.titleLarge),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Machine-first cluster visibility with guarded operations.',
+                        style: theme.textTheme.bodyMedium,
+                      ),
+                      const SizedBox(height: 20),
+                      for (var i = 0; i < titles.length; i++)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 10),
+                          child: FilledButton.tonal(
+                            onPressed: () => onChanged(i),
+                            style: FilledButton.styleFrom(
+                              minimumSize: const Size.fromHeight(52),
+                              alignment: Alignment.centerLeft,
+                              backgroundColor: i == selectedIndex
+                                  ? theme.colorScheme.primary
+                                      .withValues(alpha: 0.16)
+                                  : Colors.white.withValues(alpha: 0.04),
+                            ),
+                            child: Text(titles[i]),
+                          ),
+                        ),
+                      const Spacer(),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          Chip(label: Text('$clusterCount clusters')),
+                          Chip(label: Text('$nodeCount nodes')),
+                          Chip(
+                            label: Text('$controlPlaneCount control planes'),
+                          ),
+                          Chip(label: Text('$workerCount workers')),
+                          Chip(
+                            label: Text('$unschedulableCount unschedulable'),
+                          ),
+                          Chip(label: Text('$alertCount alerts')),
+                        ],
+                      ),
+                    ],
                   ),
                 ),
-              const Spacer(),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  Chip(label: Text('$clusterCount clusters')),
-                  Chip(label: Text('$nodeCount nodes')),
-                  Chip(label: Text('$alertCount alerts')),
-                ],
               ),
-            ],
+            ),
           ),
         ),
-      ),
-    );
-  }
-}
-
-class _InspectorPanel extends StatelessWidget {
-  const _InspectorPanel({
-    required this.snapshot,
-    required this.isLoading,
-  });
-
-  final ClusterSnapshot? snapshot;
-  final bool isLoading;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final controlPlanes = snapshot?.controlPlaneCount ?? 0;
-    final workers = snapshot?.workerCount ?? 0;
-    final unschedulable = snapshot?.unschedulableNodeCount ?? 0;
-
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(0, 20, 20, 20),
-      child: Card(
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('Inspector', style: theme.textTheme.titleLarge),
-              const SizedBox(height: 12),
-              Text(
-                isLoading
-                    ? 'Loading snapshot details for the selected cluster.'
-                    : 'This panel is reserved for node details, config diffs, logs, and guarded actions on tablet layouts.',
-                style: theme.textTheme.bodyMedium,
-              ),
-              const SizedBox(height: 20),
-              _MetricTile(label: 'Control planes', value: '$controlPlanes'),
-              _MetricTile(label: 'Workers', value: '$workers'),
-              _MetricTile(label: 'Unschedulable', value: '$unschedulable'),
-              const Spacer(),
-              FilledButton.icon(
-                onPressed: () {},
-                icon: const Icon(Icons.playlist_add_check_circle_outlined),
-                label: const Text('Open change preview'),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _MetricTile extends StatelessWidget {
-  const _MetricTile({
-    required this.label,
-    required this.value,
-  });
-
-  final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.04),
-        borderRadius: BorderRadius.circular(18),
-      ),
-      child: Row(
-        children: [
-          Text(label, style: theme.textTheme.bodyLarge),
-          const Spacer(),
-          Text(value, style: theme.textTheme.titleLarge),
-        ],
       ),
     );
   }
