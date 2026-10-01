@@ -7,7 +7,8 @@ import '../../core/connectivity/cluster_connection.dart';
 
 /// Polls `drainStatus` until the job reaches a terminal phase, showing live
 /// evicted/skipped/remaining counts. The poll timer is tied to the dialog
-/// lifecycle so it stops the moment the dialog is dismissed.
+/// lifecycle so it stops the moment the dialog is dismissed, and polling
+/// gives up once the job's status keeps failing.
 class DrainProgressDialog extends StatefulWidget {
   const DrainProgressDialog({
     super.key,
@@ -31,22 +32,34 @@ class DrainProgressDialog extends StatefulWidget {
 class _DrainProgressDialogState extends State<DrainProgressDialog> {
   static const _pollInterval = Duration(seconds: 2);
 
+  /// Consecutive failed polls before the job counts as lost: a gateway
+  /// restart drops its in-memory jobs, and their status then fails for good.
+  static const _maxPollErrors = 5;
+
   late DrainJob _job = widget.initialJob;
   Timer? _timer;
   Object? _pollError;
+  int _pollErrors = 0;
+
+  bool get _lost => _pollErrors >= _maxPollErrors;
 
   @override
   void initState() {
     super.initState();
-    if (!_job.phase.isTerminal) {
-      _timer = Timer.periodic(_pollInterval, (_) => unawaited(_poll()));
-    }
+    _schedulePoll();
   }
 
   @override
   void dispose() {
     _timer?.cancel();
     super.dispose();
+  }
+
+  /// One poll at a time: the next is armed only once the last is answered,
+  /// so a slow response can never land after, and undo, a newer one.
+  void _schedulePoll() {
+    if (!mounted || _job.phase.isTerminal || _lost) return;
+    _timer = Timer(_pollInterval, () => unawaited(_poll()));
   }
 
   Future<void> _poll() async {
@@ -60,20 +73,25 @@ class _DrainProgressDialogState extends State<DrainProgressDialog> {
       setState(() {
         _job = next;
         _pollError = null;
+        _pollErrors = 0;
       });
-      if (next.phase.isTerminal) _timer?.cancel();
     } catch (e) {
       if (!mounted) return;
       // Transient poll failures shouldn't kill the dialog — keep polling and
       // surface the latest error so the user knows status may be stale.
-      setState(() => _pollError = e);
+      setState(() {
+        _pollError = e;
+        _pollErrors++;
+      });
     }
+    _schedulePoll();
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final done = _job.phase.isTerminal;
+    final polling = !done && !_lost;
     return AlertDialog(
       title: Text('Draining ${widget.nodeName}'),
       content: Column(
@@ -82,7 +100,7 @@ class _DrainProgressDialogState extends State<DrainProgressDialog> {
         children: [
           Row(
             children: [
-              if (!done) ...[
+              if (polling) ...[
                 const SizedBox(
                   width: 14,
                   height: 14,
@@ -104,18 +122,24 @@ class _DrainProgressDialogState extends State<DrainProgressDialog> {
                 style: theme.textTheme.bodySmall
                     ?.copyWith(color: theme.colorScheme.error)),
           ],
-          if (_pollError != null && !done) ...[
+          if (_pollError != null && polling) ...[
             const SizedBox(height: 8),
             Text('Status update failed; retrying…',
                 style:
                     theme.textTheme.bodySmall?.copyWith(color: Colors.white54)),
+          ],
+          if (_lost) ...[
+            const SizedBox(height: 8),
+            Text('Lost track of drain job ${_job.id}',
+                style: theme.textTheme.bodySmall
+                    ?.copyWith(color: theme.colorScheme.error)),
           ],
         ],
       ),
       actions: [
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
-          child: Text(done ? 'Close' : 'Run in background'),
+          child: Text(polling ? 'Run in background' : 'Close'),
         ),
       ],
     );

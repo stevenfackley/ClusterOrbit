@@ -219,8 +219,8 @@ final class InMemorySavedConnectionStore implements SavedConnectionStore {
 
 /// Records every events load and mutation, cluster id included, so a test
 /// can assert exactly what was asked of which cluster. Mutations change
-/// nothing and succeed unless [mutationError] is set; drain is unsupported,
-/// as in [TestClusterConnection].
+/// nothing and succeed unless [mutationError] is set; drain works once
+/// [drainJob] and [onDrainStatus] are set.
 final class RecordingClusterConnection implements ClusterConnection {
   RecordingClusterConnection({this.mode = ConnectionMode.direct});
 
@@ -235,6 +235,12 @@ final class RecordingClusterConnection implements ClusterConnection {
 
   /// Answers loadEvents while set, instead of the sample events.
   Future<List<ClusterEvent>> Function()? onLoadEvents;
+
+  /// Returned by startDrain; drain is unsupported while null.
+  DrainJob? drainJob;
+
+  /// Answers drainStatus; unsupported while null.
+  Future<DrainJob> Function()? onDrainStatus;
 
   final List<ClusterProfile> _profiles =
       SampleClusterData.profilesFor(ConnectionMode.direct);
@@ -309,16 +315,23 @@ final class RecordingClusterConnection implements ClusterConnection {
   Future<DrainJob> startDrain({
     required String clusterId,
     required String nodeId,
-  }) async =>
-      throw UnsupportedError('drain not supported');
+  }) async {
+    calls.add(['startDrain', clusterId, nodeId]);
+    if (mutationError case final error?) throw error;
+    return drainJob ?? (throw UnsupportedError('drain not supported'));
+  }
 
   @override
   Future<DrainJob> drainStatus({
     required String clusterId,
     required String nodeId,
     required String jobId,
-  }) async =>
-      throw UnsupportedError('drain not supported');
+  }) async {
+    calls.add(['drainStatus', clusterId, nodeId, jobId]);
+    final onDrainStatus = this.onDrainStatus;
+    if (onDrainStatus == null) throw UnsupportedError('drain not supported');
+    return onDrainStatus();
+  }
 }
 
 /// A fresh copy of [snapshot], new objects throughout, as a refresh delivers
