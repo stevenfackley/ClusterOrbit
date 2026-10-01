@@ -1,4 +1,5 @@
 import 'package:clusterorbit_mobile/app/clusterorbit_root_gate.dart';
+import 'package:clusterorbit_mobile/core/cluster_domain/cluster_models.dart';
 import 'package:clusterorbit_mobile/core/cluster_domain/saved_connection.dart';
 import 'package:clusterorbit_mobile/core/sync_cache/snapshot_store.dart';
 import 'package:clusterorbit_mobile/core/theme/clusterorbit_theme.dart';
@@ -48,6 +49,78 @@ void main() {
     expect(store.saved.length, 1);
     expect(store.saved.first.kind, SavedConnectionKind.sample);
   });
+
+  testWidgets("the shell caches under the active connection's scope",
+      (tester) async {
+    final savedStore = _FakeSavedStore();
+    await savedStore.saveConnection(
+      const SavedConnection(
+        id: 'sample-1',
+        displayName: 'Sample',
+        kind: SavedConnectionKind.sample,
+      ),
+    );
+    final snapshotStore = _RecordingSnapshotStore();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ClusterOrbitTheme.dark(),
+        home: ClusterOrbitRootGate(
+          savedConnectionStore: savedStore,
+          snapshotStore: snapshotStore,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(snapshotStore.savedProfileIds, isNotEmpty);
+    expect(
+        snapshotStore.savedProfileIds, everyElement(startsWith('sample-1|')));
+  });
+}
+
+/// Records the profile ids the shell writes to the shared cache.
+final class _RecordingSnapshotStore implements SnapshotStore {
+  final List<String> savedProfileIds = [];
+
+  @override
+  Future<List<ClusterProfile>> loadProfiles({Duration? maxAge}) async =>
+      const [];
+
+  @override
+  Future<void> saveProfiles(List<ClusterProfile> profiles) async =>
+      savedProfileIds.addAll(profiles.map((p) => p.id));
+
+  @override
+  Future<void> deleteProfiles(Iterable<String> ids) async {}
+
+  @override
+  Future<ClusterSnapshot?> loadSnapshot(
+    String profileId, {
+    Duration? maxAge,
+  }) async =>
+      null;
+
+  @override
+  Future<void> saveSnapshot(ClusterSnapshot snapshot) async {}
+
+  @override
+  Future<List<ClusterEvent>?> loadEvents({
+    required String profileId,
+    required TopologyEntityKind kind,
+    required String objectName,
+    String? namespace,
+    Duration? maxAge,
+  }) async =>
+      null;
+
+  @override
+  Future<void> saveEvents({
+    required String profileId,
+    required TopologyEntityKind kind,
+    required String objectName,
+    String? namespace,
+    required List<ClusterEvent> events,
+  }) async {}
 }
 
 final class _FakeSavedStore implements SavedConnectionStore {

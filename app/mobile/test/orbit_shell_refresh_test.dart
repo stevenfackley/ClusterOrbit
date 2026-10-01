@@ -134,6 +134,9 @@ final class _CachedStore implements SnapshotStore {
   Future<void> saveProfiles(List<ClusterProfile> profiles) async {}
 
   @override
+  Future<void> deleteProfiles(Iterable<String> ids) async {}
+
+  @override
   Future<ClusterSnapshot?> loadSnapshot(
     String profileId, {
     Duration? maxAge,

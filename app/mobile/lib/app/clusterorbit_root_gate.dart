@@ -63,7 +63,7 @@ class _ClusterOrbitRootGateState extends State<ClusterOrbitRootGate> {
         return OrbitShell(
           key: ValueKey('shell:${active.id}'),
           connection: ClusterConnectionFactory.fromSavedConnection(active),
-          store: widget.snapshotStore,
+          store: ScopedSnapshotStore(widget.snapshotStore, active.id),
           savedConnectionStore: widget.savedConnectionStore,
           activeConnectionId: active.id,
           onConnectionsChanged: _reload,

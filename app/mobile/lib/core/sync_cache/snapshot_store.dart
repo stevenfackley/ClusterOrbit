@@ -22,10 +22,14 @@ abstract interface class SavedConnectionStore {
 }
 
 abstract interface class SnapshotStore {
-  /// Loads cached profiles. If [maxAge] is non-null, rows whose `cached_at`
-  /// is older than `now - maxAge` are treated as missing.
+  /// Loads cached profiles, most recently saved first. If [maxAge] is
+  /// non-null, rows whose `cached_at` is older than `now - maxAge` are
+  /// treated as missing.
   Future<List<ClusterProfile>> loadProfiles({Duration? maxAge});
   Future<void> saveProfiles(List<ClusterProfile> profiles);
+
+  /// Drops the cached profiles with these ids. Unknown ids are ignored.
+  Future<void> deleteProfiles(Iterable<String> ids);
 
   /// Loads the cached snapshot for [profileId]. If [maxAge] is non-null and
   /// the cached row is older than `now - maxAge`, returns null.
@@ -49,6 +53,125 @@ abstract interface class SnapshotStore {
     String? namespace,
     required List<ClusterEvent> events,
   });
+}
+
+/// A [SnapshotStore] view confined to one saved connection, wrapped around
+/// the shared store. Connections routinely reuse cluster ids (every sample
+/// connection has `dev-orbit`, many kubeconfigs a `default` context), so
+/// without it one connection would boot onto another's cache. Rows reach
+/// the shared store keyed `<connectionId>|<id>`; callers only ever see
+/// their own, unprefixed ids.
+final class ScopedSnapshotStore implements SnapshotStore {
+  ScopedSnapshotStore(this._inner, String connectionId)
+      : _prefix = scopePrefix(connectionId);
+
+  /// The id prefix of every row cached for [connectionId].
+  static String scopePrefix(String connectionId) => '$connectionId|';
+
+  final SnapshotStore _inner;
+  final String _prefix;
+
+  String _scoped(String id) => '$_prefix$id';
+
+  @override
+  Future<List<ClusterProfile>> loadProfiles({Duration? maxAge}) async => [
+        for (final profile in await _inner.loadProfiles(maxAge: maxAge))
+          if (profile.id.startsWith(_prefix))
+            _withProfileId(profile, profile.id.substring(_prefix.length)),
+      ];
+
+  /// Replaces this connection's cached cluster list instead of merging into
+  /// it, so a cluster that left the live list does not linger in the cache.
+  @override
+  Future<void> saveProfiles(List<ClusterProfile> profiles) async {
+    final keep = {for (final profile in profiles) _scoped(profile.id)};
+    final gone = [
+      for (final profile in await _inner.loadProfiles())
+        if (profile.id.startsWith(_prefix) && !keep.contains(profile.id))
+          profile.id,
+    ];
+    if (gone.isNotEmpty) await _inner.deleteProfiles(gone);
+    await _inner.saveProfiles([
+      for (final profile in profiles)
+        _withProfileId(profile, _scoped(profile.id)),
+    ]);
+  }
+
+  @override
+  Future<void> deleteProfiles(Iterable<String> ids) =>
+      _inner.deleteProfiles(ids.map(_scoped));
+
+  @override
+  Future<ClusterSnapshot?> loadSnapshot(
+    String profileId, {
+    Duration? maxAge,
+  }) async {
+    final cached = await _inner.loadSnapshot(
+      _scoped(profileId),
+      maxAge: maxAge,
+    );
+    return cached == null ? null : _withSnapshotProfileId(cached, profileId);
+  }
+
+  @override
+  Future<void> saveSnapshot(ClusterSnapshot snapshot) => _inner.saveSnapshot(
+        _withSnapshotProfileId(snapshot, _scoped(snapshot.profile.id)),
+      );
+
+  @override
+  Future<List<ClusterEvent>?> loadEvents({
+    required String profileId,
+    required TopologyEntityKind kind,
+    required String objectName,
+    String? namespace,
+    Duration? maxAge,
+  }) =>
+      _inner.loadEvents(
+        profileId: _scoped(profileId),
+        kind: kind,
+        objectName: objectName,
+        namespace: namespace,
+        maxAge: maxAge,
+      );
+
+  @override
+  Future<void> saveEvents({
+    required String profileId,
+    required TopologyEntityKind kind,
+    required String objectName,
+    String? namespace,
+    required List<ClusterEvent> events,
+  }) =>
+      _inner.saveEvents(
+        profileId: _scoped(profileId),
+        kind: kind,
+        objectName: objectName,
+        namespace: namespace,
+        events: events,
+      );
+
+  static ClusterProfile _withProfileId(ClusterProfile profile, String id) =>
+      ClusterProfile(
+        id: id,
+        name: profile.name,
+        apiServerHost: profile.apiServerHost,
+        environmentLabel: profile.environmentLabel,
+        connectionMode: profile.connectionMode,
+      );
+
+  static ClusterSnapshot _withSnapshotProfileId(
+    ClusterSnapshot snapshot,
+    String id,
+  ) =>
+      ClusterSnapshot(
+        profile: _withProfileId(snapshot.profile, id),
+        generatedAt: snapshot.generatedAt,
+        nodes: snapshot.nodes,
+        workloads: snapshot.workloads,
+        services: snapshot.services,
+        alerts: snapshot.alerts,
+        links: snapshot.links,
+      );
 }
 
 final class SqfliteSnapshotStore
@@ -125,14 +248,17 @@ final class SqfliteSnapshotStore
   @override
   Future<List<ClusterProfile>> loadProfiles({Duration? maxAge}) async {
     final db = await _db;
+    // Newest save first; within one save, rowid keeps the saved order.
+    const orderBy = 'cached_at DESC, rowid';
     final rows = maxAge == null
-        ? await db.query('cluster_profiles')
+        ? await db.query('cluster_profiles', orderBy: orderBy)
         : await db.query(
             'cluster_profiles',
             where: 'cached_at >= ?',
             whereArgs: [
               DateTime.now().millisecondsSinceEpoch - maxAge.inMilliseconds,
             ],
+            orderBy: orderBy,
           );
     final profiles = <ClusterProfile>[];
     for (final row in rows) {
@@ -162,6 +288,16 @@ final class SqfliteSnapshotStore
         },
         conflictAlgorithm: ConflictAlgorithm.replace,
       );
+    }
+    await batch.commit(noResult: true);
+  }
+
+  @override
+  Future<void> deleteProfiles(Iterable<String> ids) async {
+    final db = await _db;
+    final batch = db.batch();
+    for (final id in ids) {
+      batch.delete('cluster_profiles', where: 'id = ?', whereArgs: [id]);
     }
     await batch.commit(noResult: true);
   }
@@ -303,10 +439,21 @@ final class SqfliteSnapshotStore
     );
   }
 
+  /// Also purges everything cached under the connection's
+  /// [ScopedSnapshotStore] scope.
   @override
   Future<void> deleteConnection(String id) async {
     final db = await _db;
-    await db.delete('saved_connections', where: 'id = ?', whereArgs: [id]);
+    final prefix = ScopedSnapshotStore.scopePrefix(id);
+    final batch = db.batch()
+      ..delete('saved_connections', where: 'id = ?', whereArgs: [id])
+      ..delete('cluster_profiles',
+          where: 'instr(id, ?) = 1', whereArgs: [prefix])
+      ..delete('cluster_snapshots',
+          where: 'instr(profile_id, ?) = 1', whereArgs: [prefix])
+      ..delete('cluster_events',
+          where: 'instr(profile_id, ?) = 1', whereArgs: [prefix]);
+    await batch.commit(noResult: true);
   }
 
   @override
