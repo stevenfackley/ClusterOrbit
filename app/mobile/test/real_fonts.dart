@@ -8,12 +8,20 @@ import 'package:flutter/services.dart';
 /// for the rest of the test file.
 Future<void> loadRoboto() async {
   final loader = FontLoader('Roboto');
+  final dir = _materialFonts();
   for (final file in const [
     'roboto-regular.ttf',
     'roboto-medium.ttf',
     'roboto-bold.ttf',
   ]) {
-    final bytes = File('${_materialFonts()}/$file').readAsBytesSync();
+    final font = File('$dir/$file');
+    if (!font.existsSync()) {
+      throw StateError(
+        'Roboto not found at ${font.path}. `flutter test` does not download '
+        'the material fonts; run `flutter precache --universal` first.',
+      );
+    }
+    final bytes = font.readAsBytesSync();
     loader.addFont(Future.value(ByteData.sublistView(bytes)));
   }
   await loader.load();
