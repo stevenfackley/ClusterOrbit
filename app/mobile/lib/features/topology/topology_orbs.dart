@@ -252,7 +252,7 @@ class ServiceOrb extends StatelessWidget {
   }
 }
 
-/// One ellipsized line, so an orb's height never depends on its text.
+/// One ellipsized line, so a card's height never depends on its text.
 class _OrbLine extends StatelessWidget {
   const _OrbLine(this.text, {this.style});
 
@@ -362,6 +362,8 @@ class ModeBadge extends StatelessWidget {
         child: Text(
           label,
           style: theme.textTheme.bodyMedium?.copyWith(color: Colors.white),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
         ),
       ),
     );
@@ -387,9 +389,9 @@ class SummaryChip extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label, style: theme.textTheme.bodyMedium),
+          _OrbLine(label, style: theme.textTheme.bodyMedium),
           const SizedBox(height: 8),
-          Text(value, style: theme.textTheme.headlineSmall),
+          _OrbLine(value, style: theme.textTheme.headlineSmall),
         ],
       ),
     );

@@ -102,9 +102,10 @@ class _TopologyScreenState extends State<TopologyScreen> {
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        final isWide = constraints.maxWidth >= 1180;
-        final isLandscape =
-            MediaQuery.orientationOf(context) == Orientation.landscape;
+        // Both measured on the map's own pane, which the shell's tablet rail
+        // has already narrowed; the window size would overstate it.
+        final isWide = constraints.maxWidth >= 900;
+        final isLandscape = constraints.maxWidth > constraints.maxHeight;
         final layout = TopologyLayout.build(clusterSnapshot, filter: _filter);
 
         final workspace = TopologyWorkspace(
@@ -150,35 +151,31 @@ class _TopologyScreenState extends State<TopologyScreen> {
             ),
           );
         } else if (isLandscape) {
+          // The detail panel floats over the map's right edge instead of
+          // taking width from an already narrow workspace.
           return Padding(
             padding: const EdgeInsets.all(20),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            child: Stack(
               children: [
-                Expanded(child: workspace),
-                AnimatedSize(
-                  duration: const Duration(milliseconds: 250),
-                  curve: Curves.easeInOut,
-                  child: _selectedEntity != null
-                      ? SizedBox(
-                          width: 260,
-                          child: Padding(
-                            padding: const EdgeInsets.only(left: 16),
-                            child: SingleChildScrollView(
-                              child: EntityDetailPanel(
-                                entity: _selectedEntity!,
-                                palette: palette,
-                                onDismiss: _clearSelection,
-                                connection: widget.connection,
-                                clusterId: widget.clusterId,
-                                store: widget.store,
-                                profileId: widget.clusterId,
-                              ),
-                            ),
-                          ),
-                        )
-                      : const SizedBox.shrink(),
-                ),
+                Positioned.fill(child: workspace),
+                if (_selectedEntity != null)
+                  Positioned(
+                    top: 8,
+                    right: 8,
+                    bottom: 8,
+                    width: 260,
+                    child: SingleChildScrollView(
+                      child: EntityDetailPanel(
+                        entity: _selectedEntity!,
+                        palette: palette,
+                        onDismiss: _clearSelection,
+                        connection: widget.connection,
+                        clusterId: widget.clusterId,
+                        store: widget.store,
+                        profileId: widget.clusterId,
+                      ),
+                    ),
+                  ),
               ],
             ),
           );

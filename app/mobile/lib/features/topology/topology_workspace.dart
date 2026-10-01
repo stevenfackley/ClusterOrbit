@@ -54,7 +54,6 @@ class TopologyWorkspace extends StatelessWidget {
       clipBehavior: Clip.antiAlias,
       child: LayoutBuilder(builder: (context, constraints) {
         final compact = constraints.maxHeight < 300;
-        final canvasTop = compact ? 0.0 : 188.0;
         return Stack(
           children: [
             Positioned.fill(
@@ -81,158 +80,188 @@ class TopologyWorkspace extends StatelessWidget {
                 ),
               ),
             ),
-            if (!compact)
-              Positioned(
-                top: 22,
-                left: 24,
-                right: 24,
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('Cluster Map',
-                              style: theme.textTheme.headlineMedium),
-                          const SizedBox(height: 8),
-                          Text(
-                            'Machine-first topology canvas for ${snapshot.profile.name}. Pan and zoom to inspect placement, workload fan-out, and service attachment.',
-                            style: theme.textTheme.bodyLarge,
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 16),
-                    ModeBadge(
-                      label: '${snapshot.profile.connectionMode.label} mode',
-                      tint: palette.accentTeal,
-                    ),
-                  ],
-                ),
-              ),
-            if (!compact)
-              Positioned(
-                top: 96,
-                left: 24,
-                right: 24,
-                child: SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(
-                    children: [
-                      SummaryChip(
-                          label: 'Nodes', value: '${snapshot.nodes.length}'),
-                      const SizedBox(width: 12),
-                      SummaryChip(
-                          label: 'Workloads',
-                          value: '${snapshot.workloads.length}'),
-                      const SizedBox(width: 12),
-                      SummaryChip(
-                          label: 'Services',
-                          value: '${snapshot.services.length}'),
-                      const SizedBox(width: 12),
-                      SummaryChip(
-                          label: 'Links', value: '${snapshot.links.length}'),
-                      const SizedBox(width: 12),
-                      SummaryChip(
-                          label: 'Alerts', value: '${snapshot.alerts.length}'),
-                      const SizedBox(width: 24),
-                      TopologyFilterChip(
-                        label: 'Nodes',
-                        selected: filter.showNodes,
-                        onChanged: (v) =>
-                            onFilterChange(filter.copyWith(showNodes: v)),
-                      ),
-                      const SizedBox(width: 8),
-                      TopologyFilterChip(
-                        label: 'Workloads',
-                        selected: filter.showWorkloads,
-                        onChanged: (v) =>
-                            onFilterChange(filter.copyWith(showWorkloads: v)),
-                      ),
-                      const SizedBox(width: 8),
-                      TopologyFilterChip(
-                        label: 'Services',
-                        selected: filter.showServices,
-                        onChanged: (v) =>
-                            onFilterChange(filter.copyWith(showServices: v)),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
             Positioned.fill(
-              top: canvasTop,
-              left: 16,
-              right: 16,
-              bottom: 16,
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(28),
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    color: Colors.black.withValues(alpha: 0.14),
-                    border:
-                        Border.all(color: Colors.white.withValues(alpha: 0.06)),
-                  ),
-                  child: Stack(
-                    children: [
-                      Positioned.fill(
-                        child: CustomPaint(
-                          painter: TopologyGridPainter(
-                            gridColor: Colors.white.withValues(alpha: 0.03),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (!compact)
+                    // Header and chips take what they need, up to half the
+                    // card; past that (huge text) they scroll, not overflow.
+                    ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxHeight: constraints.maxHeight / 2,
+                      ),
+                      child: SingleChildScrollView(
+                        primary: false,
+                        padding: const EdgeInsets.fromLTRB(24, 22, 24, 12),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            _header(theme, constraints.maxWidth),
+                            const SizedBox(height: 12),
+                            _chips(),
+                          ],
+                        ),
+                      ),
+                    ),
+                  Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(28),
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.14),
+                            border: Border.all(
+                                color: Colors.white.withValues(alpha: 0.06)),
                           ),
-                        ),
-                      ),
-                      Positioned.fill(
-                        child: _TopologyCanvas(
-                          snapshot: snapshot,
-                          layout: layout,
-                          palette: palette,
-                          selectedEntity: selectedEntity,
-                          onEntityTap: onEntityTap,
-                          viewport: viewport,
-                        ),
-                      ),
-                      Positioned(
-                          left: 16,
-                          bottom: 16,
-                          child: IgnorePointer(
-                              child: LegendCard(palette: palette))),
-                      Positioned(
-                          right: 16,
-                          bottom: 16,
-                          child: IgnorePointer(
-                              child: MiniStatusCard(snapshot: snapshot))),
-                      if (showPortraitPanel && selectedEntity != null)
-                        Positioned(
-                          bottom: 0,
-                          left: 0,
-                          right: 0,
-                          child: ConstrainedBox(
-                            constraints: BoxConstraints(
-                              maxHeight: constraints.maxHeight * 0.6,
-                            ),
-                            child: SingleChildScrollView(
-                              child: EntityDetailPanel(
-                                entity: selectedEntity!,
-                                palette: palette,
-                                onDismiss: onDismiss,
-                                connection: connection,
-                                clusterId: clusterId,
-                                store: store,
-                                profileId: clusterId,
+                          child: Stack(
+                            children: [
+                              Positioned.fill(
+                                child: CustomPaint(
+                                  painter: TopologyGridPainter(
+                                    gridColor:
+                                        Colors.white.withValues(alpha: 0.03),
+                                  ),
+                                ),
                               ),
-                            ),
+                              Positioned.fill(
+                                child: _TopologyCanvas(
+                                  snapshot: snapshot,
+                                  layout: layout,
+                                  palette: palette,
+                                  selectedEntity: selectedEntity,
+                                  onEntityTap: onEntityTap,
+                                  viewport: viewport,
+                                ),
+                              ),
+                              Positioned(
+                                  left: 16,
+                                  bottom: 16,
+                                  child: IgnorePointer(
+                                      child: LegendCard(palette: palette))),
+                              Positioned(
+                                  right: 16,
+                                  bottom: 16,
+                                  child: IgnorePointer(
+                                      child:
+                                          MiniStatusCard(snapshot: snapshot))),
+                              if (showPortraitPanel && selectedEntity != null)
+                                // Up to 60% of the canvas, on its bottom edge.
+                                Positioned.fill(
+                                  child: Column(
+                                    mainAxisAlignment: MainAxisAlignment.end,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.stretch,
+                                    children: [
+                                      const Spacer(flex: 2),
+                                      Flexible(
+                                        flex: 3,
+                                        child: SingleChildScrollView(
+                                          child: EntityDetailPanel(
+                                            entity: selectedEntity!,
+                                            palette: palette,
+                                            onDismiss: onDismiss,
+                                            connection: connection,
+                                            clusterId: clusterId,
+                                            store: store,
+                                            profileId: clusterId,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                            ],
                           ),
                         ),
-                    ],
+                      ),
+                    ),
                   ),
-                ),
+                ],
               ),
             ),
           ],
         );
       }),
+    );
+  }
+
+  Widget _header(ThemeData theme, double width) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Cluster Map',
+                style: theme.textTheme.headlineMedium,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              // Too long to be worth its height on narrow cards.
+              if (width >= 600) ...[
+                const SizedBox(height: 8),
+                Text(
+                  'Machine-first topology canvas for ${snapshot.profile.name}. Pan and zoom to inspect placement, workload fan-out, and service attachment.',
+                  style: theme.textTheme.bodyLarge,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ],
+          ),
+        ),
+        const SizedBox(width: 16),
+        // Natural width, capped so the title keeps most of the row.
+        ConstrainedBox(
+          constraints: BoxConstraints(maxWidth: width * 0.4),
+          child: ModeBadge(
+            label: '${snapshot.profile.connectionMode.label} mode',
+            tint: palette.accentTeal,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _chips() {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        children: [
+          SummaryChip(label: 'Nodes', value: '${snapshot.nodes.length}'),
+          const SizedBox(width: 12),
+          SummaryChip(
+              label: 'Workloads', value: '${snapshot.workloads.length}'),
+          const SizedBox(width: 12),
+          SummaryChip(label: 'Services', value: '${snapshot.services.length}'),
+          const SizedBox(width: 12),
+          SummaryChip(label: 'Links', value: '${snapshot.links.length}'),
+          const SizedBox(width: 12),
+          SummaryChip(label: 'Alerts', value: '${snapshot.alerts.length}'),
+          const SizedBox(width: 24),
+          TopologyFilterChip(
+            label: 'Nodes',
+            selected: filter.showNodes,
+            onChanged: (v) => onFilterChange(filter.copyWith(showNodes: v)),
+          ),
+          const SizedBox(width: 8),
+          TopologyFilterChip(
+            label: 'Workloads',
+            selected: filter.showWorkloads,
+            onChanged: (v) => onFilterChange(filter.copyWith(showWorkloads: v)),
+          ),
+          const SizedBox(width: 8),
+          TopologyFilterChip(
+            label: 'Services',
+            selected: filter.showServices,
+            onChanged: (v) => onFilterChange(filter.copyWith(showServices: v)),
+          ),
+        ],
+      ),
     );
   }
 }

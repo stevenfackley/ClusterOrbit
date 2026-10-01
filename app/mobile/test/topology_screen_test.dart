@@ -3,7 +3,9 @@ import 'package:clusterorbit_mobile/core/connectivity/sample_cluster_data.dart';
 import 'package:clusterorbit_mobile/core/theme/clusterorbit_theme.dart';
 import 'package:clusterorbit_mobile/features/topology/topology_layout.dart';
 import 'package:clusterorbit_mobile/features/topology/topology_orbs.dart';
+import 'package:clusterorbit_mobile/features/topology/topology_panels.dart';
 import 'package:clusterorbit_mobile/features/topology/topology_screen.dart';
+import 'package:clusterorbit_mobile/features/topology/topology_workspace.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -51,6 +53,35 @@ Future<void> panUntilHitTestable(WidgetTester tester, Finder target) async {
     await gesture.up();
     await tester.pumpAndSettle();
   }
+}
+
+/// Every part of the workspace header (title, description, badge, chips)
+/// ends above the map viewport.
+void expectHeaderAboveCanvas(WidgetTester tester) {
+  final canvasTop = tester.getRect(find.byType(InteractiveViewer)).top;
+  final parts = [
+    find.descendant(
+      of: find.byType(TopologyWorkspace),
+      matching: find.text('Cluster Map'),
+    ),
+    find.textContaining('Machine-first topology canvas'),
+    find.byType(ModeBadge),
+    find.byType(SummaryChip),
+    find.byType(TopologyFilterChip),
+  ];
+  for (final part in parts) {
+    for (final element in part.evaluate()) {
+      final box = element.renderObject! as RenderBox;
+      final bottom = box.localToGlobal(Offset(0, box.size.height)).dy;
+      expect(bottom, lessThanOrEqualTo(canvasTop), reason: '${element.widget}');
+    }
+  }
+}
+
+Future<void> showPhoneMap(WidgetTester tester) async {
+  final toggle = find.byKey(const ValueKey('phone-view-toggle'));
+  await tester.tap(find.descendant(of: toggle, matching: find.text('Map')));
+  await tester.pumpAndSettle();
 }
 
 void main() {
@@ -122,7 +153,9 @@ void main() {
 
     // Find workload by its orb subtitle (kind / namespace) to avoid
     // ambiguity with the service also named service-1
-    await tester.tap(find.text('Deployment / platform').first);
+    final workload = find.text('Deployment / platform').first;
+    await panUntilHitTestable(tester, workload);
+    await tester.tap(workload);
     await tester.pumpAndSettle();
 
     // Namespace label only appears in workload and service detail panels
@@ -166,6 +199,80 @@ void main() {
     expectSize(NodeOrb, OrbMetrics.nodeWidth);
     expectSize(WorkloadOrb, OrbMetrics.workloadWidth);
     expectSize(ServiceOrb, OrbMetrics.serviceWidth);
+
+    await resetTestSurface(tester);
+  });
+
+  // ── breakpoints and header layout ─────────────────────────────────────
+
+  for (final size in const [Size(1280, 800), Size(1366, 1024)]) {
+    testWidgets(
+        'shell at ${size.width.toInt()}x${size.height.toInt()}: '
+        'sidebar layout, detail replaces alerts', (tester) async {
+      await pumpClusterOrbitApp(tester, size: size);
+
+      expect(find.byType(TopologySidebar), findsOneWidget);
+      expect(find.text('Priority Alerts'), findsOneWidget);
+      expectHeaderAboveCanvas(tester);
+
+      await tester.tap(find.text('cp-1.dev-orbit'));
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+      expect(find.text('Priority Alerts'), findsNothing);
+      expect(find.text('K8s Version'), findsOneWidget);
+      final cordon = find.text('Cordon');
+      await tester.ensureVisible(cordon);
+      await tester.pumpAndSettle();
+      expect(cordon.hitTestable(), findsOneWidget);
+      expectHeaderAboveCanvas(tester);
+      expect(tester.takeException(), isNull);
+
+      await resetTestSurface(tester);
+    });
+  }
+
+  testWidgets('phone map at 390x700: header ends above the canvas',
+      (tester) async {
+    await pumpTopologyScreen(tester, size: const Size(390, 700));
+    await showPhoneMap(tester);
+
+    expect(find.byType(TopologySidebar), findsNothing);
+    expectHeaderAboveCanvas(tester);
+    // Too narrow for the long description.
+    expect(find.textContaining('Machine-first topology canvas'), findsNothing);
+
+    await tester.tap(find.text('cp-1.dev-orbit'));
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('Dismiss').hitTestable(), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    await resetTestSurface(tester);
+  });
+
+  testWidgets('phone map survives text scale 2.0', (tester) async {
+    tester.platformDispatcher.textScaleFactorTestValue = 2.0;
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+    await pumpTopologyScreen(tester, size: const Size(390, 600));
+    await showPhoneMap(tester);
+
+    expect(tester.takeException(), isNull);
+    expect(find.byType(InteractiveViewer), findsOneWidget);
+
+    await resetTestSurface(tester);
+  });
+
+  testWidgets('landscape detail floats over the map instead of shrinking it',
+      (tester) async {
+    await pumpClusterOrbitApp(tester, size: const Size(844, 390));
+    final before = tester.getRect(find.byType(InteractiveViewer));
+
+    await tester.tap(find.text('cp-1.dev-orbit'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('K8s Version'), findsOneWidget);
+    expect(tester.getRect(find.byType(InteractiveViewer)), before);
+    expect(tester.takeException(), isNull);
 
     await resetTestSurface(tester);
   });
@@ -287,7 +394,9 @@ void main() {
     );
 
     // Tap a Deployment (service-1 via its kind/namespace subtitle)
-    await tester.tap(find.text('Deployment / platform').first);
+    final workload = find.text('Deployment / platform').first;
+    await panUntilHitTestable(tester, workload);
+    await tester.tap(workload);
     await tester.pumpAndSettle();
 
     expect(find.text('Scale'), findsOneWidget);
