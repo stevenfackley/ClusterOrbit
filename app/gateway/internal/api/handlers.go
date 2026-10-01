@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"net/url"
 	"runtime/debug"
 	"strconv"
 	"strings"
@@ -179,18 +180,26 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, clusters)
 }
 
-// handleClusterScoped dispatches /v1/clusters/{id}/{subpath}.
+// handleClusterScoped dispatches /v1/clusters/{id}/{subpath}. The cluster ID
+// is cut from the escaped path because it may contain "/" (EKS context names
+// are cluster ARNs, arn:aws:eks:…:cluster/prod), which clients send as %2F.
+// The two halves are unescaped separately.
 func (s *Server) handleClusterScoped(w http.ResponseWriter, r *http.Request) {
-	rest := strings.TrimPrefix(r.URL.Path, pathRoot+"/")
-	if rest == "" {
+	rest, ok := strings.CutPrefix(r.URL.EscapedPath(), pathRoot+"/")
+	if !ok || rest == "" {
 		writeError(w, http.StatusNotFound, "not found")
 		return
 	}
-	parts := strings.SplitN(rest, "/", 2)
-	clusterID := parts[0]
-	subpath := ""
-	if len(parts) == 2 {
-		subpath = parts[1]
+	rawCluster, rawSubpath, _ := strings.Cut(rest, "/")
+	clusterID, err := url.PathUnescape(rawCluster)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	subpath, err := url.PathUnescape(rawSubpath)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "not found")
+		return
 	}
 
 	// Mutations (POST) are routed before the GET guard.

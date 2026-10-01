@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"sync"
 	"testing"
 )
@@ -96,6 +97,57 @@ func TestSnapshotUnknownCluster(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
+// anyClusterBackend is a recordingBackend that serves a snapshot for any
+// cluster ID.
+type anyClusterBackend struct{ *recordingBackend }
+
+func (b anyClusterBackend) LoadSnapshot(_ context.Context, clusterID string) (ClusterSnapshot, error) {
+	return ClusterSnapshot{Profile: ClusterProfile{ID: clusterID}}, nil
+}
+
+// EKS kubeconfigs name contexts after the cluster ARN, which contains "/".
+// Clients send it as one %2F-escaped segment.
+func TestClusterIDWithSlashRoutes(t *testing.T) {
+	const arn = "arn:aws:eks:us-east-1:111122223333:cluster/prod"
+	rb := &recordingBackend{ClusterBackend: NewSampleBackend()}
+	s := newApprovalServer(rb, OpRestart)
+	s.Backend = anyClusterBackend{rb}
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+	base := ts.URL + "/v1/clusters/" + url.PathEscape(arn)
+	workload := url.PathEscape("deployment:platform/api")
+
+	resp := getAs(t, base+"/snapshot", "tok-a")
+	var snap ClusterSnapshot
+	err := json.NewDecoder(resp.Body).Decode(&snap)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || err != nil || snap.Profile.ID != arn {
+		t.Fatalf("snapshot status = %d err = %v profile = %q", resp.StatusCode, err, snap.Profile.ID)
+	}
+
+	resp = postAs(t, base+"/workloads/"+workload+"/scale", "tok-a", `{"replicas":3}`)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || rb.gotCluster != arn || rb.gotWorkload != "deployment:platform/api" {
+		t.Fatalf("scale status = %d cluster = %q workload = %q", resp.StatusCode, rb.gotCluster, rb.gotWorkload)
+	}
+
+	park := decodePending(t, postAs(t, base+"/workloads/"+workload+"/restart", "tok-a", ""))
+	if park.ClusterID != arn {
+		t.Fatalf("parked clusterId = %q, want %q", park.ClusterID, arn)
+	}
+	resp = getAs(t, base+"/approvals", "tok-b")
+	var list []PendingRequest
+	err = json.NewDecoder(resp.Body).Decode(&list)
+	resp.Body.Close()
+	if err != nil || len(list) != 1 || list[0].ID != park.ID {
+		t.Fatalf("approvals list = %+v err = %v", list, err)
+	}
+	done := decodePending(t, postAs(t, base+"/approvals/"+park.ID+"/approve", "tok-b", ""))
+	if done.Phase != ApprovalPhaseSucceeded || rb.restartCalls != 1 || rb.gotCluster != arn {
+		t.Fatalf("approve = %+v restartCalls = %d cluster = %q", done, rb.restartCalls, rb.gotCluster)
 	}
 }
 
