@@ -267,7 +267,7 @@ class TopologyWorkspace extends StatelessWidget {
 }
 
 /// The pan/zoom viewer over the full-size canvas of links and orbs.
-class _TopologyCanvas extends StatelessWidget {
+class _TopologyCanvas extends StatefulWidget {
   const _TopologyCanvas({
     required this.snapshot,
     required this.layout,
@@ -285,7 +285,49 @@ class _TopologyCanvas extends StatelessWidget {
   final TransformationController viewport;
 
   @override
+  State<_TopologyCanvas> createState() => _TopologyCanvasState();
+}
+
+class _TopologyCanvasState extends State<_TopologyCanvas> {
+  /// Labels show from 0.9x up. Only a flip rebuilds the orbs; every other
+  /// pan/zoom frame leaves them alone (ValueNotifier skips equal values).
+  late final ValueNotifier<bool> _showLabels;
+
+  bool _labelsVisible() => widget.viewport.value.getMaxScaleOnAxis() >= 0.9;
+
+  void _onViewportChanged() => _showLabels.value = _labelsVisible();
+
+  @override
+  void initState() {
+    super.initState();
+    _showLabels = ValueNotifier(_labelsVisible());
+    widget.viewport.addListener(_onViewportChanged);
+  }
+
+  @override
+  void didUpdateWidget(_TopologyCanvas oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.viewport != widget.viewport) {
+      oldWidget.viewport.removeListener(_onViewportChanged);
+      widget.viewport.addListener(_onViewportChanged);
+      _onViewportChanged();
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.viewport.removeListener(_onViewportChanged);
+    _showLabels.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final layout = widget.layout;
+    final snapshot = widget.snapshot;
+    final palette = widget.palette;
+    final selectedEntity = widget.selectedEntity;
+    final onEntityTap = widget.onEntityTap;
     return LayoutBuilder(builder: (context, box) {
       if (box.biggest.isEmpty) return const SizedBox.shrink();
       // Allow zooming out until the whole canvas fits, but open at 1:1: on a
@@ -305,7 +347,7 @@ class _TopologyCanvas extends StatelessWidget {
       );
 
       return InteractiveViewer(
-        transformationController: viewport,
+        transformationController: widget.viewport,
         // The canvas keeps its own size; the viewport pans over it.
         constrained: false,
         minScale: minScale,
@@ -314,68 +356,73 @@ class _TopologyCanvas extends StatelessWidget {
         child: SizedBox(
           width: layout.canvasWidth,
           height: layout.canvasHeight,
-          child: ListenableBuilder(
-            listenable: viewport,
-            builder: (context, _) {
-              final scale = viewport.value.getMaxScaleOnAxis();
-              final showLabels = scale >= 0.9;
-              // Orbs have a fixed height; cap text so it fits (see
-              // OrbMetrics.maxTextScale).
-              return MediaQuery.withClampedTextScaling(
-                maxScaleFactor: OrbMetrics.maxTextScale,
-                child: Stack(
-                  children: [
-                    Positioned.fill(
-                      child: CustomPaint(
-                        painter: TopologyLinkPainter(
-                          layout: layout,
-                          accent: palette.accentCyan,
-                        ),
+          // Orbs have a fixed height; cap text so it fits (see
+          // OrbMetrics.maxTextScale).
+          child: MediaQuery.withClampedTextScaling(
+            maxScaleFactor: OrbMetrics.maxTextScale,
+            child: Stack(
+              children: [
+                Positioned.fill(
+                  // Its own layer: pan/zoom frames reuse the recorded links.
+                  child: RepaintBoundary(
+                    child: CustomPaint(
+                      painter: TopologyLinkPainter(
+                        layout: layout,
+                        accent: palette.accentCyan,
                       ),
                     ),
-                    for (final node in snapshot.nodes)
-                      if (layout.visibleNodeIds.contains(node.id))
-                        CanvasNode(
-                          offset: layout.positions[node.id]!,
-                          onTap: () => onEntityTap(node),
-                          selected: selectedEntity == node,
-                          child: NodeOrb(
-                            node: node,
-                            palette: palette,
-                            selected: selectedEntity == node,
-                            showLabels: showLabels,
-                          ),
-                        ),
-                    for (final workload in snapshot.workloads)
-                      if (layout.visibleWorkloadIds.contains(workload.id))
-                        CanvasNode(
-                          offset: layout.positions[workload.id]!,
-                          onTap: () => onEntityTap(workload),
-                          selected: selectedEntity == workload,
-                          child: WorkloadOrb(
-                            workload: workload,
-                            palette: palette,
-                            selected: selectedEntity == workload,
-                            showLabels: showLabels,
-                          ),
-                        ),
-                    for (final service in snapshot.services)
-                      if (layout.visibleServiceIds.contains(service.id))
-                        CanvasNode(
-                          offset: layout.positions[service.id]!,
-                          onTap: () => onEntityTap(service),
-                          selected: selectedEntity == service,
-                          child: ServiceOrb(
-                            service: service,
-                            palette: palette,
-                            selected: selectedEntity == service,
-                            showLabels: showLabels,
-                          ),
-                        ),
-                  ],
+                  ),
                 ),
-              );
-            },
+                Positioned.fill(
+                  child: ValueListenableBuilder<bool>(
+                    valueListenable: _showLabels,
+                    builder: (context, showLabels, _) => Stack(
+                      children: [
+                        for (final node in snapshot.nodes)
+                          if (layout.visibleNodeIds.contains(node.id))
+                            CanvasNode(
+                              offset: layout.positions[node.id]!,
+                              onTap: () => onEntityTap(node),
+                              selected: selectedEntity == node,
+                              child: NodeOrb(
+                                node: node,
+                                palette: palette,
+                                selected: selectedEntity == node,
+                                showLabels: showLabels,
+                              ),
+                            ),
+                        for (final workload in snapshot.workloads)
+                          if (layout.visibleWorkloadIds.contains(workload.id))
+                            CanvasNode(
+                              offset: layout.positions[workload.id]!,
+                              onTap: () => onEntityTap(workload),
+                              selected: selectedEntity == workload,
+                              child: WorkloadOrb(
+                                workload: workload,
+                                palette: palette,
+                                selected: selectedEntity == workload,
+                                showLabels: showLabels,
+                              ),
+                            ),
+                        for (final service in snapshot.services)
+                          if (layout.visibleServiceIds.contains(service.id))
+                            CanvasNode(
+                              offset: layout.positions[service.id]!,
+                              onTap: () => onEntityTap(service),
+                              selected: selectedEntity == service,
+                              child: ServiceOrb(
+                                service: service,
+                                palette: palette,
+                                selected: selectedEntity == service,
+                                showLabels: showLabels,
+                              ),
+                            ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       );

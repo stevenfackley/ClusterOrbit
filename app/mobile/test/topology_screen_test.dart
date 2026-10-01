@@ -277,6 +277,41 @@ void main() {
     await resetTestSurface(tester);
   });
 
+  // ── pan / zoom ─────────────────────────────────────────────────────────
+
+  testWidgets('panning leaves the orbs alone; zooming out hides labels',
+      (tester) async {
+    await pumpClusterOrbitApp(tester, size: const Size(1280, 800));
+    final viewer = find.byType(InteractiveViewer);
+    NodeOrb firstOrb() => tester.widget<NodeOrb>(find.byType(NodeOrb).first);
+    final before = firstOrb();
+    expect(before.showLabels, isTrue);
+
+    final pan = await tester.startGesture(tester.getCenter(viewer));
+    await pan.moveBy(const Offset(-40, -40));
+    await pan.moveBy(const Offset(-40, -40));
+    await tester.pump(const Duration(milliseconds: 300));
+    await pan.up();
+    await tester.pumpAndSettle();
+    // Same widget instance: the pan never rebuilt the orb layer.
+    expect(identical(firstOrb(), before), isTrue);
+
+    final center = tester.getCenter(viewer);
+    final left = await tester.startGesture(center - const Offset(120, 0));
+    final right = await tester.startGesture(center + const Offset(120, 0));
+    for (var i = 0; i < 4; i++) {
+      await left.moveBy(const Offset(25, 0));
+      await right.moveBy(const Offset(-25, 0));
+      await tester.pump();
+    }
+    await left.up();
+    await right.up();
+    await tester.pumpAndSettle();
+    expect(firstOrb().showLabels, isFalse);
+
+    await resetTestSurface(tester);
+  });
+
   // ── phone portrait (390×844) ────────────────────────────────────────────
 
   testWidgets('phone portrait: tapping a node shows bottom panel',
