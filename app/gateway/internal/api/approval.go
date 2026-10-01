@@ -19,9 +19,10 @@ const (
 )
 
 // Approval phase values. A request starts Pending and ends in exactly one
-// terminal state. "approved" is a transient internal phase — execution is
-// synchronous, so the park/poll path never observes it. These strings cross
-// the wire; don't rename without updating clients.
+// terminal state. "approved" is transient but observable: GET /approvals
+// returns it while the approved mutation is still executing, so clients must
+// treat it as non-terminal. These strings cross the wire; don't rename
+// without updating clients.
 const (
 	ApprovalPhasePending   = "pending"
 	ApprovalPhaseApproved  = "approved"

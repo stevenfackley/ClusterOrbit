@@ -92,18 +92,13 @@ func (p *NodePolicy) EvaluateDrain(nodeID string) string {
 
 // evaluateNode runs the shared allow/deny check for node mutations. Returns ""
 // when nodeID may be mutated, otherwise a human-readable reason surfaced in
-// both the HTTP 403 and the audit record.
-//
-// TODO(you): implement the decision. The failing tests in policy_test.go
-// (TestNodePolicyEvaluateCordon / TestNodePolicyEvaluateDrain) are the spec.
-// Evaluate in this order so the most restrictive rule wins:
+// both the HTTP 403 and the audit record. Rules apply in this order, so the
+// most restrictive one wins:
 //
 //  1. empty nodeID                                  → "node id is empty"
 //  2. nodeID in p.ProtectedNodes                    → `node %q is protected`
 //  3. p.AllowedNodes non-empty AND nodeID not in it → `node %q not in allowlist`
 //  4. otherwise                                     → "" (allowed)
-//
-// containsString(haystack, needle) is defined just below this function.
 func (p *NodePolicy) evaluateNode(nodeID string) string {
 	if nodeID == "" {
 		return "node id is empty"
