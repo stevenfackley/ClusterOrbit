@@ -563,6 +563,107 @@ current-context: prod-admin
       'spec': {'unschedulable': true}
     });
   });
+
+  test('direct mutations keep a path-prefixed API server and escape names',
+      () async {
+    const cluster = KubeconfigResolvedCluster(
+      profile: ClusterProfile(
+        id: 'x',
+        name: 'x',
+        apiServerHost: 'rancher.example.com',
+        environmentLabel: 'x',
+        connectionMode: ConnectionMode.direct,
+      ),
+      server: 'https://rancher.example.com/k8s/clusters/c-abc12',
+      namespace: null,
+      auth: KubeconfigAuth(
+        bearerToken: null,
+        basicUsername: null,
+        basicPassword: null,
+        clientCertificateData: null,
+        clientKeyData: null,
+      ),
+      tls: KubeconfigTlsConfig(
+        insecureSkipTlsVerify: false,
+        certificateAuthorityData: null,
+      ),
+    );
+    const prefix = 'https://rancher.example.com/k8s/clusters/c-abc12';
+    final transport = _RecordingTransport();
+    final scaler = KubernetesWorkloadScaler(transport: transport);
+
+    await scaler.scaleWorkload(
+      cluster: cluster,
+      workloadId: 'deployment:platform/api',
+      replicas: 2,
+    );
+    expect(transport.lastUri.toString(),
+        '$prefix/apis/apps/v1/namespaces/platform/deployments/api/scale');
+
+    await scaler.restartWorkload(
+      cluster: cluster,
+      workloadId: 'statefulSet:platform/db?x',
+    );
+    expect(transport.lastUri.toString(),
+        '$prefix/apis/apps/v1/namespaces/platform/statefulsets/db%3Fx');
+
+    await KubernetesNodeCordoner(transport: transport).setSchedulable(
+      cluster: cluster,
+      nodeId: 'worker-1',
+      schedulable: false,
+    );
+    expect(transport.lastUri.toString(), '$prefix/api/v1/nodes/worker-1');
+  });
+
+  test('gateway connection keeps the base path and escapes cluster ids',
+      () async {
+    const base = 'https://gateway.example.internal/clusterorbit';
+    const cluster = '$base/v1/clusters/ctx%231';
+    final fake = _FakeGatewayHttpClient({
+      '$cluster/snapshot': {
+        'profile': {
+          'id': 'ctx#1',
+          'name': 'ctx#1',
+          'apiServerHost': 'gateway.example.internal',
+          'environmentLabel': 'Production',
+          'connectionMode': 'gateway',
+        },
+        'generatedAt': 1700000000000,
+      },
+      '$cluster/events?kind=node&objectName=worker-1&limit=5': <dynamic>[],
+      '$cluster/nodes/worker-1/drain/job-1': {'id': 'job-1'},
+    });
+    final connection = GatewayClusterConnection(
+      gatewayBaseUrl: base,
+      httpClient: fake,
+    );
+
+    await connection.loadSnapshot('ctx#1');
+    await connection.loadEvents(
+      clusterId: 'ctx#1',
+      kind: TopologyEntityKind.node,
+      objectName: 'worker-1',
+    );
+    await connection.drainStatus(
+      clusterId: 'ctx#1',
+      nodeId: 'worker-1',
+      jobId: 'job-1',
+    );
+    await connection.scaleWorkload(
+      clusterId: 'ctx#1',
+      workloadId: 'deployment:platform/api',
+      replicas: 2,
+    );
+
+    expect(fake.lastPostUrl.toString(),
+        '$cluster/workloads/deployment:platform%2Fapi/scale');
+    expect(fake.requested, hasLength(4));
+    for (final url in fake.requested) {
+      expect(url.hasFragment, isFalse);
+      expect(url.pathSegments.take(4),
+          ['clusterorbit', 'v1', 'clusters', 'ctx#1']);
+    }
+  });
 }
 
 Map<String, dynamic> _listResponse(List<Map<String, dynamic>> items) => {
@@ -621,12 +722,14 @@ final class _FakeGatewayHttpClient implements GatewayHttpClient {
 
   final Map<String, dynamic> _responses;
   Map<String, String> lastHeaders = const {};
+  final List<Uri> requested = [];
   Uri? lastPostUrl;
   Map<String, dynamic>? lastPostBody;
 
   @override
   Future<dynamic> getJson(Uri url,
       {Map<String, String> headers = const {}}) async {
+    requested.add(url);
     lastHeaders = Map.of(headers);
     final key = url.toString();
     if (!_responses.containsKey(key)) {
@@ -641,6 +744,7 @@ final class _FakeGatewayHttpClient implements GatewayHttpClient {
     Map<String, String> headers = const {},
     required Map<String, dynamic> body,
   }) async {
+    requested.add(url);
     lastHeaders = Map.of(headers);
     lastPostUrl = url;
     lastPostBody = Map.of(body);

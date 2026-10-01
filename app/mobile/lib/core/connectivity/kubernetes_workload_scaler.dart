@@ -30,9 +30,16 @@ final class KubernetesWorkloadScaler {
       throw UnsupportedWorkloadKindException(parsed.kind);
     }
 
-    final baseUri = Uri.parse(cluster.server);
-    final path =
-        '/apis/apps/v1/namespaces/${parsed.namespace}/$resource/${parsed.name}/scale';
+    final uri = kubeApiUri(cluster.server, [
+      'apis',
+      'apps',
+      'v1',
+      'namespaces',
+      parsed.namespace,
+      resource,
+      parsed.name,
+      'scale',
+    ]);
     final body = utf8.encode(
       jsonEncode({
         'spec': {'replicas': replicas}
@@ -41,7 +48,7 @@ final class KubernetesWorkloadScaler {
 
     await _transport.patchJson(
       KubernetesRequest(
-        uri: baseUri.resolve(path),
+        uri: uri,
         auth: cluster.auth,
         tls: cluster.tls,
       ),
@@ -64,9 +71,15 @@ final class KubernetesWorkloadScaler {
       throw UnsupportedWorkloadKindException(parsed.kind);
     }
 
-    final baseUri = Uri.parse(cluster.server);
-    final path =
-        '/apis/apps/v1/namespaces/${parsed.namespace}/$resource/${parsed.name}';
+    final uri = kubeApiUri(cluster.server, [
+      'apis',
+      'apps',
+      'v1',
+      'namespaces',
+      parsed.namespace,
+      resource,
+      parsed.name,
+    ]);
     final timestamp = (now ?? DateTime.now()).toUtc().toIso8601String();
     final body = utf8.encode(
       jsonEncode({
@@ -84,7 +97,7 @@ final class KubernetesWorkloadScaler {
 
     await _transport.patchJson(
       KubernetesRequest(
-        uri: baseUri.resolve(path),
+        uri: uri,
         auth: cluster.auth,
         tls: cluster.tls,
       ),
@@ -112,8 +125,7 @@ final class KubernetesNodeCordoner {
     if (nodeId.isEmpty) {
       throw ArgumentError.value(nodeId, 'nodeId', 'must not be empty');
     }
-    final baseUri = Uri.parse(cluster.server);
-    final path = '/api/v1/nodes/$nodeId';
+    final uri = kubeApiUri(cluster.server, ['api', 'v1', 'nodes', nodeId]);
     final body = utf8.encode(
       jsonEncode({
         'spec': {'unschedulable': !schedulable}
@@ -122,7 +134,7 @@ final class KubernetesNodeCordoner {
 
     await _transport.patchJson(
       KubernetesRequest(
-        uri: baseUri.resolve(path),
+        uri: uri,
         auth: cluster.auth,
         tls: cluster.tls,
       ),

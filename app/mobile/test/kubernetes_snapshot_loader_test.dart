@@ -396,6 +396,53 @@ void main() {
         snapshot.alerts.where((a) => a.scope == 'Workload health').toList();
     expect(workloadAlerts.map((a) => a.id), ['workload-${failed.id}']);
   });
+
+  test('snapshot loader keeps a path-prefixed API server (Rancher proxy)',
+      () async {
+    const base = 'https://rancher.example.com/k8s/clusters/c-abc12';
+    final loader = KubernetesSnapshotLoader(
+      transport: _FakeKubernetesTransport({
+        for (final path in [
+          'api/v1/nodes',
+          'api/v1/pods',
+          'api/v1/services',
+          'apis/apps/v1/deployments',
+          'apis/apps/v1/daemonsets',
+          'apis/apps/v1/statefulsets',
+          'apis/batch/v1/jobs',
+          'apis/apps/v1/replicasets',
+        ])
+          '$base/$path': _listResponse([]),
+      }),
+    );
+
+    final snapshot = await loader.loadSnapshot(
+      const KubeconfigResolvedCluster(
+        profile: ClusterProfile(
+          id: 'c',
+          name: 'c',
+          apiServerHost: 'rancher.example.com',
+          environmentLabel: 'Dev',
+          connectionMode: ConnectionMode.direct,
+        ),
+        server: '$base/',
+        namespace: null,
+        auth: KubeconfigAuth(
+          bearerToken: 'abc123',
+          basicUsername: null,
+          basicPassword: null,
+          clientCertificateData: null,
+          clientKeyData: null,
+        ),
+        tls: KubeconfigTlsConfig(
+          insecureSkipTlsVerify: false,
+          certificateAuthorityData: null,
+        ),
+      ),
+    );
+
+    expect(snapshot.nodes, isEmpty);
+  });
 }
 
 Map<String, dynamic> _listResponse(List<Map<String, dynamic>> items) => {

@@ -3,6 +3,24 @@ import 'dart:io';
 
 import 'kubeconfig_repository.dart';
 
+/// Builds a Kubernetes API URL by appending [segments] to [server]'s own
+/// path, so a path-routed API server (Rancher's `/k8s/clusters/<id>`, an
+/// auth proxy) keeps its prefix. Each segment is percent-encoded.
+Uri kubeApiUri(
+  String server,
+  List<String> segments, {
+  Map<String, String>? queryParameters,
+}) {
+  final base = Uri.parse(server);
+  return base.replace(
+    pathSegments: [
+      ...base.pathSegments.where((s) => s.isNotEmpty),
+      ...segments,
+    ],
+    queryParameters: queryParameters,
+  );
+}
+
 final class KubernetesRequest {
   const KubernetesRequest({
     required this.uri,

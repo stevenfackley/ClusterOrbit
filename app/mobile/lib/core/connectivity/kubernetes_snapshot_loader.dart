@@ -11,60 +11,62 @@ final class KubernetesSnapshotLoader {
 
   Future<ClusterSnapshot> loadSnapshot(
       KubeconfigResolvedCluster cluster) async {
-    final baseUri = Uri.parse(cluster.server);
     final responses = await Future.wait([
       _transport.getJson(
         KubernetesRequest(
-          uri: baseUri.resolve('/api/v1/nodes'),
+          uri: kubeApiUri(cluster.server, ['api', 'v1', 'nodes']),
           auth: cluster.auth,
           tls: cluster.tls,
         ),
       ),
       _transport.getJson(
         KubernetesRequest(
-          uri: baseUri.resolve('/api/v1/pods'),
+          uri: kubeApiUri(cluster.server, ['api', 'v1', 'pods']),
           auth: cluster.auth,
           tls: cluster.tls,
         ),
       ),
       _transport.getJson(
         KubernetesRequest(
-          uri: baseUri.resolve('/api/v1/services'),
+          uri: kubeApiUri(cluster.server, ['api', 'v1', 'services']),
           auth: cluster.auth,
           tls: cluster.tls,
         ),
       ),
       _transport.getJson(
         KubernetesRequest(
-          uri: baseUri.resolve('/apis/apps/v1/deployments'),
+          uri:
+              kubeApiUri(cluster.server, ['apis', 'apps', 'v1', 'deployments']),
           auth: cluster.auth,
           tls: cluster.tls,
         ),
       ),
       _transport.getJson(
         KubernetesRequest(
-          uri: baseUri.resolve('/apis/apps/v1/daemonsets'),
+          uri: kubeApiUri(cluster.server, ['apis', 'apps', 'v1', 'daemonsets']),
           auth: cluster.auth,
           tls: cluster.tls,
         ),
       ),
       _transport.getJson(
         KubernetesRequest(
-          uri: baseUri.resolve('/apis/apps/v1/statefulsets'),
+          uri: kubeApiUri(
+              cluster.server, ['apis', 'apps', 'v1', 'statefulsets']),
           auth: cluster.auth,
           tls: cluster.tls,
         ),
       ),
       _transport.getJson(
         KubernetesRequest(
-          uri: baseUri.resolve('/apis/batch/v1/jobs'),
+          uri: kubeApiUri(cluster.server, ['apis', 'batch', 'v1', 'jobs']),
           auth: cluster.auth,
           tls: cluster.tls,
         ),
       ),
       _transport.getJson(
         KubernetesRequest(
-          uri: baseUri.resolve('/apis/apps/v1/replicasets'),
+          uri:
+              kubeApiUri(cluster.server, ['apis', 'apps', 'v1', 'replicasets']),
           auth: cluster.auth,
           tls: cluster.tls,
         ),

@@ -137,26 +137,53 @@ void main() {
 
     expect(events, isEmpty);
   });
+
+  test('keeps a path-prefixed API server and escapes the namespace', () async {
+    final transport = _FakeKubernetesTransport({
+      'https://rancher.example.com/k8s/clusters/c-abc12/api/v1/namespaces/'
+              'team%20a/events?fieldSelector=involvedObject.name%3Dapi':
+          _listResponse([
+        {
+          'type': 'Normal',
+          'reason': 'Pulled',
+          'message': 'Pulled image',
+          'lastTimestamp': '2026-04-16T20:15:00Z',
+        },
+      ]),
+    });
+
+    final events = await KubernetesEventLoader(transport: transport).loadEvents(
+      cluster:
+          _cluster(server: 'https://rancher.example.com/k8s/clusters/c-abc12'),
+      namespace: 'team a',
+      objectName: 'api',
+    );
+
+    expect(events.single.reason, 'Pulled');
+  });
 }
 
-KubeconfigResolvedCluster _cluster() => const KubeconfigResolvedCluster(
-      profile: ClusterProfile(
+KubeconfigResolvedCluster _cluster({
+  String server = 'https://cluster.example.internal:6443',
+}) =>
+    KubeconfigResolvedCluster(
+      profile: const ClusterProfile(
         id: 'test',
         name: 'test',
         apiServerHost: 'cluster.example.internal:6443',
         environmentLabel: 'Dev',
         connectionMode: ConnectionMode.direct,
       ),
-      server: 'https://cluster.example.internal:6443',
+      server: server,
       namespace: null,
-      auth: KubeconfigAuth(
+      auth: const KubeconfigAuth(
         bearerToken: null,
         basicUsername: null,
         basicPassword: null,
         clientCertificateData: null,
         clientKeyData: null,
       ),
-      tls: KubeconfigTlsConfig(
+      tls: const KubeconfigTlsConfig(
         insecureSkipTlsVerify: false,
         certificateAuthorityData: null,
       ),

@@ -29,11 +29,10 @@ final class GatewayClusterConnection implements ClusterConnection {
 
   @override
   Future<List<ClusterProfile>> listClusters() async {
-    final base = _parseBase();
-    if (base == null) return SampleClusterData.profilesFor(mode);
+    if (_parseBase() == null) return SampleClusterData.profilesFor(mode);
 
     final body = await _httpClient.getJson(
-      base.resolve('v1/clusters'),
+      _endpoint('list', ['v1', 'clusters']),
       headers: _headers(),
     );
     final list = body as List<dynamic>;
@@ -44,13 +43,12 @@ final class GatewayClusterConnection implements ClusterConnection {
 
   @override
   Future<ClusterSnapshot> loadSnapshot(String clusterId) async {
-    final base = _parseBase();
-    if (base == null) {
+    if (_parseBase() == null) {
       final profile = await _resolveSampleCluster(clusterId);
       return SampleClusterData.snapshotFor(profile);
     }
     final body = await _httpClient.getJson(
-      base.resolve('v1/clusters/$clusterId/snapshot'),
+      _endpoint('snapshot', ['v1', 'clusters', clusterId, 'snapshot']),
       headers: _headers(),
     );
     return ClusterSnapshot.fromJson(body as Map<String, dynamic>);
@@ -64,8 +62,7 @@ final class GatewayClusterConnection implements ClusterConnection {
     String? namespace,
     int limit = 5,
   }) async {
-    final base = _parseBase();
-    if (base == null) {
+    if (_parseBase() == null) {
       return SampleClusterData.eventsFor(kind: kind, objectName: objectName)
           .take(limit)
           .toList();
@@ -77,9 +74,8 @@ final class GatewayClusterConnection implements ClusterConnection {
       if (namespace != null && namespace.isNotEmpty) 'namespace': namespace,
     };
     final body = await _httpClient.getJson(
-      base.resolve('v1/clusters/$clusterId/events').replace(
-            queryParameters: query,
-          ),
+      _endpoint('events', ['v1', 'clusters', clusterId, 'events'],
+          query: query),
       headers: _headers(),
     );
     final list = body as List<dynamic>;
@@ -98,25 +94,14 @@ final class GatewayClusterConnection implements ClusterConnection {
       throw ArgumentError.value(
           replicas, 'replicas', 'must be a non-negative integer');
     }
-    final base = _parseBase();
-    if (base == null) {
-      throw StateError(
-        'Gateway base URL is not configured — scale is unsupported in sample-only mode.',
-      );
-    }
-    // workloadId contains `/` so we can't use Uri.resolve after encoding.
-    // Build the URI directly from path segments.
-    final target = base.replace(
-      pathSegments: [
-        ...base.pathSegments.where((s) => s.isNotEmpty),
-        'v1',
-        'clusters',
-        clusterId,
-        'workloads',
-        workloadId,
-        'scale',
-      ],
-    );
+    final target = _endpoint('scale', [
+      'v1',
+      'clusters',
+      clusterId,
+      'workloads',
+      workloadId,
+      'scale',
+    ]);
     await _httpClient.postJson(
       target,
       headers: _headers(),
@@ -129,23 +114,14 @@ final class GatewayClusterConnection implements ClusterConnection {
     required String clusterId,
     required String workloadId,
   }) async {
-    final base = _parseBase();
-    if (base == null) {
-      throw StateError(
-        'Gateway base URL is not configured — restart is unsupported in sample-only mode.',
-      );
-    }
-    final target = base.replace(
-      pathSegments: [
-        ...base.pathSegments.where((s) => s.isNotEmpty),
-        'v1',
-        'clusters',
-        clusterId,
-        'workloads',
-        workloadId,
-        'restart',
-      ],
-    );
+    final target = _endpoint('restart', [
+      'v1',
+      'clusters',
+      clusterId,
+      'workloads',
+      workloadId,
+      'restart',
+    ]);
     await _httpClient.postJson(
       target,
       headers: _headers(),
@@ -159,23 +135,14 @@ final class GatewayClusterConnection implements ClusterConnection {
     required String nodeId,
     required bool schedulable,
   }) async {
-    final base = _parseBase();
-    if (base == null) {
-      throw StateError(
-        'Gateway base URL is not configured — cordon is unsupported in sample-only mode.',
-      );
-    }
-    final target = base.replace(
-      pathSegments: [
-        ...base.pathSegments.where((s) => s.isNotEmpty),
-        'v1',
-        'clusters',
-        clusterId,
-        'nodes',
-        nodeId,
-        schedulable ? 'uncordon' : 'cordon',
-      ],
-    );
+    final target = _endpoint('cordon', [
+      'v1',
+      'clusters',
+      clusterId,
+      'nodes',
+      nodeId,
+      schedulable ? 'uncordon' : 'cordon',
+    ]);
     await _httpClient.postJson(
       target,
       headers: _headers(),
@@ -188,23 +155,14 @@ final class GatewayClusterConnection implements ClusterConnection {
     required String clusterId,
     required String nodeId,
   }) async {
-    final base = _parseBase();
-    if (base == null) {
-      throw StateError(
-        'Gateway base URL is not configured — drain is unsupported in sample-only mode.',
-      );
-    }
-    final target = base.replace(
-      pathSegments: [
-        ...base.pathSegments.where((s) => s.isNotEmpty),
-        'v1',
-        'clusters',
-        clusterId,
-        'nodes',
-        nodeId,
-        'drain',
-      ],
-    );
+    final target = _endpoint('drain', [
+      'v1',
+      'clusters',
+      clusterId,
+      'nodes',
+      nodeId,
+      'drain',
+    ]);
     final body = await _httpClient.postJson(
       target,
       headers: _headers(),
@@ -219,24 +177,15 @@ final class GatewayClusterConnection implements ClusterConnection {
     required String nodeId,
     required String jobId,
   }) async {
-    final base = _parseBase();
-    if (base == null) {
-      throw StateError(
-        'Gateway base URL is not configured — drain is unsupported in sample-only mode.',
-      );
-    }
-    final target = base.replace(
-      pathSegments: [
-        ...base.pathSegments.where((s) => s.isNotEmpty),
-        'v1',
-        'clusters',
-        clusterId,
-        'nodes',
-        nodeId,
-        'drain',
-        jobId,
-      ],
-    );
+    final target = _endpoint('drain', [
+      'v1',
+      'clusters',
+      clusterId,
+      'nodes',
+      nodeId,
+      'drain',
+      jobId,
+    ]);
     final body = await _httpClient.getJson(target, headers: _headers());
     return DrainJob.fromJson(body as Map<String, dynamic>);
   }
@@ -250,6 +199,29 @@ final class GatewayClusterConnection implements ClusterConnection {
     } catch (_) {
       return null;
     }
+  }
+
+  /// Builds a gateway URL from path segments: the base URL's own path is
+  /// kept and every segment (cluster ids, workload ids with `/`) is
+  /// percent-encoded rather than interpolated into a path string.
+  Uri _endpoint(
+    String op,
+    List<String> segments, {
+    Map<String, String>? query,
+  }) {
+    final base = _parseBase();
+    if (base == null) {
+      throw StateError(
+        'Gateway base URL is not configured — $op is unsupported in sample-only mode.',
+      );
+    }
+    return base.replace(
+      pathSegments: [
+        ...base.pathSegments.where((s) => s.isNotEmpty),
+        ...segments,
+      ],
+      queryParameters: query,
+    );
   }
 
   Map<String, String> _headers() => {
