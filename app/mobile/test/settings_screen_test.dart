@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:clusterorbit_mobile/core/cluster_domain/saved_connection.dart';
 import 'package:clusterorbit_mobile/core/sync_cache/snapshot_store.dart';
 import 'package:clusterorbit_mobile/core/theme/clusterorbit_theme.dart';
@@ -184,16 +186,81 @@ void main() {
     expect(find.text('Remove connection?'), findsNothing);
     expect(store.saved.length, 1);
   });
+
+  testWidgets('listConnections failure shows an error with Retry',
+      (tester) async {
+    final store = _FakeSavedStore()..failListings = 1;
+    await tester.pumpWidget(_wrap(SettingsScreen(savedConnectionStore: store)));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+    expect(find.textContaining('Could not load saved connections'),
+        findsOneWidget);
+
+    await tester.tap(find.text('Retry'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Add Sample'), findsOneWidget);
+  });
+
+  testWidgets('failed save shows a SnackBar and skips the callback',
+      (tester) async {
+    final store = _FakeSavedStore()..failSaves = true;
+    var changedCount = 0;
+    await tester.pumpWidget(_wrap(
+      SettingsScreen(
+        savedConnectionStore: store,
+        onConnectionsChanged: () => changedCount++,
+      ),
+    ));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Add Sample'));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Could not update connections'), findsOneWidget);
+    expect(changedCount, 0);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Add Sample is disabled while a save is in flight',
+      (tester) async {
+    final store = _FakeSavedStore()..saveGate = Completer<void>();
+    await tester.pumpWidget(_wrap(SettingsScreen(savedConnectionStore: store)));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Add Sample'));
+    await tester.pump();
+    final button = tester.widget<OutlinedButton>(
+      find.widgetWithText(OutlinedButton, 'Add Sample'),
+    );
+    expect(button.onPressed, isNull);
+
+    store.saveGate!.complete();
+    await tester.pumpAndSettle();
+    expect(store.saved.length, 1);
+  });
 }
 
 final class _FakeSavedStore implements SavedConnectionStore {
   final List<SavedConnection> saved = [];
+  int failListings = 0;
+  bool failSaves = false;
+  Completer<void>? saveGate;
 
   @override
-  Future<List<SavedConnection>> listConnections() async => List.of(saved);
+  Future<List<SavedConnection>> listConnections() async {
+    if (failListings > 0) {
+      failListings--;
+      throw StateError('db locked');
+    }
+    return List.of(saved);
+  }
 
   @override
   Future<void> saveConnection(SavedConnection connection) async {
+    if (failSaves) throw StateError('disk full');
+    await saveGate?.future;
     saved.removeWhere((c) => c.id == connection.id);
     saved.add(connection);
   }

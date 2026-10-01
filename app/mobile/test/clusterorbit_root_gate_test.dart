@@ -48,16 +48,70 @@ void main() {
     expect(store.saved.length, 1);
     expect(store.saved.first.kind, SavedConnectionKind.sample);
   });
+
+  testWidgets('listConnections failure shows an error with Retry',
+      (tester) async {
+    final store = _FakeSavedStore()..failListings = 1;
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ClusterOrbitTheme.dark(),
+        home: ClusterOrbitRootGate(
+          savedConnectionStore: store,
+          snapshotStore: const NoOpSnapshotStore(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+    expect(find.textContaining('Could not load saved connections'),
+        findsOneWidget);
+
+    await tester.tap(find.text('Retry'));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(OnboardingScreen), findsOneWidget);
+  });
+
+  testWidgets('Use sample failure shows a SnackBar and stays on onboarding',
+      (tester) async {
+    final store = _FakeSavedStore()..failSaves = true;
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ClusterOrbitTheme.dark(),
+        home: ClusterOrbitRootGate(
+          savedConnectionStore: store,
+          snapshotStore: const NoOpSnapshotStore(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Use sample'));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(OnboardingScreen), findsOneWidget);
+    expect(find.textContaining('Could not add connection'), findsOneWidget);
+  });
 }
 
 final class _FakeSavedStore implements SavedConnectionStore {
   final List<SavedConnection> saved = [];
+  int failListings = 0;
+  bool failSaves = false;
 
   @override
-  Future<List<SavedConnection>> listConnections() async => List.of(saved);
+  Future<List<SavedConnection>> listConnections() async {
+    if (failListings > 0) {
+      failListings--;
+      throw StateError('db locked');
+    }
+    return List.of(saved);
+  }
 
   @override
   Future<void> saveConnection(SavedConnection connection) async {
+    if (failSaves) throw StateError('disk full');
     saved.removeWhere((c) => c.id == connection.id);
     saved.add(connection);
   }

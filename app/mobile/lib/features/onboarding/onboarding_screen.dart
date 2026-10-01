@@ -7,10 +7,17 @@ import '../../core/connectivity/cluster_connection_factory.dart';
 ///
 /// The goal is explicit intent: the user must pick how to connect rather
 /// than silently getting sample data.
-class OnboardingScreen extends StatelessWidget {
+class OnboardingScreen extends StatefulWidget {
   const OnboardingScreen({super.key, required this.onAddConnection});
 
   final Future<void> Function(SavedConnection) onAddConnection;
+
+  @override
+  State<OnboardingScreen> createState() => _OnboardingScreenState();
+}
+
+class _OnboardingScreenState extends State<OnboardingScreen> {
+  bool _busy = false;
 
   @override
   Widget build(BuildContext context) {
@@ -42,7 +49,7 @@ class OnboardingScreen extends StatelessWidget {
                     subtitle:
                         'Explore the UI with a built-in demo cluster. No network, no credentials.',
                     actionLabel: 'Use sample',
-                    onPressed: _addSample,
+                    onPressed: _busy ? null : _addSample,
                   ),
                   const SizedBox(height: 12),
                   _OptionCard(
@@ -63,20 +70,32 @@ class OnboardingScreen extends StatelessWidget {
   }
 
   Future<void> _addSample() async {
-    await onAddConnection(
-      SavedConnection(
-        id: 'sample-${DateTime.now().millisecondsSinceEpoch}',
-        displayName: 'Sample data',
-        kind: SavedConnectionKind.sample,
-      ),
-    );
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      await widget.onAddConnection(
+        SavedConnection(
+          id: 'sample-${DateTime.now().millisecondsSinceEpoch}',
+          displayName: 'Sample data',
+          kind: SavedConnectionKind.sample,
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not add connection: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   void _openGatewayForm(BuildContext context) {
     Navigator.push<void>(
       context,
       MaterialPageRoute(
-        builder: (_) => AddGatewayScreen(onAddConnection: onAddConnection),
+        builder: (_) =>
+            AddGatewayScreen(onAddConnection: widget.onAddConnection),
       ),
     );
   }
