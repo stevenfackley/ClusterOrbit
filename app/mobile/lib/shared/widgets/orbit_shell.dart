@@ -166,6 +166,7 @@ class _OrbitShellState extends State<OrbitShell> {
               if (_session.lastRefreshedAt != null && !_session.isRefreshing)
                 _LastRefreshedIndicator(
                   refreshedAt: _session.lastRefreshedAt!,
+                  offline: _session.staleError != null,
                   onRefresh: selectedCluster == null ? null : _onRefresh,
                   compact: isCompact,
                 ),
@@ -273,42 +274,51 @@ class _RefreshingBadge extends StatelessWidget {
   }
 }
 
+/// How fresh the data on screen is: "Updated Xm ago", or, when [offline]
+/// (the live fetch behind a cached snapshot failed), "Offline · cached Xm
+/// ago" so cached data never passes for live.
 class _LastRefreshedIndicator extends StatelessWidget {
   const _LastRefreshedIndicator({
     required this.refreshedAt,
     required this.onRefresh,
+    this.offline = false,
     this.compact = false,
   });
 
   final DateTime refreshedAt;
   final VoidCallback? onRefresh;
+  final bool offline;
   final bool compact;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final relative = _formatRelative(refreshedAt);
-    final tooltip = 'Updated $relative · tap to refresh';
+    final label = offline ? 'Offline · cached $relative' : 'Updated $relative';
+    final tooltip = '$label · tap to refresh';
+    final color = offline
+        ? theme.extension<ClusterOrbitPalette>()!.warning
+        : Colors.white.withValues(alpha: 0.82);
+    final icon = offline ? Icons.cloud_off_outlined : Icons.refresh;
     if (compact) {
       return IconButton(
         tooltip: tooltip,
         onPressed: onRefresh,
-        icon: const Icon(Icons.refresh, size: 18),
+        color: offline ? color : null,
+        icon: Icon(icon, size: 18),
       );
     }
     return Tooltip(
       message: tooltip,
       child: TextButton.icon(
         onPressed: onRefresh,
-        icon: const Icon(Icons.refresh, size: 16),
+        icon: Icon(icon, size: 16),
         label: Text(
-          'Updated $relative',
-          style: theme.textTheme.bodySmall?.copyWith(
-            color: Colors.white.withValues(alpha: 0.82),
-          ),
+          label,
+          style: theme.textTheme.bodySmall?.copyWith(color: color),
         ),
         style: TextButton.styleFrom(
-          foregroundColor: Colors.white.withValues(alpha: 0.82),
+          foregroundColor: color,
           visualDensity: VisualDensity.compact,
         ),
       ),

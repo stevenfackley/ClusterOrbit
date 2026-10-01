@@ -258,6 +258,9 @@ final class RecordingClusterConnection implements ClusterConnection {
   /// Answers listClusters while set, instead of the sample profiles.
   Future<List<ClusterProfile>> Function()? onListClusters;
 
+  /// Thrown by loadSnapshot while set.
+  Object? snapshotError;
+
   /// Answers loadEvents while set, instead of the sample events.
   Future<List<ClusterEvent>> Function()? onLoadEvents;
 
@@ -282,13 +285,15 @@ final class RecordingClusterConnection implements ClusterConnection {
   }
 
   @override
-  Future<ClusterSnapshot> loadSnapshot(String clusterId) async =>
-      SampleClusterData.snapshotFor(
-        _profiles.firstWhere(
-          (item) => item.id == clusterId,
-          orElse: () => _profiles.first,
-        ),
-      );
+  Future<ClusterSnapshot> loadSnapshot(String clusterId) async {
+    if (snapshotError case final error?) throw error;
+    return SampleClusterData.snapshotFor(
+      _profiles.firstWhere(
+        (item) => item.id == clusterId,
+        orElse: () => _profiles.first,
+      ),
+    );
+  }
 
   @override
   Future<List<ClusterEvent>> loadEvents({
