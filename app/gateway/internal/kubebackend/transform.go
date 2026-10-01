@@ -219,7 +219,7 @@ func transformSnapshot(
 		nodesOut = append(nodesOut, nodeFromItem(item, nodePodCounts))
 	}
 
-	var workloads []api.ClusterWorkload
+	workloads := make([]api.ClusterWorkload, 0, len(deploymentItems)+len(daemonSetItems)+len(statefulSetItems)+len(jobItems))
 	workloads = append(workloads, workloadsFromItems(deploymentItems, workloadKindDeployment, workloadNodeIDs, workloadHealthSignals)...)
 	workloads = append(workloads, workloadsFromItems(daemonSetItems, workloadKindDaemonSet, workloadNodeIDs, workloadHealthSignals)...)
 	workloads = append(workloads, workloadsFromItems(statefulSetItems, workloadKindStatefulSet, workloadNodeIDs, workloadHealthSignals)...)
@@ -518,7 +518,8 @@ func serviceFromItem(
 	}
 	selector := mapAt(item, "spec", "selector")
 
-	var targets []string
+	// Non-nil so selectorless services marshal as [] not null.
+	targets := []string{}
 	if len(selector) > 0 {
 		for wid := range workloadsByID {
 			if matchesSelector(selector, podLabelsByWorkload[wid]) {
