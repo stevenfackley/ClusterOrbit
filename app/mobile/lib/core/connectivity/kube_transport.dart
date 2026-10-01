@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -45,7 +46,19 @@ abstract interface class KubernetesTransport {
   });
 }
 
+/// dart:io [KubernetesTransport]. Every call is bounded: [connectionTimeout]
+/// caps the connect and [responseTimeout] caps waiting for the response
+/// headers and, separately, reading the body, so a hung API server surfaces
+/// as a [TimeoutException] instead of freezing the caller.
 final class HttpKubernetesTransport implements KubernetesTransport {
+  const HttpKubernetesTransport({
+    this.connectionTimeout = const Duration(seconds: 10),
+    this.responseTimeout = const Duration(seconds: 30),
+  });
+
+  final Duration connectionTimeout;
+  final Duration responseTimeout;
+
   @override
   Future<Map<String, dynamic>> getJson(KubernetesRequest request) =>
       _send(request, method: 'GET', contentType: null, body: null);
@@ -65,8 +78,8 @@ final class HttpKubernetesTransport implements KubernetesTransport {
     required List<int>? body,
   }) async {
     final client = HttpClient(
-      context: _buildSecurityContext(request.tls, request.auth),
-    );
+      context: kubeSecurityContext(request.tls, request.auth),
+    )..connectionTimeout = connectionTimeout;
     if (request.tls.insecureSkipTlsVerify) {
       client.badCertificateCallback = (_, __, ___) => true;
     }
@@ -98,8 +111,11 @@ final class HttpKubernetesTransport implements KubernetesTransport {
         httpRequest.add(body);
       }
 
-      final response = await httpRequest.close();
-      final responseBody = await response.transform(utf8.decoder).join();
+      final response = await httpRequest.close().timeout(responseTimeout);
+      final responseBody = await response
+          .transform(utf8.decoder)
+          .join()
+          .timeout(responseTimeout);
       if (response.statusCode >= 400) {
         throw HttpException(
           'Kubernetes API request failed with status ${response.statusCode}: $responseBody',
@@ -121,25 +137,32 @@ final class HttpKubernetesTransport implements KubernetesTransport {
       client.close(force: true);
     }
   }
+}
 
-  SecurityContext? _buildSecurityContext(
-    KubeconfigTlsConfig tls,
-    KubeconfigAuth auth,
-  ) {
-    final hasCustomContext = tls.certificateAuthorityData != null ||
-        (auth.clientCertificateData != null && auth.clientKeyData != null);
-    if (!hasCustomContext) {
-      return null;
-    }
-
-    final context = SecurityContext();
-    if (tls.certificateAuthorityData != null) {
-      context.setTrustedCertificatesBytes(tls.certificateAuthorityData!);
-    }
-    if (auth.clientCertificateData != null && auth.clientKeyData != null) {
-      context.useCertificateChainBytes(auth.clientCertificateData!);
-      context.usePrivateKeyBytes(auth.clientKeyData!);
-    }
-    return context;
+/// TLS context for a kubeconfig cluster, or null when the platform default
+/// suffices. An explicit `certificate-authority-data` replaces the system
+/// trust store; a client certificate alone keeps it, so an API server with a
+/// publicly-trusted certificate still verifies. [create] is a test seam.
+SecurityContext? kubeSecurityContext(
+  KubeconfigTlsConfig tls,
+  KubeconfigAuth auth, {
+  SecurityContext Function({bool withTrustedRoots}) create =
+      SecurityContext.new,
+}) {
+  final hasCustomContext = tls.certificateAuthorityData != null ||
+      (auth.clientCertificateData != null && auth.clientKeyData != null);
+  if (!hasCustomContext) {
+    return null;
   }
+
+  final context =
+      create(withTrustedRoots: tls.certificateAuthorityData == null);
+  if (tls.certificateAuthorityData != null) {
+    context.setTrustedCertificatesBytes(tls.certificateAuthorityData!);
+  }
+  if (auth.clientCertificateData != null && auth.clientKeyData != null) {
+    context.useCertificateChainBytes(auth.clientCertificateData!);
+    context.usePrivateKeyBytes(auth.clientKeyData!);
+  }
+  return context;
 }

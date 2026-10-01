@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -16,7 +17,7 @@ final class GatewayClusterConnection implements ClusterConnection {
     required this.gatewayBaseUrl,
     this.token = '',
     GatewayHttpClient? httpClient,
-  }) : _httpClient = httpClient ?? const _DartIoGatewayHttpClient();
+  }) : _httpClient = httpClient ?? const DartIoGatewayHttpClient();
 
   static const _tokenHeader = 'X-ClusterOrbit-Token';
 
@@ -249,8 +250,18 @@ abstract interface class GatewayHttpClient {
   });
 }
 
-final class _DartIoGatewayHttpClient implements GatewayHttpClient {
-  const _DartIoGatewayHttpClient();
+/// dart:io [GatewayHttpClient]. Every call is bounded: [connectionTimeout]
+/// caps the connect and [responseTimeout] caps waiting for the response
+/// headers and, separately, reading the body, so a hung gateway surfaces as a
+/// [TimeoutException] instead of freezing refresh.
+final class DartIoGatewayHttpClient implements GatewayHttpClient {
+  const DartIoGatewayHttpClient({
+    this.connectionTimeout = const Duration(seconds: 10),
+    this.responseTimeout = const Duration(seconds: 30),
+  });
+
+  final Duration connectionTimeout;
+  final Duration responseTimeout;
 
   @override
   Future<dynamic> getJson(Uri url, {Map<String, String> headers = const {}}) =>
@@ -270,7 +281,7 @@ final class _DartIoGatewayHttpClient implements GatewayHttpClient {
     required Map<String, String> headers,
     required Map<String, dynamic>? body,
   }) async {
-    final client = HttpClient();
+    final client = HttpClient()..connectionTimeout = connectionTimeout;
     try {
       final request = await client.openUrl(method, url);
       headers.forEach(request.headers.set);
@@ -279,14 +290,16 @@ final class _DartIoGatewayHttpClient implements GatewayHttpClient {
             HttpHeaders.contentTypeHeader, 'application/json; charset=utf-8');
         request.add(utf8.encode(jsonEncode(body)));
       }
-      final response = await request.close();
+      final response = await request.close().timeout(responseTimeout);
+      final responseBody = await response
+          .transform(utf8.decoder)
+          .join()
+          .timeout(responseTimeout);
       if (response.statusCode < 200 || response.statusCode >= 300) {
-        final errBody = await response.transform(utf8.decoder).join();
         throw GatewayException(
-          'Gateway request failed (${response.statusCode}) for $url: $errBody',
+          'Gateway request failed (${response.statusCode}) for $url: $responseBody',
         );
       }
-      final responseBody = await response.transform(utf8.decoder).join();
       return responseBody.isEmpty ? null : jsonDecode(responseBody);
     } finally {
       client.close(force: true);
