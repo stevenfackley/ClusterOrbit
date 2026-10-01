@@ -511,6 +511,56 @@ void main() {
       expect(controller.snapshot, same(stagingLive));
       expect(controller.isRefreshing, isFalse);
     });
+
+    test(
+        "a switch during bootstrap's cache phase keeps the live cluster list "
+        'that lands after it', () async {
+      // Fresh instances: ClusterProfile has no ==, so the live list must not
+      // share instances with the cached one for this to prove anything.
+      final live = SampleClusterData.profilesFor(ConnectionMode.direct);
+      final listed = Completer<List<ClusterProfile>>();
+      final loads = _DeferredLoads(live, listClusters: () => listed.future)
+        ..defer = true;
+      final store = _CachedStore(
+        profiles: [dev, staging],
+        snapshots: [
+          SampleClusterData.snapshotFor(dev),
+          SampleClusterData.snapshotFor(staging),
+        ],
+      );
+      final controller = ClusterSessionController(
+        connection: loads.connection,
+        store: store,
+      );
+      addTearDown(controller.dispose);
+
+      final bootstrapFuture = controller.bootstrap();
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.selectedCluster, same(dev));
+
+      final cycleFuture = controller.cycleCluster();
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.selectedCluster, same(staging));
+
+      listed.complete(live);
+      await bootstrapFuture;
+      expect(controller.clusters, same(live));
+      expect(controller.selectedCluster, same(live[1]),
+          reason: 'the selection is kept, as its instance in the live list');
+      expect(controller.snapshot!.profile.id, staging.id);
+      expect(store.savedProfiles, same(live));
+
+      final stagingLive = SampleClusterData.snapshotFor(live[1]);
+      loads.complete(live[1], stagingLive);
+      await cycleFuture;
+      expect(controller.selectedCluster, same(live[1]));
+      expect(controller.snapshot, same(stagingLive));
+
+      loads.defer = false;
+      await controller.cycleCluster();
+      expect(controller.selectedCluster, same(live[2]),
+          reason: 'the cluster only the live list has is reachable');
+    });
   });
 
   group('autoRefreshInterval', () {
@@ -706,14 +756,16 @@ final class _FakeConnection implements ClusterConnection {
 /// pending (one per cluster) until [complete] — so a test picks the order
 /// in which responses land.
 final class _DeferredLoads {
-  _DeferredLoads(this.profiles);
+  _DeferredLoads(this.profiles, {this.listClusters});
 
   final List<ClusterProfile> profiles;
+  final Future<List<ClusterProfile>> Function()? listClusters;
   final Map<String, Completer<ClusterSnapshot>> _pending = {};
   bool defer = false;
 
   late final _FakeConnection connection = _FakeConnection(
     profiles: profiles,
+    listClustersOverride: listClusters,
     loadSnapshotOverride: (clusterId) {
       if (defer) {
         return (_pending[clusterId] = Completer<ClusterSnapshot>()).future;
@@ -789,13 +841,16 @@ final class _CachedStore implements SnapshotStore {
 
   final List<ClusterProfile> profiles;
   final Map<String, ClusterSnapshot> _snapshots;
+  List<ClusterProfile>? savedProfiles;
 
   @override
   Future<List<ClusterProfile>> loadProfiles({Duration? maxAge}) async =>
       profiles;
 
   @override
-  Future<void> saveProfiles(List<ClusterProfile> profiles) async {}
+  Future<void> saveProfiles(List<ClusterProfile> profiles) async {
+    savedProfiles = profiles;
+  }
 
   @override
   Future<void> deleteProfiles(Iterable<String> ids) async {}

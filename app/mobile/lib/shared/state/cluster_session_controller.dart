@@ -54,6 +54,11 @@ class ClusterSessionController extends ChangeNotifier {
   /// a slow response for the previous cluster can't land on the current one.
   int _generation = 0;
 
+  /// Bumped only by [bootstrap]. Tells a bootstrap superseded by a
+  /// [cycleCluster] (whose live cluster list is still the newest) apart from
+  /// one superseded by a newer bootstrap.
+  int _bootstrapGeneration = 0;
+
   List<ClusterProfile> _clusters = const [];
   ClusterProfile? _selectedCluster;
   ClusterSnapshot? _snapshot;
@@ -89,6 +94,7 @@ class ClusterSessionController extends ChangeNotifier {
   /// Safe to call once in initState.
   Future<void> bootstrap() async {
     final gen = ++_generation;
+    final bootstrapGen = ++_bootstrapGeneration;
     var cacheShown = false;
 
     try {
@@ -111,7 +117,14 @@ class ClusterSessionController extends ChangeNotifier {
       _fail(gen, error, cacheShown: cacheShown);
       return;
     }
-    if (!_isCurrent(gen)) return;
+    if (!_isCurrent(gen)) {
+      // A switch made while the cache was on screen owns the selection and
+      // snapshot, but this list is still the newest one.
+      if (!_disposed && bootstrapGen == _bootstrapGeneration) {
+        await _adoptClusters(clusters);
+      }
+      return;
+    }
 
     if (clusters.isEmpty) {
       _isLoading = false;
@@ -193,7 +206,7 @@ class ClusterSessionController extends ChangeNotifier {
     if (_clusters.length < 2 || _isLoading || current == null) return;
 
     final gen = ++_generation;
-    final currentIndex = _clusters.indexOf(current);
+    final currentIndex = _clusters.indexWhere((c) => c.id == current.id);
     final nextCluster = _clusters[(currentIndex + 1) % _clusters.length];
 
     // Nothing of the previous cluster may stay on screen under the next
@@ -228,7 +241,7 @@ class ClusterSessionController extends ChangeNotifier {
     if (cached == null || !_isCurrent(gen)) return false;
 
     if (clusters != null) _clusters = clusters;
-    _selectedCluster = target;
+    _selectedCluster = _listed(target);
     _snapshot = cached.snapshot;
     _lastRefreshedAt = cached.cachedAt;
     _loadError = null;
@@ -267,7 +280,7 @@ class ClusterSessionController extends ChangeNotifier {
     if (!_isCurrent(gen)) return;
 
     if (clusters != null) _clusters = clusters;
-    _selectedCluster = target;
+    _selectedCluster = _listed(target);
     _snapshot = snapshot;
     _loadError = null;
     _staleError = null;
@@ -277,6 +290,31 @@ class ClusterSessionController extends ChangeNotifier {
     notifyListeners();
     await _persist(snapshot, clusters: clusters);
   }
+
+  /// Takes a live cluster list that landed after a [cycleCluster] superseded
+  /// its bootstrap. The list replaces the cached one only when it still holds
+  /// the selected cluster, whose instance in it becomes the selection.
+  Future<void> _adoptClusters(List<ClusterProfile> clusters) async {
+    final current = _selectedCluster;
+    final listed = current == null
+        ? null
+        : clusters.where((c) => c.id == current.id).firstOrNull;
+    if (listed == null) return;
+
+    _clusters = clusters;
+    _selectedCluster = listed;
+    notifyListeners();
+    try {
+      await _store.saveProfiles(clusters);
+    } catch (error) {
+      debugPrint('ClusterOrbit: cluster list cache write failed: $error');
+    }
+  }
+
+  /// [target]'s instance in [_clusters]. ClusterProfile has no ==, and a
+  /// newer list may have replaced the one [target] was picked from.
+  ClusterProfile _listed(ClusterProfile target) =>
+      _clusters.firstWhere((c) => c.id == target.id, orElse: () => target);
 
   /// Caches a live result that is already on screen. Best-effort: the cache
   /// only speeds up the next start, so a failed write must not turn a
