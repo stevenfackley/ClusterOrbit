@@ -52,7 +52,7 @@ void main() {
     final connection = RecordingClusterConnection();
     await pumpScreen(tester, dev, connection);
 
-    await tester.tap(find.text('cp-1.dev-orbit'));
+    await tester.tap(find.byKey(const ValueKey('node:cp-1')));
     await tester.pumpAndSettle();
     expect(highlighted(tester, 'cp-1'), isTrue);
     expect(find.text('Cordon'), findsOneWidget);
@@ -75,7 +75,7 @@ void main() {
     final connection = RecordingClusterConnection();
     await pumpScreen(tester, dev, connection);
 
-    await tester.tap(find.text('cp-1.dev-orbit'));
+    await tester.tap(find.byKey(const ValueKey('node:cp-1')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Cordon'));
     await tester.pumpAndSettle();
@@ -99,7 +99,7 @@ void main() {
     final connection = RecordingClusterConnection();
     await pumpScreen(tester, dev, connection);
 
-    await tester.tap(find.text('cp-1.dev-orbit'));
+    await tester.tap(find.byKey(const ValueKey('node:cp-1')));
     await tester.pumpAndSettle();
     expect(find.text('K8s Version'), findsOneWidget);
 

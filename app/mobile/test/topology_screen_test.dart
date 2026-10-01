@@ -1,6 +1,8 @@
 import 'package:clusterorbit_mobile/core/cluster_domain/cluster_models.dart';
+import 'package:clusterorbit_mobile/core/connectivity/cluster_connection.dart';
 import 'package:clusterorbit_mobile/core/connectivity/sample_cluster_data.dart';
 import 'package:clusterorbit_mobile/core/theme/clusterorbit_theme.dart';
+import 'package:clusterorbit_mobile/features/topology/entity_detail_panel.dart';
 import 'package:clusterorbit_mobile/features/topology/topology_layout.dart';
 import 'package:clusterorbit_mobile/features/topology/topology_orbs.dart';
 import 'package:clusterorbit_mobile/features/topology/topology_panels.dart';
@@ -11,10 +13,14 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'test_helpers.dart';
 
-/// Pumps [TopologyScreen] on its own, without the shell, over the sample
-/// snapshot.
-Future<void> pumpTopologyScreen(WidgetTester tester,
-    {required Size size}) async {
+/// Pumps [TopologyScreen] on its own, without the shell, over [snapshot]
+/// (the sample snapshot by default).
+Future<void> pumpTopologyScreen(
+  WidgetTester tester, {
+  required Size size,
+  ClusterConnection? connection,
+  ClusterSnapshot? snapshot,
+}) async {
   tester.view.devicePixelRatio = 1.0;
   tester.view.physicalSize = size;
   final profile = SampleClusterData.profilesFor(ConnectionMode.direct).first;
@@ -24,15 +30,24 @@ Future<void> pumpTopologyScreen(WidgetTester tester,
       theme: ClusterOrbitTheme.dark(),
       home: Scaffold(
         body: TopologyScreen(
-          snapshot: SampleClusterData.snapshotFor(profile),
+          snapshot: snapshot ?? SampleClusterData.snapshotFor(profile),
           isLoading: false,
           error: null,
+          connection: connection,
+          clusterId: profile.id,
         ),
       ),
     ),
   );
   await tester.pumpAndSettle();
 }
+
+/// The canvas orb of the entity of [kind] with [id].
+Finder orb(String kind, String id) => find.byKey(ValueKey('$kind:$id'));
+
+/// [text] inside the entity detail panel.
+Finder inPanel(String text) => find.descendant(
+    of: find.byType(EntityDetailPanel), matching: find.text(text));
 
 /// Drags the map in short, slow strokes (no fling) until [target]'s center
 /// is hit-testable.
@@ -107,11 +122,11 @@ void main() {
     // Sidebar is visible when isWide = true
     expect(find.text('Flight Deck'), findsOneWidget);
 
-    await tester.tap(find.text('cp-1.dev-orbit'));
+    await tester.tap(orb('node', 'cp-1'));
     await tester.pumpAndSettle();
 
-    // Name appears in orb AND detail panel header
-    expect(find.text('cp-1.dev-orbit'), findsNWidgets(2));
+    expect(inPanel('cp-1.dev-orbit'), findsOneWidget);
+    expect(inPanel('use1-a'), findsOneWidget);
     expect(find.text('K8s Version'), findsOneWidget);
     // Flight Deck still visible alongside detail
     expect(find.text('Flight Deck'), findsOneWidget);
@@ -122,11 +137,11 @@ void main() {
   testWidgets('tablet: tapping same node again deselects', (tester) async {
     await pumpClusterOrbitApp(tester, size: const Size(1280, 900));
 
-    await tester.tap(find.text('cp-1.dev-orbit'));
+    await tester.tap(orb('node', 'cp-1'));
     await tester.pumpAndSettle();
-    expect(find.text('K8s Version'), findsOneWidget);
+    expect(inPanel('cp-1.dev-orbit'), findsOneWidget);
 
-    await tester.tap(find.text('cp-1.dev-orbit').first);
+    await tester.tap(orb('node', 'cp-1'));
     await tester.pumpAndSettle();
     expect(find.text('K8s Version'), findsNothing);
 
@@ -136,9 +151,9 @@ void main() {
   testWidgets('tablet: dismiss button clears selection', (tester) async {
     await pumpClusterOrbitApp(tester, size: const Size(1280, 900));
 
-    await tester.tap(find.text('cp-1.dev-orbit'));
+    await tester.tap(orb('node', 'cp-1'));
     await tester.pumpAndSettle();
-    expect(find.text('K8s Version'), findsOneWidget);
+    expect(inPanel('cp-1.dev-orbit'), findsOneWidget);
 
     await tester.tap(find.byTooltip('Dismiss'));
     await tester.pumpAndSettle();
@@ -151,9 +166,8 @@ void main() {
       (tester) async {
     await pumpClusterOrbitApp(tester, size: const Size(1280, 900));
 
-    // Find workload by its orb subtitle (kind / namespace) to avoid
-    // ambiguity with the service also named service-1
-    final workload = find.text('Deployment / platform').first;
+    // workload-1, a Deployment, shares its name with the service service-1.
+    final workload = orb('workload', 'workload-1');
     await panUntilHitTestable(tester, workload);
     await tester.tap(workload);
     await tester.pumpAndSettle();
@@ -162,6 +176,7 @@ void main() {
     expect(find.text('Namespace'), findsOneWidget);
     // Replicas label is specific to workload detail
     expect(find.text('Replicas'), findsOneWidget);
+    expect(inPanel('ghcr.io/clusterorbit/service-1:v0.1.0'), findsOneWidget);
 
     await resetTestSurface(tester);
   });
@@ -169,13 +184,14 @@ void main() {
   testWidgets('tablet: tapping a service shows service fields', (tester) async {
     await pumpTopologyScreen(tester, size: const Size(1400, 900));
 
-    final service = find.text('ClusterIP / platform').first;
+    final service = orb('service', 'service-1');
     await panUntilHitTestable(tester, service);
     await tester.tap(service);
     await tester.pumpAndSettle();
 
     expect(find.text('Exposure'), findsOneWidget);
     expect(find.text('Port'), findsOneWidget);
+    expect(inPanel('10.96.0.1'), findsOneWidget);
 
     await resetTestSurface(tester);
   });
@@ -215,12 +231,12 @@ void main() {
       expect(find.text('Priority Alerts'), findsOneWidget);
       expectHeaderAboveCanvas(tester);
 
-      await tester.tap(find.text('cp-1.dev-orbit'));
+      await tester.tap(orb('node', 'cp-1'));
       await tester.pumpAndSettle();
 
       expect(tester.takeException(), isNull);
       expect(find.text('Priority Alerts'), findsNothing);
-      expect(find.text('K8s Version'), findsOneWidget);
+      expect(inPanel('cp-1.dev-orbit'), findsOneWidget);
       final cordon = find.text('Cordon');
       await tester.ensureVisible(cordon);
       await tester.pumpAndSettle();
@@ -242,8 +258,9 @@ void main() {
     // Too narrow for the long description.
     expect(find.textContaining('Machine-first topology canvas'), findsNothing);
 
-    await tester.tap(find.text('cp-1.dev-orbit'));
+    await tester.tap(orb('node', 'cp-1'));
     await tester.pumpAndSettle();
+    expect(inPanel('cp-1.dev-orbit'), findsOneWidget);
     expect(find.byTooltip('Dismiss').hitTestable(), findsOneWidget);
     expect(tester.takeException(), isNull);
 
@@ -267,10 +284,10 @@ void main() {
     await pumpClusterOrbitApp(tester, size: const Size(844, 390));
     final before = tester.getRect(find.byType(InteractiveViewer));
 
-    await tester.tap(find.text('cp-1.dev-orbit'));
+    await tester.tap(orb('node', 'cp-1'));
     await tester.pumpAndSettle();
 
-    expect(find.text('K8s Version'), findsOneWidget);
+    expect(inPanel('cp-1.dev-orbit'), findsOneWidget);
     expect(tester.getRect(find.byType(InteractiveViewer)), before);
     expect(tester.takeException(), isNull);
 
@@ -323,10 +340,10 @@ void main() {
     await tester.tap(find.descendant(of: toggle, matching: find.text('Map')));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('cp-1.dev-orbit'));
+    await tester.tap(orb('node', 'cp-1'));
     await tester.pumpAndSettle();
 
-    expect(find.text('K8s Version'), findsOneWidget);
+    expect(inPanel('cp-1.dev-orbit'), findsOneWidget);
 
     await resetTestSurface(tester);
   });
@@ -340,9 +357,9 @@ void main() {
     await tester.tap(find.descendant(of: toggle, matching: find.text('Map')));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('cp-1.dev-orbit'));
+    await tester.tap(orb('node', 'cp-1'));
     await tester.pumpAndSettle();
-    expect(find.text('K8s Version'), findsOneWidget);
+    expect(inPanel('cp-1.dev-orbit'), findsOneWidget);
 
     await tester.tap(find.byTooltip('Dismiss'));
     await tester.pumpAndSettle();
@@ -358,13 +375,14 @@ void main() {
     await tester.tap(find.descendant(of: toggle, matching: find.text('Map')));
     await tester.pumpAndSettle();
 
-    final lastService = find.byType(ServiceOrb).last;
+    final lastService = orb('service', 'service-12');
     expect(lastService.hitTestable(), findsNothing);
     await panUntilHitTestable(tester, lastService);
     expect(lastService.hitTestable(), findsOneWidget);
 
     await tester.tap(lastService);
     await tester.pumpAndSettle();
+    expect(inPanel('service-12'), findsOneWidget);
     expect(find.text('Exposure'), findsOneWidget);
     expect(tester.takeException(), isNull);
 
@@ -377,10 +395,10 @@ void main() {
       (tester) async {
     await pumpClusterOrbitApp(tester, size: const Size(844, 390));
 
-    await tester.tap(find.text('cp-1.dev-orbit'));
+    await tester.tap(orb('node', 'cp-1'));
     await tester.pumpAndSettle();
 
-    expect(find.text('K8s Version'), findsOneWidget);
+    expect(inPanel('cp-1.dev-orbit'), findsOneWidget);
 
     await resetTestSurface(tester);
   });
@@ -400,7 +418,7 @@ void main() {
       (tester) async {
     await pumpClusterOrbitApp(tester, size: const Size(1280, 900));
 
-    await tester.tap(find.text('cp-1.dev-orbit'));
+    await tester.tap(orb('node', 'cp-1'));
     await tester.pumpAndSettle();
 
     // Header appears in the detail panel
@@ -428,8 +446,8 @@ void main() {
       connection: connection,
     );
 
-    // Tap a Deployment (service-1 via its kind/namespace subtitle)
-    final workload = find.text('Deployment / platform').first;
+    // workload-1 is a Deployment.
+    final workload = orb('workload', 'workload-1');
     await panUntilHitTestable(tester, workload);
     await tester.tap(workload);
     await tester.pumpAndSettle();
@@ -444,8 +462,183 @@ void main() {
     await tester.tap(find.text('Apply'));
     await tester.pumpAndSettle();
 
-    expect(calls, hasLength(1));
-    expect(calls.single[2], 7);
+    expect(calls, [
+      ['dev-orbit', 'workload-1', 7],
+    ]);
+
+    await resetTestSurface(tester);
+  });
+
+  // ── mutation flows (sidebar, 1400×900) ────────────────────────────────
+
+  /// Selects [target], panning to it first, and taps its [action] button.
+  Future<void> openAction(
+      WidgetTester tester, Finder target, String action) async {
+    await panUntilHitTestable(tester, target);
+    await tester.tap(target);
+    await tester.pumpAndSettle();
+    final button = find.widgetWithText(TextButton, action);
+    await tester.ensureVisible(button);
+    await tester.pumpAndSettle();
+    await tester.tap(button);
+    await tester.pumpAndSettle();
+  }
+
+  Future<void> confirm(WidgetTester tester, String action) async {
+    await tester.tap(find.widgetWithText(FilledButton, action));
+    await tester.pumpAndSettle();
+  }
+
+  testWidgets('cordon: cancel does nothing, confirm cordons this node',
+      (tester) async {
+    final connection = RecordingClusterConnection();
+    await pumpTopologyScreen(tester,
+        size: const Size(1400, 900), connection: connection);
+
+    await openAction(tester, orb('node', 'cp-1'), 'Cordon');
+    // Direct mode has no drain.
+    expect(inPanel('Drain'), findsNothing);
+    expect(find.text('Cordon cp-1.dev-orbit?'), findsOneWidget);
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(connection.callsTo('setNodeSchedulable'), isEmpty);
+
+    await tester.tap(find.widgetWithText(TextButton, 'Cordon'));
+    await tester.pumpAndSettle();
+    await confirm(tester, 'Cordon');
+
+    expect(connection.callsTo('setNodeSchedulable'), [
+      ['setNodeSchedulable', 'dev-orbit', 'cp-1', false],
+    ]);
+    expect(
+      inPanel('Requested cordon of cp-1.dev-orbit. '
+          'Refresh to see applied state.'),
+      findsOneWidget,
+    );
+
+    await resetTestSurface(tester);
+  });
+
+  testWidgets('uncordon: confirm makes a cordoned node schedulable',
+      (tester) async {
+    final connection = RecordingClusterConnection();
+    final profile = SampleClusterData.profilesFor(ConnectionMode.direct).first;
+    await pumpTopologyScreen(
+      tester,
+      size: const Size(1400, 900),
+      connection: connection,
+      snapshot: refreshedSnapshot(SampleClusterData.snapshotFor(profile),
+          cordon: 'cp-1'),
+    );
+
+    await openAction(tester, orb('node', 'cp-1'), 'Uncordon');
+    expect(find.text('This allows new pods to be scheduled on cp-1.dev-orbit.'),
+        findsOneWidget);
+    await confirm(tester, 'Uncordon');
+
+    expect(connection.callsTo('setNodeSchedulable'), [
+      ['setNodeSchedulable', 'dev-orbit', 'cp-1', true],
+    ]);
+    expect(
+      inPanel('Requested uncordon of cp-1.dev-orbit. '
+          'Refresh to see applied state.'),
+      findsOneWidget,
+    );
+
+    await resetTestSurface(tester);
+  });
+
+  testWidgets('restart: confirm restarts this workload', (tester) async {
+    final connection = RecordingClusterConnection();
+    await pumpTopologyScreen(tester,
+        size: const Size(1400, 900), connection: connection);
+
+    await openAction(tester, orb('workload', 'workload-1'), 'Restart');
+    expect(find.text('Restart service-1?'), findsOneWidget);
+    await confirm(tester, 'Restart');
+
+    expect(connection.callsTo('restartWorkload'), [
+      ['restartWorkload', 'dev-orbit', 'workload-1'],
+    ]);
+    expect(
+      inPanel('Requested rolling restart of service-1. '
+          'Refresh to see applied state.'),
+      findsOneWidget,
+    );
+
+    await resetTestSurface(tester);
+  });
+
+  testWidgets('scale: a failure is reported in the panel', (tester) async {
+    final connection = RecordingClusterConnection()
+      ..mutationError = StateError('quota exceeded');
+    await pumpTopologyScreen(tester,
+        size: const Size(1400, 900), connection: connection);
+
+    await openAction(tester, orb('workload', 'workload-1'), 'Scale');
+    await tester.enterText(find.byType(TextField), '5');
+    await tester.tap(find.text('Apply'));
+    await tester.pumpAndSettle();
+
+    expect(connection.callsTo('scaleWorkload'), [
+      ['scaleWorkload', 'dev-orbit', 'workload-1', 5],
+    ]);
+    expect(inPanel('Scale failed: Bad state: quota exceeded'), findsOneWidget);
+
+    await resetTestSurface(tester);
+  });
+
+  testWidgets('drain: confirm starts a job and follows it to the end',
+      (tester) async {
+    DrainJob job(DrainPhase phase) => DrainJob(
+          id: 'drain-1',
+          nodeId: 'cp-1',
+          phase: phase,
+          evicted: const [],
+          skipped: const [],
+          remaining: phase.isTerminal ? 0 : 4,
+        );
+    final connection = RecordingClusterConnection(mode: ConnectionMode.gateway)
+      ..drainJob = job(DrainPhase.running)
+      ..onDrainStatus = () async => job(DrainPhase.succeeded);
+    await pumpTopologyScreen(tester,
+        size: const Size(1400, 900), connection: connection);
+
+    await openAction(tester, orb('node', 'cp-1'), 'Drain');
+    expect(find.text('Drain cp-1.dev-orbit?'), findsOneWidget);
+    // Not pumpAndSettle: the progress dialog spins until the job ends.
+    await tester.tap(find.widgetWithText(FilledButton, 'Drain'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+
+    expect(connection.callsTo('startDrain'), [
+      ['startDrain', 'dev-orbit', 'cp-1'],
+    ]);
+    expect(find.text('Draining cp-1.dev-orbit'), findsOneWidget);
+    expect(find.text('Remaining: 4'), findsOneWidget);
+
+    await tester.pump(const Duration(seconds: 2));
+    expect(find.text('Phase: Drained'), findsOneWidget);
+    await tester.tap(find.text('Close'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Draining cp-1.dev-orbit'), findsNothing);
+    expect(inPanel('Started draining cp-1.dev-orbit.'), findsOneWidget);
+
+    await resetTestSurface(tester);
+  });
+
+  testWidgets('events: a failed load says so in the panel', (tester) async {
+    final connection = RecordingClusterConnection()
+      ..onLoadEvents = () async => throw StateError('events forbidden');
+    await pumpTopologyScreen(tester,
+        size: const Size(1400, 900), connection: connection);
+
+    await tester.tap(orb('node', 'cp-1'));
+    await tester.pumpAndSettle();
+
+    expect(inPanel('Could not load events'), findsOneWidget);
+    expect(inPanel('No recent events'), findsNothing);
 
     await resetTestSurface(tester);
   });

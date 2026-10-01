@@ -376,11 +376,14 @@ class _TopologyCanvasState extends State<_TopologyCanvas> {
                 Positioned.fill(
                   child: ValueListenableBuilder<bool>(
                     valueListenable: _showLabels,
+                    // Orbs are keyed by kind and id: ids are unique per
+                    // kind only.
                     builder: (context, showLabels, _) => Stack(
                       children: [
                         for (final node in snapshot.nodes)
                           if (layout.visibleNodeIds.contains(node.id))
                             CanvasNode(
+                              key: ValueKey('node:${node.id}'),
                               offset: layout.positions[node.id]!,
                               onTap: () => onEntityTap(node),
                               selected: selectedEntity == node,
@@ -394,6 +397,7 @@ class _TopologyCanvasState extends State<_TopologyCanvas> {
                         for (final workload in snapshot.workloads)
                           if (layout.visibleWorkloadIds.contains(workload.id))
                             CanvasNode(
+                              key: ValueKey('workload:${workload.id}'),
                               offset: layout.positions[workload.id]!,
                               onTap: () => onEntityTap(workload),
                               selected: selectedEntity == workload,
@@ -407,6 +411,7 @@ class _TopologyCanvasState extends State<_TopologyCanvas> {
                         for (final service in snapshot.services)
                           if (layout.visibleServiceIds.contains(service.id))
                             CanvasNode(
+                              key: ValueKey('service:${service.id}'),
                               offset: layout.positions[service.id]!,
                               onTap: () => onEntityTap(service),
                               selected: selectedEntity == service,
