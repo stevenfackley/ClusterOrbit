@@ -135,9 +135,14 @@ func TestClusterIDWithSlashRoutes(t *testing.T) {
 		t.Fatalf("scale status = %d cluster = %q workload = %q", resp.StatusCode, rb.gotCluster, rb.gotWorkload)
 	}
 
-	park := decodePending(t, postAs(t, base+"/workloads/"+workload+"/restart", "tok-a", ""))
+	resp = postAs(t, base+"/workloads/"+workload+"/restart", "tok-a", "")
+	loc := resp.Header.Get("Location")
+	park := decodePending(t, resp)
 	if park.ClusterID != arn {
 		t.Fatalf("parked clusterId = %q, want %q", park.ClusterID, arn)
+	}
+	if want := "/v1/clusters/" + url.PathEscape(arn) + "/approvals/" + park.ID; loc != want {
+		t.Fatalf("Location = %q, want %q", loc, want)
 	}
 	resp = getAs(t, base+"/approvals", "tok-b")
 	var list []PendingRequest

@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -27,6 +28,12 @@ func TestApprovalStoreRequires(t *testing.T) {
 	}
 	if st.Requires(OpScale) {
 		t.Fatal("scale not configured, should not require approval")
+	}
+	if st.Requires(OpCordon) {
+		t.Fatal("gating drain must not gate cordon")
+	}
+	if !NewApprovalStore(time.Minute, OpCordon).Requires(OpDrain) {
+		t.Fatal("drain cordons first, so gating cordon must gate drain")
 	}
 }
 
@@ -433,5 +440,133 @@ func TestApproveRequiresAuth(t *testing.T) {
 	}
 	if rb.scaleCalls != 0 {
 		t.Fatalf("approval without auth must not execute, got %d", rb.scaleCalls)
+	}
+}
+
+// A parked response names the request it created, so a client can tell it
+// from an executed mutation (whose 202 body, for drain, is also id+phase).
+func TestParkedResponseLocatesApproval(t *testing.T) {
+	rb := &recordingBackend{ClusterBackend: NewSampleBackend()}
+	s := newApprovalServer(rb, OpDrain)
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	resp := postAs(t, ts.URL+"/v1/clusters/demo/nodes/worker-1/drain", "tok-a", "")
+	loc := resp.Header.Get("Location")
+	pr := decodePending(t, resp)
+	if resp.StatusCode != http.StatusAccepted || pr.Op != OpDrain {
+		t.Fatalf("status = %d pending = %+v, want 202 with op drain", resp.StatusCode, pr)
+	}
+	if want := "/v1/clusters/demo/approvals/" + pr.ID; loc != want {
+		t.Fatalf("Location = %q, want %q", loc, want)
+	}
+	if got := decodePending(t, getAs(t, ts.URL+loc, "tok-b")); got.ID != pr.ID {
+		t.Fatalf("GET Location returned %+v, want request %s", got, pr.ID)
+	}
+}
+
+// Gating only cordon must still park a drain, which cordons the node and then
+// evicts its pods.
+func TestCordonApprovalGatesDrain(t *testing.T) {
+	rb := &recordingBackend{ClusterBackend: NewSampleBackend()}
+	s := newApprovalServer(rb, OpCordon)
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	resp := postAs(t, ts.URL+"/v1/clusters/demo/nodes/worker-1/drain", "tok-a", "")
+	pr := decodePending(t, resp)
+	if resp.StatusCode != http.StatusAccepted || pr.Op != OpDrain {
+		t.Fatalf("status = %d pending = %+v, want drain parked with 202", resp.StatusCode, pr)
+	}
+	if rb.startDrainCalls != 0 || rb.cordonCalls != 0 {
+		t.Fatalf("drain ran inline: startDrainCalls = %d cordonCalls = %d", rb.startDrainCalls, rb.cordonCalls)
+	}
+}
+
+// An approved mutation that fails is audited with the status the inline path
+// would return, keeping the raw error server-side; the record every caller
+// can read carries only the client-safe message.
+func TestApproveBackendFailure(t *testing.T) {
+	raw := errors.New(`kube api /apis/apps/v1/namespaces/platform/deployments/api/scale returned 403: User "system:serviceaccount:ops:gateway" cannot patch`)
+	for _, tc := range []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantReason string
+	}{
+		{"not found", ErrNotFound, http.StatusNotFound, "not found"},
+		{"bad request", ErrBadRequest, http.StatusBadRequest, ErrBadRequest.Error()},
+		{"unsupported", ErrUnsupported, http.StatusNotImplemented, ErrUnsupported.Error()},
+		{"raw kube error", raw, http.StatusBadGateway, "backend error"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rb := &recordingBackend{ClusterBackend: NewSampleBackend(), returnErr: tc.err}
+			var entries []AuditEntry
+			s := newApprovalServer(rb, OpScale)
+			s.AuditSink = func(e AuditEntry) { entries = append(entries, e) }
+			ts := httptest.NewServer(s.Handler())
+			defer ts.Close()
+
+			park := decodePending(t, postAs(t, ts.URL+"/v1/clusters/demo/workloads/deployment:platform/api/scale", "tok-a", `{"replicas":5}`))
+			resp := postAs(t, ts.URL+"/v1/clusters/demo/approvals/"+park.ID+"/approve", "tok-b", "")
+			done := decodePending(t, resp)
+			if resp.StatusCode != http.StatusOK || done.Phase != ApprovalPhaseFailed {
+				t.Fatalf("status = %d phase = %q, want 200 and failed", resp.StatusCode, done.Phase)
+			}
+			if done.Reason != tc.wantReason {
+				t.Fatalf("reason = %q, want %q", done.Reason, tc.wantReason)
+			}
+			last := entries[len(entries)-1]
+			if last.ApprovalID != park.ID || last.Status != tc.wantStatus || last.Error != tc.err.Error() {
+				t.Fatalf("audit = %+v, want status %d with the raw error", last, tc.wantStatus)
+			}
+		})
+	}
+}
+
+// vanishingBackend drops every approval record while a scale runs, so the
+// approve handler's Complete finds nothing to finalize.
+type vanishingBackend struct {
+	*recordingBackend
+	store *ApprovalStore
+}
+
+func (b vanishingBackend) ScaleWorkload(ctx context.Context, clusterID, workloadID string, replicas int) error {
+	b.store.mu.Lock()
+	clear(b.store.reqs)
+	b.store.mu.Unlock()
+	return b.recordingBackend.ScaleWorkload(ctx, clusterID, workloadID, replicas)
+}
+
+// A failed Complete used to be ignored, answering 200 with an empty record.
+func TestApproveCompleteFailureIs500(t *testing.T) {
+	rb := &recordingBackend{ClusterBackend: NewSampleBackend()}
+	s := newApprovalServer(rb, OpScale)
+	s.Backend = vanishingBackend{rb, s.Approvals}
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	park := decodePending(t, postAs(t, ts.URL+"/v1/clusters/demo/workloads/deployment:platform/api/scale", "tok-a", `{"replicas":5}`))
+	resp := postAs(t, ts.URL+"/v1/clusters/demo/approvals/"+park.ID+"/approve", "tok-b", "")
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", resp.StatusCode)
+	}
+}
+
+// A scale record without replicas must fail, not scale the workload to 0.
+func TestApprovedScaleWithoutReplicasFails(t *testing.T) {
+	rb := &recordingBackend{ClusterBackend: NewSampleBackend()}
+	s := newApprovalServer(rb, OpScale)
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	park := s.Approvals.Park(OpScale, "demo", "deployment:platform/api", nil, "tok:someone")
+	done := decodePending(t, postAs(t, ts.URL+"/v1/clusters/demo/approvals/"+park.ID+"/approve", "tok-b", ""))
+	if done.Phase != ApprovalPhaseFailed || done.Reason != ErrBadRequest.Error() {
+		t.Fatalf("done = %+v, want failed with %q", done, ErrBadRequest)
+	}
+	if rb.scaleCalls != 0 {
+		t.Fatalf("scaleCalls = %d, want 0", rb.scaleCalls)
 	}
 }

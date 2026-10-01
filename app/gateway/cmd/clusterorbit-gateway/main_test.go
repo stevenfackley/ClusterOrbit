@@ -45,7 +45,7 @@ func TestBuildApprovalPolicy(t *testing.T) {
 		name      string
 		env       map[string]string
 		tokens    []string
-		wantOps   []string // nil == approval off
+		wantOps   []string // ops Requires reports; nil == approval off
 		wantLabel string
 		wantErr   bool
 	}{
@@ -64,7 +64,7 @@ func TestBuildApprovalPolicy(t *testing.T) {
 				"CLUSTERORBIT_GATEWAY_POLICY_APPROVAL_TTL":     "5m",
 			},
 			tokens:    two,
-			wantOps:   []string{api.OpCordon},
+			wantOps:   []string{api.OpCordon, api.OpDrain}, // cordon gates drain too
 			wantLabel: "ops=1 ttl=5m0s",
 		},
 		{

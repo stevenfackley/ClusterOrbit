@@ -91,9 +91,17 @@ func NewApprovalStore(ttl time.Duration, ops ...string) *ApprovalStore {
 }
 
 // Requires reports whether op must be parked for approval. A nil store or an
-// op not in the set returns false (execute inline).
+// op not in the set returns false (execute inline). Gating cordon also gates
+// drain: a drain cordons the node before evicting, so it must never be less
+// guarded than cordon (the superset rule NodePolicy.EvaluateDrain follows).
 func (s *ApprovalStore) Requires(op string) bool {
-	return s != nil && s.ops[op]
+	if s == nil {
+		return false
+	}
+	if op == OpDrain && s.ops[OpCordon] {
+		return true
+	}
+	return s.ops[op]
 }
 
 func randomApprovalID() string {

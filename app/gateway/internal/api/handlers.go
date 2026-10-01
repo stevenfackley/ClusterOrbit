@@ -351,35 +351,29 @@ func (s *Server) handleStartDrain(w http.ResponseWriter, r *http.Request, cluste
 		return
 	}
 	if err := ValidateNodeID(nodeID); err != nil {
-		s.audit(r, clusterID, nodeID, nil, http.StatusBadRequest, err.Error())
+		s.audit(r, AuditEntry{ClusterID: clusterID, WorkloadID: nodeID, Status: http.StatusBadRequest, Error: err.Error()})
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	if reason := s.NodePolicy.EvaluateDrain(nodeID); reason != "" {
-		s.audit(r, clusterID, nodeID, nil, http.StatusForbidden, "policy: "+reason)
+		s.audit(r, AuditEntry{ClusterID: clusterID, WorkloadID: nodeID, Status: http.StatusForbidden, Error: "policy: " + reason})
 		writeError(w, http.StatusForbidden, "policy violation: "+reason)
 		return
 	}
 
 	if s.Approvals.Requires(OpDrain) {
-		pr := s.Approvals.Park(OpDrain, clusterID, nodeID, nil, s.identity(r))
-		s.auditApproval(r, pr, http.StatusAccepted, "")
-		writeJSON(w, http.StatusAccepted, pr)
+		s.writeParked(w, r, OpDrain, clusterID, nodeID, nil)
 		return
 	}
 
 	job, err := s.Backend.StartDrain(r.Context(), clusterID, nodeID)
-	status := http.StatusAccepted
-	msg := ""
 	if err != nil {
-		status, msg = scaleStatus(err)
-	}
-	s.audit(r, clusterID, nodeID, nil, status, msg)
-	if err != nil {
+		s.audit(r, AuditEntry{ClusterID: clusterID, WorkloadID: nodeID, Status: backendErrStatus(err), Error: err.Error()})
 		writeBackendError(w, err)
 		return
 	}
+	s.audit(r, AuditEntry{ClusterID: clusterID, WorkloadID: nodeID, Status: http.StatusAccepted})
 	writeJSON(w, http.StatusAccepted, job)
 }
 
@@ -412,31 +406,29 @@ func (s *Server) handleCordon(w http.ResponseWriter, r *http.Request, clusterID,
 		return
 	}
 	if err := ValidateNodeID(nodeID); err != nil {
-		s.audit(r, clusterID, nodeID, nil, http.StatusBadRequest, err.Error())
+		s.audit(r, AuditEntry{ClusterID: clusterID, WorkloadID: nodeID, Status: http.StatusBadRequest, Error: err.Error()})
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	if reason := s.NodePolicy.EvaluateCordon(nodeID, unschedulable); reason != "" {
-		s.audit(r, clusterID, nodeID, nil, http.StatusForbidden, "policy: "+reason)
+		s.audit(r, AuditEntry{ClusterID: clusterID, WorkloadID: nodeID, Status: http.StatusForbidden, Error: "policy: " + reason})
 		writeError(w, http.StatusForbidden, "policy violation: "+reason)
 		return
 	}
 
 	if unschedulable && s.Approvals.Requires(OpCordon) {
-		pr := s.Approvals.Park(OpCordon, clusterID, nodeID, nil, s.identity(r))
-		s.auditApproval(r, pr, http.StatusAccepted, "")
-		writeJSON(w, http.StatusAccepted, pr)
+		s.writeParked(w, r, OpCordon, clusterID, nodeID, nil)
 		return
 	}
 
 	err := s.Backend.CordonNode(r.Context(), clusterID, nodeID, unschedulable)
-	status, msg := scaleStatus(err)
-	s.audit(r, clusterID, nodeID, nil, status, msg)
 	if err != nil {
+		s.audit(r, AuditEntry{ClusterID: clusterID, WorkloadID: nodeID, Status: backendErrStatus(err), Error: err.Error()})
 		writeBackendError(w, err)
 		return
 	}
+	s.audit(r, AuditEntry{ClusterID: clusterID, WorkloadID: nodeID, Status: http.StatusOK})
 	writeJSON(w, http.StatusOK, map[string]any{
 		"clusterId":   clusterID,
 		"nodeId":      nodeID,
@@ -452,7 +444,7 @@ func (s *Server) handleScale(w http.ResponseWriter, r *http.Request, clusterID, 
 	}
 	_, namespace, _, err := ParseWorkloadID(workloadID)
 	if err != nil {
-		s.audit(r, clusterID, workloadID, nil, http.StatusBadRequest, err.Error())
+		s.audit(r, AuditEntry{ClusterID: clusterID, WorkloadID: workloadID, Status: http.StatusBadRequest, Error: err.Error()})
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -462,36 +454,34 @@ func (s *Server) handleScale(w http.ResponseWriter, r *http.Request, clusterID, 
 		Replicas *int `json:"replicas"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		s.audit(r, clusterID, workloadID, nil, http.StatusBadRequest, "decode body: "+err.Error())
+		s.audit(r, AuditEntry{ClusterID: clusterID, WorkloadID: workloadID, Status: http.StatusBadRequest, Error: "decode body: " + err.Error()})
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
 	if body.Replicas == nil || *body.Replicas < 0 {
-		s.audit(r, clusterID, workloadID, body.Replicas, http.StatusBadRequest, "replicas must be >=0")
+		s.audit(r, AuditEntry{ClusterID: clusterID, WorkloadID: workloadID, Replicas: body.Replicas, Status: http.StatusBadRequest, Error: "replicas must be >=0"})
 		writeError(w, http.StatusBadRequest, "replicas must be a non-negative integer")
 		return
 	}
 
 	if reason := s.ScalePolicy.Evaluate(namespace, *body.Replicas); reason != "" {
-		s.audit(r, clusterID, workloadID, body.Replicas, http.StatusForbidden, "policy: "+reason)
+		s.audit(r, AuditEntry{ClusterID: clusterID, WorkloadID: workloadID, Replicas: body.Replicas, Status: http.StatusForbidden, Error: "policy: " + reason})
 		writeError(w, http.StatusForbidden, "policy violation: "+reason)
 		return
 	}
 
 	if s.Approvals.Requires(OpScale) {
-		pr := s.Approvals.Park(OpScale, clusterID, workloadID, body.Replicas, s.identity(r))
-		s.auditApproval(r, pr, http.StatusAccepted, "")
-		writeJSON(w, http.StatusAccepted, pr)
+		s.writeParked(w, r, OpScale, clusterID, workloadID, body.Replicas)
 		return
 	}
 
 	err = s.Backend.ScaleWorkload(r.Context(), clusterID, workloadID, *body.Replicas)
-	status, msg := scaleStatus(err)
-	s.audit(r, clusterID, workloadID, body.Replicas, status, msg)
 	if err != nil {
+		s.audit(r, AuditEntry{ClusterID: clusterID, WorkloadID: workloadID, Replicas: body.Replicas, Status: backendErrStatus(err), Error: err.Error()})
 		writeBackendError(w, err)
 		return
 	}
+	s.audit(r, AuditEntry{ClusterID: clusterID, WorkloadID: workloadID, Replicas: body.Replicas, Status: http.StatusOK})
 	writeJSON(w, http.StatusOK, map[string]any{
 		"clusterId":  clusterID,
 		"workloadId": workloadID,
@@ -510,31 +500,29 @@ func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request, clusterID
 	}
 	_, namespace, _, err := ParseWorkloadID(workloadID)
 	if err != nil {
-		s.audit(r, clusterID, workloadID, nil, http.StatusBadRequest, err.Error())
+		s.audit(r, AuditEntry{ClusterID: clusterID, WorkloadID: workloadID, Status: http.StatusBadRequest, Error: err.Error()})
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	if reason := s.ScalePolicy.EvaluateNamespace(namespace); reason != "" {
-		s.audit(r, clusterID, workloadID, nil, http.StatusForbidden, "policy: "+reason)
+		s.audit(r, AuditEntry{ClusterID: clusterID, WorkloadID: workloadID, Status: http.StatusForbidden, Error: "policy: " + reason})
 		writeError(w, http.StatusForbidden, "policy violation: "+reason)
 		return
 	}
 
 	if s.Approvals.Requires(OpRestart) {
-		pr := s.Approvals.Park(OpRestart, clusterID, workloadID, nil, s.identity(r))
-		s.auditApproval(r, pr, http.StatusAccepted, "")
-		writeJSON(w, http.StatusAccepted, pr)
+		s.writeParked(w, r, OpRestart, clusterID, workloadID, nil)
 		return
 	}
 
 	err = s.Backend.RestartWorkload(r.Context(), clusterID, workloadID)
-	status, msg := scaleStatus(err)
-	s.audit(r, clusterID, workloadID, nil, status, msg)
 	if err != nil {
+		s.audit(r, AuditEntry{ClusterID: clusterID, WorkloadID: workloadID, Status: backendErrStatus(err), Error: err.Error()})
 		writeBackendError(w, err)
 		return
 	}
+	s.audit(r, AuditEntry{ClusterID: clusterID, WorkloadID: workloadID, Status: http.StatusOK})
 	writeJSON(w, http.StatusOK, map[string]any{
 		"clusterId":  clusterID,
 		"workloadId": workloadID,
@@ -542,86 +530,54 @@ func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request, clusterID
 	})
 }
 
-func scaleStatus(err error) (int, string) {
-	switch {
-	case err == nil:
-		return http.StatusOK, ""
-	case errors.Is(err, ErrNotFound):
-		return http.StatusNotFound, err.Error()
-	case errors.Is(err, ErrUnsupported):
-		return http.StatusNotImplemented, err.Error()
-	case errors.Is(err, ErrBadRequest):
-		return http.StatusBadRequest, err.Error()
-	default:
-		return http.StatusBadGateway, err.Error()
-	}
-}
-
-func (s *Server) audit(r *http.Request, clusterID, workloadID string, replicas *int, status int, errMsg string) {
+// audit records one mutation attempt or approval-flow event. Callers fill in
+// the target and outcome; audit stamps the time and the caller's identity,
+// method and path.
+func (s *Server) audit(r *http.Request, e AuditEntry) {
 	if s.AuditSink == nil {
 		return
 	}
-	s.AuditSink(AuditEntry{
-		Timestamp:  timeNow().UTC().Format("2006-01-02T15:04:05Z07:00"),
-		Identity:   s.identity(r),
-		Method:     r.Method,
-		Path:       r.URL.Path,
-		ClusterID:  clusterID,
-		WorkloadID: workloadID,
-		Replicas:   replicas,
-		Status:     status,
-		Error:      errMsg,
-	})
+	e.Timestamp = timeNow().UTC().Format(time.RFC3339)
+	e.Identity = s.identity(r)
+	e.Method = r.Method
+	e.Path = r.URL.Path
+	s.AuditSink(e)
 }
 
-// executePending runs the backend mutation captured by an approved request and
-// returns the async result id (drain only) and an error message ("" on success).
-func (s *Server) executePending(ctx context.Context, req PendingRequest) (resultID, errMsg string) {
-	var err error
+// writeParked parks op on targetID for a second-person approval and answers
+// 202 with the PendingRequest. The Location header names the request to poll,
+// which is how a client tells a parked mutation from one that ran.
+func (s *Server) writeParked(w http.ResponseWriter, r *http.Request, op, clusterID, targetID string, replicas *int) {
+	pr := s.Approvals.Park(op, clusterID, targetID, replicas, s.identity(r))
+	s.audit(r, AuditEntry{ClusterID: pr.ClusterID, WorkloadID: pr.TargetID, Replicas: pr.Replicas, ApprovalID: pr.ID, Status: http.StatusAccepted})
+	w.Header().Set("Location", pathRoot+"/"+url.PathEscape(pr.ClusterID)+"/approvals/"+url.PathEscape(pr.ID))
+	writeJSON(w, http.StatusAccepted, pr)
+}
+
+// executePending runs the backend mutation captured by an approved request.
+// resultID is the drain job ID for OpDrain and "" for every other op.
+func (s *Server) executePending(ctx context.Context, req PendingRequest) (resultID string, err error) {
 	switch req.Op {
 	case OpScale:
-		replicas := 0
-		if req.Replicas != nil {
-			replicas = *req.Replicas
+		// handleScale never parks a scale without replicas. Defaulting a
+		// missing count to 0 would take the workload down, so refuse it.
+		if req.Replicas == nil {
+			return "", ErrBadRequest
 		}
-		err = s.Backend.ScaleWorkload(ctx, req.ClusterID, req.TargetID, replicas)
+		return "", s.Backend.ScaleWorkload(ctx, req.ClusterID, req.TargetID, *req.Replicas)
 	case OpRestart:
-		err = s.Backend.RestartWorkload(ctx, req.ClusterID, req.TargetID)
+		return "", s.Backend.RestartWorkload(ctx, req.ClusterID, req.TargetID)
 	case OpCordon:
-		err = s.Backend.CordonNode(ctx, req.ClusterID, req.TargetID, true)
+		return "", s.Backend.CordonNode(ctx, req.ClusterID, req.TargetID, true)
 	case OpDrain:
-		var job DrainJob
-		job, err = s.Backend.StartDrain(ctx, req.ClusterID, req.TargetID)
-		if err == nil {
-			resultID = job.ID
+		job, err := s.Backend.StartDrain(ctx, req.ClusterID, req.TargetID)
+		if err != nil {
+			return "", err
 		}
+		return job.ID, nil
 	default:
-		err = ErrBadRequest
+		return "", ErrBadRequest
 	}
-	if err != nil {
-		return "", err.Error()
-	}
-	return resultID, ""
-}
-
-// auditApproval records an approval-flow event (park, approve, reject, or
-// execute result). ApprovalID threads one request park → approve → execute.
-func (s *Server) auditApproval(r *http.Request, req PendingRequest, status int, errMsg string) {
-	if s.AuditSink == nil {
-		return
-	}
-	s.AuditSink(AuditEntry{
-		Timestamp:  timeNow().UTC().Format("2006-01-02T15:04:05Z07:00"),
-		Identity:   s.identity(r),
-		Method:     r.Method,
-		Path:       r.URL.Path,
-		ClusterID:  req.ClusterID,
-		WorkloadID: req.TargetID,
-		Replicas:   req.Replicas,
-		Status:     status,
-		Error:      errMsg,
-		ApprovalID: req.ID,
-	})
 }
 
 // approvalErrStatus maps store errors to HTTP status codes.
@@ -687,7 +643,7 @@ func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request, clusterID
 	// Without auth no identity is trustworthy enough to tell two people
 	// apart, so a second-person approval can't be enforced.
 	if len(s.acceptedTokens()) == 0 {
-		s.auditApproval(r, PendingRequest{ID: rid, ClusterID: clusterID}, http.StatusForbidden, "approval requires token auth")
+		s.audit(r, AuditEntry{ClusterID: clusterID, ApprovalID: rid, Status: http.StatusForbidden, Error: "approval requires token auth"})
 		writeError(w, http.StatusForbidden, "approval requires token auth")
 		return
 	}
@@ -698,18 +654,30 @@ func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request, clusterID
 	}
 	approved, err := s.Approvals.Approve(rid, s.identity(r))
 	if err != nil {
-		status := approvalErrStatus(err)
-		s.auditApproval(r, PendingRequest{ID: rid, ClusterID: clusterID}, status, err.Error())
+		s.audit(r, AuditEntry{ClusterID: clusterID, ApprovalID: rid, Status: approvalErrStatus(err), Error: err.Error()})
 		writeApprovalError(w, err)
 		return
 	}
-	resultID, execMsg := s.executePending(r.Context(), approved)
-	final, _ := s.Approvals.Complete(rid, resultID, execMsg)
-	status := http.StatusOK
-	if execMsg != "" {
-		status = http.StatusBadGateway
+
+	// The approve action itself succeeded, so the response is 200 whatever
+	// the mutation did; the record's phase carries the outcome. A failure is
+	// audited with the status the inline path would have returned and the
+	// raw error. The record, which every caller can read, gets only the
+	// client-safe message.
+	resultID, execErr := s.executePending(r.Context(), approved)
+	entry := AuditEntry{ClusterID: approved.ClusterID, WorkloadID: approved.TargetID, Replicas: approved.Replicas, ApprovalID: rid, Status: http.StatusOK}
+	reason := ""
+	if execErr != nil {
+		entry.Status, entry.Error = backendErrStatus(execErr), execErr.Error()
+		reason = publicErrMessage(execErr)
 	}
-	s.auditApproval(r, final, status, execMsg)
+	s.audit(r, entry)
+	final, err := s.Approvals.Complete(rid, resultID, reason)
+	if err != nil {
+		log.Printf("gateway: complete approval %s: %v", rid, err)
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
 	writeJSON(w, http.StatusOK, final)
 }
 
@@ -726,29 +694,51 @@ func (s *Server) handleReject(w http.ResponseWriter, r *http.Request, clusterID,
 	}
 	final, err := s.Approvals.Reject(rid, "rejected by "+s.identity(r))
 	if err != nil {
-		s.auditApproval(r, PendingRequest{ID: rid, ClusterID: clusterID}, approvalErrStatus(err), err.Error())
+		s.audit(r, AuditEntry{ClusterID: clusterID, ApprovalID: rid, Status: approvalErrStatus(err), Error: err.Error()})
 		writeApprovalError(w, err)
 		return
 	}
-	s.auditApproval(r, final, http.StatusOK, "")
+	s.audit(r, AuditEntry{ClusterID: final.ClusterID, WorkloadID: final.TargetID, Replicas: final.Replicas, ApprovalID: final.ID, Status: http.StatusOK})
 	writeJSON(w, http.StatusOK, final)
 }
 
-// writeBackendError translates a ClusterBackend error into an HTTP status.
-// Unknown backend errors log server-side but return a generic message so
-// kubernetes internals don't leak to clients.
-func writeBackendError(w http.ResponseWriter, err error) {
+// backendErrStatus maps a ClusterBackend error to the HTTP status a client
+// gets for it (200 for nil). Unknown errors are upstream failures (502).
+func backendErrStatus(err error) int {
+	switch {
+	case err == nil:
+		return http.StatusOK
+	case errors.Is(err, ErrNotFound):
+		return http.StatusNotFound
+	case errors.Is(err, ErrUnsupported):
+		return http.StatusNotImplemented
+	case errors.Is(err, ErrBadRequest):
+		return http.StatusBadRequest
+	default:
+		return http.StatusBadGateway
+	}
+}
+
+// publicErrMessage is the text a client may see for a non-nil backend error.
+// The sentinels' messages are safe. Anything else can carry a raw Kubernetes
+// API response, so it is logged here, server-side, and replaced by a generic
+// message.
+func publicErrMessage(err error) string {
 	switch {
 	case errors.Is(err, ErrNotFound):
-		writeError(w, http.StatusNotFound, "not found")
-	case errors.Is(err, ErrBadRequest):
-		writeError(w, http.StatusBadRequest, err.Error())
-	case errors.Is(err, ErrUnsupported):
-		writeError(w, http.StatusNotImplemented, err.Error())
+		return "not found"
+	case errors.Is(err, ErrBadRequest), errors.Is(err, ErrUnsupported):
+		return err.Error()
 	default:
 		log.Printf("gateway: backend error: %v", err)
-		writeError(w, http.StatusBadGateway, "backend error")
+		return "backend error"
 	}
+}
+
+// writeBackendError translates a ClusterBackend error into an HTTP response
+// without leaking kubernetes internals to the client.
+func writeBackendError(w http.ResponseWriter, err error) {
+	writeError(w, backendErrStatus(err), publicErrMessage(err))
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {
