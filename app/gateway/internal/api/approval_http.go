@@ -127,8 +127,10 @@ func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request, clusterID
 	// The approve action itself succeeded, so the response is 200 whatever
 	// the mutation did; the record's phase carries the outcome. A failure is
 	// audited with the status the inline path would have returned and the
-	// raw error. The record, which every caller can read, gets only the
-	// client-safe message.
+	// raw error. The record, which every caller can read, gets the message
+	// the inline call would have answered (publicErrMessage): a wrapped
+	// apiserver 400/422 keeps its truncated Status message, anything
+	// unmapped becomes "backend error".
 	resultID, execErr := s.executePending(r.Context(), approved)
 	entry := AuditEntry{ClusterID: approved.ClusterID, WorkloadID: approved.TargetID, Replicas: approved.Replicas, ApprovalID: rid, Status: http.StatusOK}
 	reason := ""

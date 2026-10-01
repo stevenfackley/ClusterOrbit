@@ -340,7 +340,11 @@ func restartResourceFor(kind string) (string, bool) {
 }
 
 // sentinelError tags a backend error with an api sentinel so handlers map it
-// to the right HTTP status, while Error() keeps the original short message.
+// to the right HTTP status. Error() is the wrapped error's own text: for an
+// apiserver reply, the StatusError short form with the Status message capped
+// at maxStatusMessage bytes, never the raw body. Handlers show that text to
+// clients (the 400 body, PendingRequest.Reason) by design, as DrainJob.Error
+// does: an admission denial's message is what the operator needs to act.
 type sentinelError struct {
 	sentinel error
 	err      error

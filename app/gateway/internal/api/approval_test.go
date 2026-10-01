@@ -509,8 +509,20 @@ func TestCordonApprovalGatesDrain(t *testing.T) {
 // An approved mutation that fails is audited with the status the inline path
 // would return, keeping the raw error server-side; the record every caller
 // can read carries only the client-safe message.
+// shortErr is how kubebackend reports an apiserver 400/422: the sentinel for
+// the status, with the StatusError short form as the text.
+type shortErr struct {
+	sentinel error
+	msg      string
+}
+
+func (e shortErr) Error() string { return e.msg }
+func (e shortErr) Unwrap() error { return e.sentinel }
+
 func TestApproveBackendFailure(t *testing.T) {
 	raw := errors.New(`kube api /apis/apps/v1/namespaces/platform/deployments/api/scale returned 403: User "system:serviceaccount:ops:gateway" cannot patch`)
+	// A truncated apiserver Status message is client-visible by design.
+	wrapped := shortErr{ErrBadRequest, `scale deployment platform/api: kube api returned 422 Invalid: admission webhook "quota.example.com" denied the request: replicas over quota`}
 	for _, tc := range []struct {
 		name       string
 		err        error
@@ -520,10 +532,25 @@ func TestApproveBackendFailure(t *testing.T) {
 		{"not found", ErrNotFound, http.StatusNotFound, "not found"},
 		{"bad request", ErrBadRequest, http.StatusBadRequest, ErrBadRequest.Error()},
 		{"unsupported", ErrUnsupported, http.StatusNotImplemented, ErrUnsupported.Error()},
+		{"wrapped sentinel", wrapped, http.StatusBadRequest, wrapped.msg},
 		{"raw kube error", raw, http.StatusBadGateway, "backend error"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rb := &recordingBackend{ClusterBackend: NewSampleBackend(), returnErr: tc.err}
+
+			// Inline, the same error answers wantStatus with wantReason.
+			inline := httptest.NewServer((&Server{Backend: rb, Tokens: []string{"tok-a"}}).Handler())
+			defer inline.Close()
+			resp := postAs(t, inline.URL+"/v1/clusters/demo/workloads/deployment:platform/api/scale", "tok-a", `{"replicas":5}`)
+			var body map[string]string
+			if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+				t.Fatalf("decode inline error: %v", err)
+			}
+			resp.Body.Close()
+			if resp.StatusCode != tc.wantStatus || body["error"] != tc.wantReason {
+				t.Fatalf("inline = %d %q, want %d %q", resp.StatusCode, body["error"], tc.wantStatus, tc.wantReason)
+			}
+
 			var entries []AuditEntry
 			s := newApprovalServer(rb, OpScale)
 			s.AuditSink = func(e AuditEntry) { entries = append(entries, e) }
@@ -531,7 +558,7 @@ func TestApproveBackendFailure(t *testing.T) {
 			defer ts.Close()
 
 			park := decodePending(t, postAs(t, ts.URL+"/v1/clusters/demo/workloads/deployment:platform/api/scale", "tok-a", `{"replicas":5}`))
-			resp := postAs(t, ts.URL+"/v1/clusters/demo/approvals/"+park.ID+"/approve", "tok-b", "")
+			resp = postAs(t, ts.URL+"/v1/clusters/demo/approvals/"+park.ID+"/approve", "tok-b", "")
 			done := decodePending(t, resp)
 			if resp.StatusCode != http.StatusOK || done.Phase != ApprovalPhaseFailed {
 				t.Fatalf("status = %d phase = %q, want 200 and failed", resp.StatusCode, done.Phase)

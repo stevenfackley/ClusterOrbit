@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -20,6 +21,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stevenfackley/clusterorbit/app/gateway/internal/api"
 	"github.com/stevenfackley/clusterorbit/app/gateway/internal/kubeconfig"
@@ -173,6 +175,20 @@ func TestRestClientReturnsShortStatusError(t *testing.T) {
 	}
 }
 
+func TestStatusErrorTruncatesOnARuneBoundary(t *testing.T) {
+	// "é" is two bytes, starting at byte maxStatusMessage-1: a byte cut at
+	// maxStatusMessage would split it.
+	keep := strings.Repeat("x", maxStatusMessage-1)
+	body, _ := json.Marshal(map[string]string{"reason": "Invalid", "message": keep + "é and more"})
+	se := newStatusError(http.StatusUnprocessableEntity, body)
+	if !utf8.ValidString(se.Message) {
+		t.Fatalf("truncated message is not valid UTF-8: %q", se.Message[len(keep):])
+	}
+	if want := keep + "…"; se.Message != want {
+		t.Fatalf("message tail = %q, want the %d bytes before the rune plus an ellipsis", se.Message[len(keep):], len(keep))
+	}
+}
+
 func TestKubeBackendMutationsMapStatusErrors(t *testing.T) {
 	tests := []struct {
 		status int
@@ -200,6 +216,11 @@ func TestKubeBackendMutationsMapStatusErrors(t *testing.T) {
 		for name, err := range calls {
 			if !errors.Is(err, tc.want) {
 				t.Errorf("%s with %d: err = %v, want %v", name, tc.status, err, tc.want)
+			}
+			// The short StatusError form, apiserver message included, is the
+			// text a client sees for a 400.
+			if want := fmt.Sprintf("kube api returned %d Nope: nope", tc.status); !strings.HasSuffix(err.Error(), want) {
+				t.Errorf("%s with %d: message = %q, want it to end with %q", name, tc.status, err, want)
 			}
 			var se *StatusError
 			if !errors.As(err, &se) || se.Code != tc.status {

@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stevenfackley/clusterorbit/app/gateway/internal/kubeconfig"
 )
@@ -77,13 +78,16 @@ func NewRestClient(cluster *kubeconfig.ResolvedCluster) (*RestClient, error) {
 	}, nil
 }
 
-// maxStatusMessage caps the apiserver message kept in a StatusError so a
-// verbose Status body never reaches clients or job records.
+// maxStatusMessage caps, in bytes, the apiserver message kept in a
+// StatusError. That message is client-visible (400 bodies, approval reasons,
+// DrainJob.Error), so the cap keeps a verbose Status from reaching clients
+// whole.
 const maxStatusMessage = 256
 
 // StatusError is a non-2xx response from the API server, reduced to the HTTP
 // code plus the Status object's reason and (truncated) message. It never
-// carries the raw response body.
+// carries the raw response body; its Error() text is the short form clients
+// may see.
 type StatusError struct {
 	Code    int
 	Reason  string
@@ -111,7 +115,12 @@ func newStatusError(code int, body []byte) *StatusError {
 		e.Reason = http.StatusText(code)
 	}
 	if len(e.Message) > maxStatusMessage {
-		e.Message = e.Message[:maxStatusMessage] + "…"
+		cut := maxStatusMessage
+		// Back up to a rune start so the cut never splits a UTF-8 sequence.
+		for cut > 0 && !utf8.RuneStart(e.Message[cut]) {
+			cut--
+		}
+		e.Message = e.Message[:cut] + "…"
 	}
 	return e
 }

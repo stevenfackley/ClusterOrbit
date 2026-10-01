@@ -561,9 +561,13 @@ func backendErrStatus(err error) int {
 }
 
 // publicErrMessage is the text a client may see for a non-nil backend error.
-// The sentinels' messages are safe. Anything else can carry a raw Kubernetes
-// API response, so it is logged here, server-side, and replaced by a generic
-// message.
+// ErrNotFound becomes "not found". An error that is or wraps ErrBadRequest or
+// ErrUnsupported passes through verbatim, so a backend that wraps one must
+// keep its text client-safe: kubebackend wraps apiserver 400/422 replies with
+// the StatusError short form (code, reason, and the Status message capped at
+// 256 bytes, never the raw body), which is client-visible by design, as in
+// DrainJob.Error. Anything else can carry raw Kubernetes API text, so it is
+// logged here, server-side, and replaced by "backend error".
 func publicErrMessage(err error) string {
 	switch {
 	case errors.Is(err, ErrNotFound):
