@@ -837,26 +837,25 @@ class _ScaleDialogState extends State<_ScaleDialog> {
 
   @override
   Widget build(BuildContext context) {
+    // Scrollable: on a landscape phone the keyboard leaves too little height
+    // for the content, which would otherwise collapse to nothing and hide
+    // the field. The current count rides in the field's helper text, and
+    // the vertical inset is trimmed, so the scroll area fits the field.
     return AlertDialog(
+      scrollable: true,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 40, vertical: 16),
       title: Text('Scale ${widget.workloadName}'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('Current replicas: ${widget.currentReplicas}'),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _controller,
-            keyboardType: TextInputType.number,
-            autofocus: true,
-            decoration: InputDecoration(
-              labelText: 'Desired replicas',
-              errorText: _error,
-              border: const OutlineInputBorder(),
-            ),
-            onSubmitted: (_) => _submit(),
-          ),
-        ],
+      content: TextField(
+        controller: _controller,
+        keyboardType: TextInputType.number,
+        autofocus: true,
+        decoration: InputDecoration(
+          labelText: 'Desired replicas',
+          helperText: 'Current: ${widget.currentReplicas}',
+          errorText: _error,
+          border: const OutlineInputBorder(),
+        ),
+        onSubmitted: (_) => _submit(),
       ),
       actions: [
         TextButton(
