@@ -112,6 +112,12 @@ final class KubernetesSnapshotLoader {
       }
 
       final podPhase = _stringAt(pod, ['status', 'phase'])?.toLowerCase();
+      // A Job's Failed and Succeeded pods are earlier or finished attempts;
+      // only its live pods say how it is doing now.
+      if (workloadId.startsWith('${WorkloadKind.job.name}:') &&
+          (podPhase == 'failed' || podPhase == 'succeeded')) {
+        continue;
+      }
       final containerStatuses = _listAt(pod, ['status', 'containerStatuses']);
       final hasRestartingContainer = containerStatuses.any(
         (status) =>
@@ -183,7 +189,7 @@ final class KubernetesSnapshotLoader {
 
     final alerts = [
       ..._nodeAlerts(nodes),
-      ..._workloadAlerts(workloads),
+      ..._workloadAlerts(workloads, _failedJobIds(jobItems)),
       ..._serviceAlerts(services),
     ];
 
@@ -383,15 +389,16 @@ final class KubernetesSnapshotLoader {
         ? (_intAt(item, ['status', 'active']) > 0 ? 1 : readyReplicas)
         : desiredReplicas;
 
-    // A running Job is always below its completions, so only a failure counts.
-    final healthSignal = healthSignals[workloadId];
-    final health = kind == WorkloadKind.job
-        ? (_jobFailed(item, target, readyReplicas)
-            ? ClusterHealthLevel.warning
-            : (healthSignal ?? ClusterHealthLevel.healthy))
-        : readyReplicas < target
-            ? ClusterHealthLevel.warning
-            : (healthSignal ?? ClusterHealthLevel.healthy);
+    // A Job is below its completions until it finishes, so it warns only
+    // once failed; other kinds warn on replica skew. Otherwise the pod
+    // signals decide.
+    final health = switch (kind) {
+      WorkloadKind.job when _jobFailed(item) => ClusterHealthLevel.warning,
+      WorkloadKind.job =>
+        healthSignals[workloadId] ?? ClusterHealthLevel.healthy,
+      _ when readyReplicas < target => ClusterHealthLevel.warning,
+      _ => healthSignals[workloadId] ?? ClusterHealthLevel.healthy,
+    };
 
     final containers = _listAt(item, ['spec', 'template', 'spec', 'containers'])
         .cast<Map?>()
@@ -413,16 +420,26 @@ final class KubernetesSnapshotLoader {
     );
   }
 
-  bool _jobFailed(Map<String, dynamic> item, int target, int succeeded) {
-    final failedCondition = _listAt(item, ['status', 'conditions'])
-        .cast<Map?>()
-        .whereType<Map>()
-        .any((c) => c['type'] == 'Failed' && c['status'] == 'True');
-    return failedCondition ||
-        (_intAt(item, ['status', 'failed']) > 0 &&
-            _intAt(item, ['status', 'active']) == 0 &&
-            succeeded < target);
-  }
+  /// Whether the Job controller has declared [item] failed: a Failed or
+  /// FailureTarget condition with status True. Failed pods alone don't
+  /// count, since the controller may still retry them (between attempts a
+  /// Job has failed pods and none active).
+  bool _jobFailed(Map<String, dynamic> item) =>
+      _listAt(item, ['status', 'conditions']).cast<Map?>().whereType<Map>().any(
+          (c) =>
+              (c['type'] == 'Failed' || c['type'] == 'FailureTarget') &&
+              c['status'] == 'True');
+
+  /// The workload ids of the failed Jobs among [jobItems].
+  Set<String> _failedJobIds(List<Map<String, dynamic>> jobItems) => {
+        for (final item in jobItems)
+          if (_jobFailed(item))
+            _workloadId(
+              WorkloadKind.job,
+              _stringAt(item, ['metadata', 'namespace']) ?? 'default',
+              _stringAt(item, ['metadata', 'name']) ?? 'unknown',
+            ),
+      };
 
   ClusterService _serviceFromItem(
     Map<String, dynamic> item,
@@ -496,16 +513,22 @@ final class KubernetesSnapshotLoader {
     ];
   }
 
-  List<ClusterAlert> _workloadAlerts(List<ClusterWorkload> workloads) {
+  /// Replica skew on controllers, and failed Jobs. A Job is below its
+  /// completions until it finishes, so it never alerts on skew, and its pods
+  /// never raise an alert; only [_jobFailed] does.
+  List<ClusterAlert> _workloadAlerts(
+    List<ClusterWorkload> workloads,
+    Set<String> failedJobIds,
+  ) {
     return [
       for (final workload in workloads)
         if (workload.kind == WorkloadKind.job)
-          if (workload.health != ClusterHealthLevel.healthy)
+          if (failedJobIds.contains(workload.id))
             ClusterAlert(
               id: 'workload-${workload.id}',
               title: 'Job failed',
-              summary: '${workload.name} has failed or unhealthy pods.',
-              level: workload.health,
+              summary: '${workload.name} has failed.',
+              level: ClusterHealthLevel.warning,
               scope: 'Workload health',
             )
           else

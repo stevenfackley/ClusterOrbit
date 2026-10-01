@@ -397,6 +397,137 @@ void main() {
     expect(workloadAlerts.map((a) => a.id), ['workload-${failed.id}']);
   });
 
+  // The same table as the gateway's TestJobHealthAndAlerts: Direct and
+  // Gateway mode must agree on every Job's health and alerts.
+  group('Job health and alerts', () {
+    Map<String, dynamic> jobPod(String name, String phase) => {
+          'metadata': {
+            'name': name,
+            'namespace': 'default',
+            'ownerReferences': [
+              {'kind': 'Job', 'name': 'j', 'controller': true},
+            ],
+          },
+          'spec': {'nodeName': 'n1'},
+          'status': {'phase': phase},
+        };
+    const failedCondition = [
+      {'type': 'Failed', 'status': 'True'},
+    ];
+    const healthy = ClusterHealthLevel.healthy;
+    const warning = ClusterHealthLevel.warning;
+
+    final cases = <(
+      String,
+      Map<String, dynamic>,
+      Map<String, dynamic>,
+      List<Map<String, dynamic>>,
+      ClusterHealthLevel,
+      String?,
+    )>[
+      // A Pending pod is a live attempt, so it still warns; a Job never
+      // alerts on it.
+      (
+        'running with a Pending pod',
+        {'completions': 1},
+        {'active': 1},
+        [jobPod('j-a', 'Pending')],
+        warning,
+        null,
+      ),
+      (
+        'running after a retry',
+        {'completions': 1},
+        {'active': 1, 'failed': 1},
+        [jobPod('j-a', 'Failed'), jobPod('j-b', 'Running')],
+        healthy,
+        null,
+      ),
+      (
+        'complete after a retry',
+        {'completions': 1},
+        {
+          'succeeded': 1,
+          'failed': 1,
+          'conditions': [
+            {'type': 'Complete', 'status': 'True'},
+          ],
+        },
+        [jobPod('j-a', 'Failed'), jobPod('j-b', 'Succeeded')],
+        healthy,
+        null,
+      ),
+      (
+        'backoff window before a retry',
+        {'completions': 1},
+        {'active': 0, 'failed': 1},
+        [jobPod('j-a', 'Failed')],
+        healthy,
+        null,
+      ),
+      (
+        'failed condition',
+        {'completions': 1},
+        {'failed': 2, 'conditions': failedCondition},
+        [jobPod('j-a', 'Failed'), jobPod('j-b', 'Failed')],
+        warning,
+        'j has failed.',
+      ),
+      (
+        'parallelism-only Job with the failed condition',
+        {'parallelism': 2},
+        {'failed': 2, 'conditions': failedCondition},
+        [jobPod('j-a', 'Failed'), jobPod('j-b', 'Failed')],
+        warning,
+        'j has failed.',
+      ),
+    ];
+
+    for (final (name, spec, status, pods, health, alert) in cases) {
+      test(name, () async {
+        final snapshot = await _loadJob(spec: spec, status: status, pods: pods);
+
+        expect(snapshot.workloads.single.health, health);
+        if (alert == null) {
+          expect(snapshot.alerts, isEmpty);
+          return;
+        }
+        final only = snapshot.alerts.single;
+        expect(only.id, 'workload-job:default/j');
+        expect(only.title, 'Job failed');
+        expect(only.summary, alert);
+        expect(only.level, warning);
+        expect(only.scope, 'Workload health');
+      });
+    }
+
+    test('only a True Failed or FailureTarget condition fails a Job', () async {
+      for (final (status, failed) in [
+        (
+          {
+            'conditions': [
+              {'type': 'FailureTarget', 'status': 'True'},
+            ],
+          },
+          true,
+        ),
+        (
+          {
+            'conditions': [
+              {'type': 'Failed', 'status': 'False'},
+            ],
+          },
+          false,
+        ),
+        ({'failed': 3, 'active': 0}, false),
+      ]) {
+        final snapshot = await _loadJob(
+            spec: const {'completions': 1}, status: status, pods: const []);
+        expect(snapshot.alerts, hasLength(failed ? 1 : 0), reason: '$status');
+      }
+    });
+  });
+
   test('snapshot loader keeps a path-prefixed API server (Rancher proxy)',
       () async {
     const base = 'https://rancher.example.com/k8s/clusters/c-abc12';
@@ -443,6 +574,60 @@ void main() {
 
     expect(snapshot.nodes, isEmpty);
   });
+}
+
+/// A snapshot of one Job, default/j, with [spec], [status] and [pods].
+Future<ClusterSnapshot> _loadJob({
+  required Map<String, dynamic> spec,
+  required Map<String, dynamic> status,
+  required List<Map<String, dynamic>> pods,
+}) {
+  const base = 'https://cluster.example.internal:6443';
+  final loader = KubernetesSnapshotLoader(
+    transport: _FakeKubernetesTransport({
+      for (final path in [
+        'api/v1/nodes',
+        'api/v1/services',
+        'apis/apps/v1/deployments',
+        'apis/apps/v1/daemonsets',
+        'apis/apps/v1/statefulsets',
+        'apis/apps/v1/replicasets',
+      ])
+        '$base/$path': _listResponse([]),
+      '$base/api/v1/pods': _listResponse(pods),
+      '$base/apis/batch/v1/jobs': _listResponse([
+        {
+          'metadata': {'namespace': 'default', 'name': 'j'},
+          'spec': spec,
+          'status': status,
+        },
+      ]),
+    }),
+  );
+  return loader.loadSnapshot(
+    const KubeconfigResolvedCluster(
+      profile: ClusterProfile(
+        id: 'c',
+        name: 'c',
+        apiServerHost: 'cluster.example.internal',
+        environmentLabel: 'Dev',
+        connectionMode: ConnectionMode.direct,
+      ),
+      server: base,
+      namespace: null,
+      auth: KubeconfigAuth(
+        bearerToken: 'abc123',
+        basicUsername: null,
+        basicPassword: null,
+        clientCertificateData: null,
+        clientKeyData: null,
+      ),
+      tls: KubeconfigTlsConfig(
+        insecureSkipTlsVerify: false,
+        certificateAuthorityData: null,
+      ),
+    ),
+  );
 }
 
 Map<String, dynamic> _listResponse(List<Map<String, dynamic>> items) => {
