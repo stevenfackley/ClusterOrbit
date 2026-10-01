@@ -145,6 +145,20 @@ class _OptionCard extends StatelessWidget {
   }
 }
 
+/// Returns a user-facing error for [value], or null when it is a usable
+/// Gateway base URL: parseable, http/https, with a non-empty host.
+String? validateGatewayUrl(String? value) {
+  final text = value?.trim() ?? '';
+  if (text.isEmpty) return 'Required';
+  final uri = Uri.tryParse(text);
+  if (uri == null) return 'Not a valid URL';
+  if (uri.scheme != 'http' && uri.scheme != 'https') {
+    return 'Must start with http:// or https://';
+  }
+  if (uri.host.isEmpty) return 'Not a valid URL';
+  return null;
+}
+
 /// Form screen for adding a Gateway connection.
 class AddGatewayScreen extends StatefulWidget {
   const AddGatewayScreen({
@@ -186,7 +200,10 @@ class _AddGatewayScreenState extends State<AddGatewayScreen> {
   bool _testing = false;
   _TestOutcome? _testOutcome;
 
-  static final _urlRegex = RegExp(r'^https?://.+', caseSensitive: false);
+  /// A previous probe result no longer describes the edited URL or token.
+  void _clearTestOutcome([String? _]) {
+    if (_testOutcome != null) setState(() => _testOutcome = null);
+  }
 
   @override
   void dispose() {
@@ -199,7 +216,7 @@ class _AddGatewayScreenState extends State<AddGatewayScreen> {
   Future<void> _testConnection() async {
     // URL is required for a probe; skip name/token validation.
     final url = _urlController.text.trim();
-    if (url.isEmpty || !_urlRegex.hasMatch(url)) {
+    if (validateGatewayUrl(url) != null) {
       setState(() => _testOutcome = const _TestOutcome.failure(
           'Enter a valid Gateway URL before testing.'));
       return;
@@ -226,6 +243,8 @@ class _AddGatewayScreenState extends State<AddGatewayScreen> {
   }
 
   Future<void> _submit() async {
+    // Keyboard submit bypasses the disabled Save button.
+    if (_submitting || _testing) return;
     if (!_formKey.currentState!.validate()) return;
     setState(() => _submitting = true);
 
@@ -290,13 +309,8 @@ class _AddGatewayScreenState extends State<AddGatewayScreen> {
                       keyboardType: TextInputType.url,
                       textInputAction: TextInputAction.next,
                       autocorrect: false,
-                      validator: (v) {
-                        if (v == null || v.trim().isEmpty) return 'Required';
-                        if (!_urlRegex.hasMatch(v.trim())) {
-                          return 'Must start with http:// or https://';
-                        }
-                        return null;
-                      },
+                      onChanged: _clearTestOutcome,
+                      validator: validateGatewayUrl,
                     ),
                     const SizedBox(height: 16),
                     TextFormField(
@@ -306,6 +320,7 @@ class _AddGatewayScreenState extends State<AddGatewayScreen> {
                         hintText: 'X-ClusterOrbit-Token value',
                       ),
                       obscureText: true,
+                      onChanged: _clearTestOutcome,
                       textInputAction: TextInputAction.done,
                       onFieldSubmitted: (_) => _submit(),
                     ),
