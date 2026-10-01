@@ -17,7 +17,6 @@ class TopologyWorkspace extends StatelessWidget {
     super.key,
     required this.snapshot,
     required this.layout,
-    required this.canvasHeight,
     required this.palette,
     required this.selectedEntity,
     required this.onEntityTap,
@@ -33,7 +32,6 @@ class TopologyWorkspace extends StatelessWidget {
 
   final ClusterSnapshot snapshot;
   final TopologyLayout layout;
-  final double canvasHeight;
   final ClusterOrbitPalette palette;
   final Object? selectedEntity;
   final void Function(Object) onEntityTap;
@@ -199,61 +197,69 @@ class TopologyWorkspace extends StatelessWidget {
                                 final scale =
                                     viewport.value.getMaxScaleOnAxis();
                                 final showLabels = scale >= 0.9;
-                                return Stack(
-                                  children: [
-                                    Positioned.fill(
-                                      child: CustomPaint(
-                                        painter: TopologyLinkPainter(
-                                          layout: layout,
-                                          accent: palette.accentCyan,
+                                // Orbs have a fixed height; cap text so it
+                                // fits (see OrbMetrics.maxTextScale).
+                                return MediaQuery.withClampedTextScaling(
+                                  maxScaleFactor: OrbMetrics.maxTextScale,
+                                  child: Stack(
+                                    children: [
+                                      Positioned.fill(
+                                        child: CustomPaint(
+                                          painter: TopologyLinkPainter(
+                                            layout: layout,
+                                            accent: palette.accentCyan,
+                                          ),
                                         ),
                                       ),
-                                    ),
-                                    for (final node in snapshot.nodes)
-                                      if (layout.visibleNodeIds
-                                          .contains(node.id))
-                                        CanvasNode(
-                                          offset: layout.positions[node.id]!,
-                                          onTap: () => onEntityTap(node),
-                                          selected: selectedEntity == node,
-                                          child: NodeOrb(
-                                            node: node,
-                                            palette: palette,
+                                      for (final node in snapshot.nodes)
+                                        if (layout.visibleNodeIds
+                                            .contains(node.id))
+                                          CanvasNode(
+                                            offset: layout.positions[node.id]!,
+                                            onTap: () => onEntityTap(node),
                                             selected: selectedEntity == node,
-                                            showLabels: showLabels,
+                                            child: NodeOrb(
+                                              node: node,
+                                              palette: palette,
+                                              selected: selectedEntity == node,
+                                              showLabels: showLabels,
+                                            ),
                                           ),
-                                        ),
-                                    for (final workload in snapshot.workloads)
-                                      if (layout.visibleWorkloadIds
-                                          .contains(workload.id))
-                                        CanvasNode(
-                                          offset:
-                                              layout.positions[workload.id]!,
-                                          onTap: () => onEntityTap(workload),
-                                          selected: selectedEntity == workload,
-                                          child: WorkloadOrb(
-                                            workload: workload,
-                                            palette: palette,
+                                      for (final workload in snapshot.workloads)
+                                        if (layout.visibleWorkloadIds
+                                            .contains(workload.id))
+                                          CanvasNode(
+                                            offset:
+                                                layout.positions[workload.id]!,
+                                            onTap: () => onEntityTap(workload),
                                             selected:
                                                 selectedEntity == workload,
-                                            showLabels: showLabels,
+                                            child: WorkloadOrb(
+                                              workload: workload,
+                                              palette: palette,
+                                              selected:
+                                                  selectedEntity == workload,
+                                              showLabels: showLabels,
+                                            ),
                                           ),
-                                        ),
-                                    for (final service in snapshot.services)
-                                      if (layout.visibleServiceIds
-                                          .contains(service.id))
-                                        CanvasNode(
-                                          offset: layout.positions[service.id]!,
-                                          onTap: () => onEntityTap(service),
-                                          selected: selectedEntity == service,
-                                          child: ServiceOrb(
-                                            service: service,
-                                            palette: palette,
+                                      for (final service in snapshot.services)
+                                        if (layout.visibleServiceIds
+                                            .contains(service.id))
+                                          CanvasNode(
+                                            offset:
+                                                layout.positions[service.id]!,
+                                            onTap: () => onEntityTap(service),
                                             selected: selectedEntity == service,
-                                            showLabels: showLabels,
+                                            child: ServiceOrb(
+                                              service: service,
+                                              palette: palette,
+                                              selected:
+                                                  selectedEntity == service,
+                                              showLabels: showLabels,
+                                            ),
                                           ),
-                                        ),
-                                  ],
+                                    ],
+                                  ),
                                 );
                               },
                             ),

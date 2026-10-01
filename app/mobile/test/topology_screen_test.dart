@@ -1,11 +1,36 @@
 import 'package:clusterorbit_mobile/core/cluster_domain/cluster_models.dart';
 import 'package:clusterorbit_mobile/core/connectivity/sample_cluster_data.dart';
 import 'package:clusterorbit_mobile/core/theme/clusterorbit_theme.dart';
+import 'package:clusterorbit_mobile/features/topology/topology_layout.dart';
+import 'package:clusterorbit_mobile/features/topology/topology_orbs.dart';
 import 'package:clusterorbit_mobile/features/topology/topology_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'test_helpers.dart';
+
+/// Pumps [TopologyScreen] on its own, without the shell, over the sample
+/// snapshot.
+Future<void> pumpTopologyScreen(WidgetTester tester,
+    {required Size size}) async {
+  tester.view.devicePixelRatio = 1.0;
+  tester.view.physicalSize = size;
+  final profile = SampleClusterData.profilesFor(ConnectionMode.direct).first;
+
+  await tester.pumpWidget(
+    MaterialApp(
+      theme: ClusterOrbitTheme.dark(),
+      home: Scaffold(
+        body: TopologyScreen(
+          snapshot: SampleClusterData.snapshotFor(profile),
+          isLoading: false,
+          error: null,
+        ),
+      ),
+    ),
+  );
+  await tester.pumpAndSettle();
+}
 
 void main() {
   testWidgets('topology screen renders interactive canvas with live entities',
@@ -25,25 +50,7 @@ void main() {
 
   testWidgets('tablet: tapping a node shows detail in sidebar column',
       (tester) async {
-    tester.view.devicePixelRatio = 1.0;
-    tester.view.physicalSize = const Size(1400, 900);
-
-    final profile = SampleClusterData.profilesFor(ConnectionMode.direct).first;
-    final snapshot = SampleClusterData.snapshotFor(profile);
-
-    await tester.pumpWidget(
-      MaterialApp(
-        theme: ClusterOrbitTheme.dark(),
-        home: Scaffold(
-          body: TopologyScreen(
-            snapshot: snapshot,
-            isLoading: false,
-            error: null,
-          ),
-        ),
-      ),
-    );
-    await tester.pumpAndSettle();
+    await pumpTopologyScreen(tester, size: const Size(1400, 900));
 
     // Sidebar is visible when isWide = true
     expect(find.text('Flight Deck'), findsOneWidget);
@@ -57,9 +64,7 @@ void main() {
     // Flight Deck still visible alongside detail
     expect(find.text('Flight Deck'), findsOneWidget);
 
-    tester.view.resetPhysicalSize();
-    tester.view.resetDevicePixelRatio();
-    await tester.pump();
+    await resetTestSurface(tester);
   });
 
   testWidgets('tablet: tapping same node again deselects', (tester) async {
@@ -108,25 +113,9 @@ void main() {
   });
 
   testWidgets('tablet: tapping a service shows service fields', (tester) async {
-    tester.view.devicePixelRatio = 1.0;
-    tester.view.physicalSize = const Size(1400, 900);
-
-    final profile = SampleClusterData.profilesFor(ConnectionMode.direct).first;
-    final snapshot = SampleClusterData.snapshotFor(profile);
-
-    await tester.pumpWidget(
-      MaterialApp(
-        theme: ClusterOrbitTheme.dark(),
-        home: Scaffold(
-          body: TopologyScreen(
-            snapshot: snapshot,
-            isLoading: false,
-            error: null,
-          ),
-        ),
-      ),
-    );
-    await tester.pumpAndSettle();
+    // The service lane sits right of the workload grid; this surface shows it
+    // without panning.
+    await pumpTopologyScreen(tester, size: const Size(1920, 1080));
 
     await tester.tap(find.text('ClusterIP / platform').first);
     await tester.pumpAndSettle();
@@ -134,9 +123,30 @@ void main() {
     expect(find.text('Exposure'), findsOneWidget);
     expect(find.text('Port'), findsOneWidget);
 
-    tester.view.resetPhysicalSize();
-    tester.view.resetDevicePixelRatio();
-    await tester.pump();
+    await resetTestSurface(tester);
+  });
+
+  testWidgets('orbs keep their layout size at large text scales',
+      (tester) async {
+    tester.platformDispatcher.textScaleFactorTestValue = 2.0;
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+    await pumpTopologyScreen(tester, size: const Size(1100, 800));
+
+    expect(tester.takeException(), isNull);
+    void expectSize(Type orb, double width) {
+      final elements = find.byType(orb).evaluate();
+      expect(elements, isNotEmpty);
+      for (final element in elements) {
+        expect((element.renderObject! as RenderBox).size,
+            Size(width, OrbMetrics.height));
+      }
+    }
+
+    expectSize(NodeOrb, OrbMetrics.nodeWidth);
+    expectSize(WorkloadOrb, OrbMetrics.workloadWidth);
+    expectSize(ServiceOrb, OrbMetrics.serviceWidth);
+
+    await resetTestSurface(tester);
   });
 
   // ── phone portrait (390×844) ────────────────────────────────────────────

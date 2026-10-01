@@ -1,5 +1,3 @@
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
 
 import '../../core/cluster_domain/cluster_models.dart';
@@ -107,17 +105,11 @@ class _TopologyScreenState extends State<TopologyScreen> {
         final isWide = constraints.maxWidth >= 1180;
         final isLandscape =
             MediaQuery.orientationOf(context) == Orientation.landscape;
-        final canvasHeight = math.max(520.0, constraints.maxHeight - 40);
-        final layout = TopologyLayout.build(
-          clusterSnapshot,
-          canvasHeight: canvasHeight,
-          filter: _filter,
-        );
+        final layout = TopologyLayout.build(clusterSnapshot, filter: _filter);
 
         final workspace = TopologyWorkspace(
           snapshot: clusterSnapshot,
           layout: layout,
-          canvasHeight: canvasHeight,
           palette: palette,
           selectedEntity: _selectedEntity,
           onEntityTap: _onEntityTap,
