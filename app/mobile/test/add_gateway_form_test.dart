@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:clusterorbit_mobile/core/cluster_domain/saved_connection.dart';
 import 'package:clusterorbit_mobile/core/connectivity/cluster_connection_factory.dart';
+import 'package:clusterorbit_mobile/core/connectivity/gateway_cluster_connection.dart';
 import 'package:clusterorbit_mobile/core/theme/clusterorbit_theme.dart';
 import 'package:clusterorbit_mobile/features/connections/add_gateway_screen.dart';
 import 'package:flutter/material.dart';
@@ -28,6 +29,17 @@ class _FakeHttpClient implements GatewayHttpClient {
     required Map<String, dynamic> body,
   }) async =>
       (statusCode: 200, body: null);
+}
+
+/// Answers `getJson` only when [gate] completes.
+class _GatedHttpClient extends _FakeHttpClient {
+  _GatedHttpClient(this.gate);
+
+  final Completer<dynamic> gate;
+
+  @override
+  Future<dynamic> getJson(Uri url, {Map<String, String> headers = const {}}) =>
+      gate.future;
 }
 
 Widget _wrap(AddGatewayScreen screen) {
@@ -184,6 +196,68 @@ void main() {
 
     expect(received, isNotNull);
     expect(received!.gatewayToken, isNull);
+  });
+
+  testWidgets('Test connection: a 401 shows the friendly text, no URL or body',
+      (tester) async {
+    final fake = _FakeHttpClient(
+      getError: GatewayException.fromResponse(
+        401,
+        Uri.parse('https://gw.example.com/v1/clusters'),
+        '{"error":"bad token","detail":"raw"}',
+      ),
+    );
+    await tester.pumpWidget(_wrap(
+      AddGatewayScreen(
+        onAddConnection: (_) async {},
+        gatewayConnectionFactory: (u, t) => GatewayClusterConnection(
+          gatewayBaseUrl: u,
+          token: t,
+          httpClient: fake,
+        ),
+      ),
+    ));
+
+    await tester.enterText(
+      find.widgetWithText(TextFormField, 'https://gateway.example.com'),
+      'https://gateway.example.com',
+    );
+    await tester.tap(find.byKey(const ValueKey('test-connection')));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Gateway rejected the access token: bad token'),
+        findsOneWidget);
+    expect(find.textContaining('/v1/clusters'), findsNothing);
+    expect(find.textContaining('{'), findsNothing);
+  });
+
+  testWidgets('Test connection: a result for an edited URL is dropped',
+      (tester) async {
+    final gate = Completer<dynamic>();
+    final fake = _GatedHttpClient(gate);
+    await tester.pumpWidget(_wrap(
+      AddGatewayScreen(
+        onAddConnection: (_) async {},
+        gatewayConnectionFactory: (u, t) => GatewayClusterConnection(
+          gatewayBaseUrl: u,
+          token: t,
+          httpClient: fake,
+        ),
+      ),
+    ));
+
+    final urlField =
+        find.widgetWithText(TextFormField, 'https://gateway.example.com');
+    await tester.enterText(urlField, 'https://good.example.com');
+    await tester.tap(find.byKey(const ValueKey('test-connection')));
+    await tester.pump();
+
+    await tester.enterText(urlField, 'https://typo.example.com');
+    gate.complete(<dynamic>[]);
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Connected'), findsNothing);
+    expect(find.textContaining('Failed'), findsNothing);
   });
 
   group('validateGatewayUrl', () {

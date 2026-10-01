@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/cluster_domain/saved_connection.dart';
 import '../../core/connectivity/cluster_connection_factory.dart';
+import '../../core/connectivity/connection_errors.dart';
 import 'connection_builders.dart';
 
 /// Returns a user-facing error for [value], or null when it is a usable
@@ -72,6 +73,12 @@ class _AddGatewayScreenState extends State<AddGatewayScreen> {
     super.dispose();
   }
 
+  /// False once the screen is gone or the URL/token were edited mid-probe.
+  bool _probeStillCurrent(String url, String token) =>
+      mounted &&
+      _urlController.text.trim() == url &&
+      _tokenController.text.trim() == token;
+
   Future<void> _testConnection() async {
     // URL is required for a probe; skip name/token validation.
     final url = _urlController.text.trim();
@@ -91,11 +98,11 @@ class _AddGatewayScreenState extends State<AddGatewayScreen> {
     final connection = factory(url, token);
     try {
       final clusters = await connection.listClusters();
-      if (!mounted) return;
+      if (!_probeStillCurrent(url, token)) return;
       setState(() => _testOutcome = _TestOutcome.success(clusters.length));
     } catch (e) {
-      if (!mounted) return;
-      setState(() => _testOutcome = _TestOutcome.failure(e.toString()));
+      if (!_probeStillCurrent(url, token)) return;
+      setState(() => _testOutcome = _TestOutcome.failure(readableError(e)));
     } finally {
       if (mounted) setState(() => _testing = false);
     }
