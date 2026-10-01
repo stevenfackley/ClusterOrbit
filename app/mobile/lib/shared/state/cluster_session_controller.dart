@@ -43,6 +43,11 @@ class ClusterSessionController extends ChangeNotifier {
   Timer? _autoRefreshTimer;
   bool _disposed = false;
 
+  /// Bumped by every [bootstrap] and [cycleCluster]. Each async load
+  /// captures it up front and drops its result if it changed meanwhile, so
+  /// a slow response for the previous cluster can't land on the current one.
+  int _generation = 0;
+
   List<ClusterProfile> _clusters = const [];
   ClusterProfile? _selectedCluster;
   ClusterSnapshot? _snapshot;
@@ -61,74 +66,49 @@ class ClusterSessionController extends ChangeNotifier {
   bool get isRefreshing => _isRefreshing;
   DateTime? get lastRefreshedAt => _lastRefreshedAt;
 
+  bool _isCurrent(int gen) => !_disposed && gen == _generation;
+
   /// Load cache first (if fresh), then live-fetch the first cluster.
   /// Safe to call once in initState.
   Future<void> bootstrap() async {
-    bool cacheShown = false;
+    final gen = ++_generation;
+    var cacheShown = false;
 
     try {
       final cachedProfiles = await _store.loadProfiles(maxAge: _cacheMaxAge);
       if (cachedProfiles.isNotEmpty) {
-        final cachedSnapshot = await _store.loadSnapshot(
-          cachedProfiles.first.id,
-          maxAge: _cacheMaxAge,
+        cacheShown = await _showCached(
+          gen,
+          cachedProfiles.first,
+          clusters: cachedProfiles,
         );
-        if (cachedSnapshot != null && !_disposed) {
-          _clusters = cachedProfiles;
-          _selectedCluster = cachedProfiles.first;
-          _snapshot = cachedSnapshot;
-          _loadError = null;
-          _isLoading = false;
-          _isRefreshing = true;
-          notifyListeners();
-          cacheShown = true;
-        }
       }
     } catch (_) {
       // Cache read failure is non-fatal — fall through to live fetch.
     }
 
+    final List<ClusterProfile> clusters;
     try {
-      final clusters = await _connection.listClusters();
-      if (clusters.isEmpty) {
-        if (!_disposed) {
-          _isLoading = false;
-          _isRefreshing = false;
-          notifyListeners();
-        }
-        return;
-      }
-
-      final selectedCluster = clusters.first;
-      final snapshot = await _connection.loadSnapshot(selectedCluster.id);
-
-      await _store.saveProfiles(clusters);
-      await _store.saveSnapshot(snapshot);
-
-      if (_disposed) return;
-
-      _clusters = clusters;
-      _selectedCluster = selectedCluster;
-      _snapshot = snapshot;
-      _loadError = null;
-      _isLoading = false;
-      _isRefreshing = false;
-      _lastRefreshedAt = DateTime.now();
-      notifyListeners();
+      clusters = await _connection.listClusters();
     } catch (error) {
-      if (_disposed) return;
+      _fail(gen, error, cacheShown: cacheShown);
+      return;
+    }
+    if (!_isCurrent(gen)) return;
 
-      if (cacheShown) {
-        _isRefreshing = false;
-        notifyListeners();
-        return;
-      }
-
-      _loadError = error;
+    if (clusters.isEmpty) {
       _isLoading = false;
       _isRefreshing = false;
       notifyListeners();
+      return;
     }
+
+    await _activate(
+      gen,
+      clusters.first,
+      clusters: clusters,
+      cacheShown: cacheShown,
+    );
   }
 
   /// Re-fetch the snapshot for the currently selected cluster. Returns an
@@ -138,6 +118,11 @@ class ClusterSessionController extends ChangeNotifier {
     final cluster = _selectedCluster;
     if (cluster == null || _isRefreshing || _disposed) return null;
 
+    final gen = _generation;
+    // A cluster switch meanwhile makes the result stale. The switch then
+    // owns _isRefreshing, so a stale result must not touch it either.
+    bool isStale() => !_isCurrent(gen) || _selectedCluster?.id != cluster.id;
+
     _isRefreshing = true;
     notifyListeners();
 
@@ -145,7 +130,7 @@ class ClusterSessionController extends ChangeNotifier {
       final snapshot = await _connection.loadSnapshot(cluster.id);
       await _store.saveSnapshot(snapshot);
 
-      if (_disposed) return null;
+      if (isStale()) return null;
       _snapshot = snapshot;
       _loadError = null;
       _isRefreshing = false;
@@ -153,7 +138,7 @@ class ClusterSessionController extends ChangeNotifier {
       notifyListeners();
       return null;
     } catch (error) {
-      if (_disposed) return null;
+      if (isStale()) return null;
       _isRefreshing = false;
       notifyListeners();
       return 'Refresh failed: $error';
@@ -164,41 +149,70 @@ class ClusterSessionController extends ChangeNotifier {
   /// live for the target cluster in the same cache-then-live pattern as
   /// [bootstrap].
   Future<void> cycleCluster() async {
-    if (_clusters.length < 2 || _isLoading || _selectedCluster == null) {
-      return;
-    }
+    final current = _selectedCluster;
+    if (_clusters.length < 2 || _isLoading || current == null) return;
 
-    final currentIndex = _clusters.indexOf(_selectedCluster!);
+    final gen = ++_generation;
+    final currentIndex = _clusters.indexOf(current);
     final nextCluster = _clusters[(currentIndex + 1) % _clusters.length];
 
-    _isLoading = true;
+    // Nothing of the previous cluster may stay on screen under the next
+    // cluster's name.
     _selectedCluster = nextCluster;
+    _snapshot = null;
+    _lastRefreshedAt = null;
+    _loadError = null;
+    _isLoading = true;
     notifyListeners();
 
-    bool cacheShown = false;
-    try {
-      final cachedSnapshot = await _store.loadSnapshot(
-        nextCluster.id,
-        maxAge: _cacheMaxAge,
-      );
-      if (cachedSnapshot != null && !_disposed) {
-        _snapshot = cachedSnapshot;
-        _loadError = null;
-        _isLoading = false;
-        _isRefreshing = true;
-        notifyListeners();
-        cacheShown = true;
-      }
-    } catch (_) {
-      // Non-fatal — fall through to live fetch.
-    }
+    final cacheShown = await _showCached(gen, nextCluster);
+    await _activate(gen, nextCluster, cacheShown: cacheShown);
+  }
 
+  /// Shows [target]'s cached snapshot (and [clusters], when given) if the
+  /// cache holds a fresh one. Returns whether it did.
+  Future<bool> _showCached(
+    int gen,
+    ClusterProfile target, {
+    List<ClusterProfile>? clusters,
+  }) async {
+    final ClusterSnapshot? cached;
     try {
-      final snapshot = await _connection.loadSnapshot(nextCluster.id);
+      cached = await _store.loadSnapshot(target.id, maxAge: _cacheMaxAge);
+    } catch (_) {
+      // Cache read failure is non-fatal — fall through to live fetch.
+      return false;
+    }
+    if (cached == null || !_isCurrent(gen)) return false;
+
+    if (clusters != null) _clusters = clusters;
+    _selectedCluster = target;
+    _snapshot = cached;
+    _loadError = null;
+    _isLoading = false;
+    _isRefreshing = true;
+    notifyListeners();
+    return true;
+  }
+
+  /// Live-fetches [target]'s snapshot and makes it (with [clusters], when
+  /// given) the session state. The one load path behind [bootstrap] and
+  /// [cycleCluster]; with [cacheShown], a failed fetch keeps the cached
+  /// snapshot on screen instead of raising [loadError].
+  Future<void> _activate(
+    int gen,
+    ClusterProfile target, {
+    List<ClusterProfile>? clusters,
+    required bool cacheShown,
+  }) async {
+    try {
+      final snapshot = await _connection.loadSnapshot(target.id);
+      if (clusters != null) await _store.saveProfiles(clusters);
       await _store.saveSnapshot(snapshot);
 
-      if (_disposed) return;
-
+      if (!_isCurrent(gen)) return;
+      if (clusters != null) _clusters = clusters;
+      _selectedCluster = target;
       _snapshot = snapshot;
       _loadError = null;
       _isLoading = false;
@@ -206,19 +220,16 @@ class ClusterSessionController extends ChangeNotifier {
       _lastRefreshedAt = DateTime.now();
       notifyListeners();
     } catch (error) {
-      if (_disposed) return;
-
-      if (cacheShown) {
-        _isRefreshing = false;
-        notifyListeners();
-        return;
-      }
-
-      _loadError = error;
-      _isLoading = false;
-      _isRefreshing = false;
-      notifyListeners();
+      _fail(gen, error, cacheShown: cacheShown);
     }
+  }
+
+  void _fail(int gen, Object error, {required bool cacheShown}) {
+    if (!_isCurrent(gen)) return;
+    if (!cacheShown) _loadError = error;
+    _isLoading = false;
+    _isRefreshing = false;
+    notifyListeners();
   }
 
   @override

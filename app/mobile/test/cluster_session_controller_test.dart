@@ -38,9 +38,10 @@ void main() {
 
       final connection = _FakeConnection(
         profiles: profiles,
-        loadSnapshotOverride: () => liveCompleter.future,
+        loadSnapshotOverride: (_) => liveCompleter.future,
       );
-      final store = _CachedStore(profiles: profiles, snapshot: cachedSnapshot);
+      final store =
+          _CachedStore(profiles: profiles, snapshots: [cachedSnapshot]);
       final controller = ClusterSessionController(
         connection: connection,
         store: store,
@@ -69,10 +70,11 @@ void main() {
 
       final connection = _FakeConnection(
         profiles: profiles,
-        loadSnapshotOverride: () =>
+        loadSnapshotOverride: (_) =>
             Future<ClusterSnapshot>.error(StateError('network down')),
       );
-      final store = _CachedStore(profiles: profiles, snapshot: cachedSnapshot);
+      final store =
+          _CachedStore(profiles: profiles, snapshots: [cachedSnapshot]);
       final controller = ClusterSessionController(
         connection: connection,
         store: store,
@@ -91,7 +93,7 @@ void main() {
       final profiles = SampleClusterData.profilesFor(ConnectionMode.direct);
       final connection = _FakeConnection(
         profiles: profiles,
-        loadSnapshotOverride: () =>
+        loadSnapshotOverride: (_) =>
             Future<ClusterSnapshot>.error(StateError('boom')),
       );
       final controller = ClusterSessionController(
@@ -155,7 +157,7 @@ void main() {
       var shouldFail = false;
       final connection = _FakeConnection(
         profiles: profiles,
-        loadSnapshotOverride: () {
+        loadSnapshotOverride: (_) {
           if (shouldFail) {
             return Future<ClusterSnapshot>.error(StateError('offline'));
           }
@@ -244,6 +246,135 @@ void main() {
     });
   });
 
+  group('stale responses after a cluster switch', () {
+    final profiles = SampleClusterData.profilesFor(ConnectionMode.direct);
+    final dev = profiles[0];
+    final staging = profiles[1];
+    final prod = profiles[2];
+
+    test('refresh landing mid-switch never shows the old cluster', () async {
+      final loads = _DeferredLoads(profiles);
+      final controller = ClusterSessionController(
+        connection: loads.connection,
+        store: _EmptyStore(),
+      );
+      addTearDown(controller.dispose);
+
+      await controller.bootstrap();
+      loads.defer = true;
+      final refreshFuture = controller.refresh();
+      final cycleFuture = controller.cycleCluster();
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.selectedCluster, same(staging));
+      expect(controller.snapshot, isNull,
+          reason: "the switch drops the previous cluster's snapshot");
+
+      loads.complete(dev, SampleClusterData.snapshotFor(dev));
+      expect(await refreshFuture, isNull);
+      expect(controller.snapshot, isNull);
+      expect(controller.isLoading, isTrue);
+
+      final stagingLive = SampleClusterData.snapshotFor(staging);
+      loads.complete(staging, stagingLive);
+      await cycleFuture;
+      expect(controller.selectedCluster, same(staging));
+      expect(controller.snapshot, same(stagingLive));
+      expect(controller.isLoading, isFalse);
+      expect(controller.isRefreshing, isFalse);
+    });
+
+    test('refresh landing after the switch completes is dropped', () async {
+      final loads = _DeferredLoads(profiles);
+      final controller = ClusterSessionController(
+        connection: loads.connection,
+        store: _EmptyStore(),
+      );
+      addTearDown(controller.dispose);
+
+      await controller.bootstrap();
+      loads.defer = true;
+      final refreshFuture = controller.refresh();
+      final cycleFuture = controller.cycleCluster();
+      await Future<void>.delayed(Duration.zero);
+
+      final stagingLive = SampleClusterData.snapshotFor(staging);
+      loads.complete(staging, stagingLive);
+      await cycleFuture;
+      loads.complete(dev, SampleClusterData.snapshotFor(dev));
+      expect(await refreshFuture, isNull);
+
+      expect(controller.selectedCluster, same(staging));
+      expect(controller.snapshot, same(stagingLive));
+      expect(controller.isRefreshing, isFalse);
+    });
+
+    test("an earlier switch's live result is dropped after a second switch",
+        () async {
+      final loads = _DeferredLoads(profiles);
+      final controller = ClusterSessionController(
+        connection: loads.connection,
+        store: _CachedStore(
+          profiles: profiles,
+          snapshots: profiles.map(SampleClusterData.snapshotFor).toList(),
+        ),
+      );
+      addTearDown(controller.dispose);
+
+      await controller.bootstrap();
+      loads.defer = true;
+      final firstCycle = controller.cycleCluster();
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.selectedCluster, same(staging));
+      expect(controller.isLoading, isFalse, reason: 'cache hit ends loading');
+
+      final secondCycle = controller.cycleCluster();
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.selectedCluster, same(prod));
+
+      final prodLive = SampleClusterData.snapshotFor(prod);
+      loads.complete(prod, prodLive);
+      await secondCycle;
+      loads.complete(staging, SampleClusterData.snapshotFor(staging));
+      await firstCycle;
+
+      expect(controller.selectedCluster, same(prod));
+      expect(controller.snapshot, same(prodLive));
+      expect(controller.isRefreshing, isFalse);
+    });
+
+    test("a switch during bootstrap's cache phase survives bootstrap's result",
+        () async {
+      final loads = _DeferredLoads(profiles)..defer = true;
+      final controller = ClusterSessionController(
+        connection: loads.connection,
+        store: _CachedStore(
+          profiles: profiles,
+          snapshots: profiles.map(SampleClusterData.snapshotFor).toList(),
+        ),
+      );
+      addTearDown(controller.dispose);
+
+      final bootstrapFuture = controller.bootstrap();
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.selectedCluster, same(dev));
+      expect(controller.isRefreshing, isTrue, reason: 'cache shown, live due');
+
+      final cycleFuture = controller.cycleCluster();
+      await Future<void>.delayed(Duration.zero);
+      loads.complete(dev, SampleClusterData.snapshotFor(dev));
+      await bootstrapFuture;
+      expect(controller.selectedCluster, same(staging));
+      expect(controller.snapshot!.profile.id, staging.id);
+
+      final stagingLive = SampleClusterData.snapshotFor(staging);
+      loads.complete(staging, stagingLive);
+      await cycleFuture;
+      expect(controller.selectedCluster, same(staging));
+      expect(controller.snapshot, same(stagingLive));
+      expect(controller.isRefreshing, isFalse);
+    });
+  });
+
   group('autoRefreshInterval', () {
     test('fires periodic refresh while idle', () async {
       final profiles = SampleClusterData.profilesFor(ConnectionMode.direct);
@@ -324,7 +455,8 @@ final class _FakeConnection implements ClusterConnection {
   });
 
   final List<ClusterProfile> profiles;
-  final Future<ClusterSnapshot> Function()? loadSnapshotOverride;
+  final Future<ClusterSnapshot> Function(String clusterId)?
+      loadSnapshotOverride;
   int loadSnapshotCallCount = 0;
 
   @override
@@ -343,7 +475,7 @@ final class _FakeConnection implements ClusterConnection {
   @override
   Future<ClusterSnapshot> loadSnapshot(String clusterId) {
     loadSnapshotCallCount++;
-    if (loadSnapshotOverride != null) return loadSnapshotOverride!();
+    if (loadSnapshotOverride != null) return loadSnapshotOverride!(clusterId);
     final profile = profiles.firstWhere(
       (p) => p.id == clusterId,
       orElse: () => profiles.first,
@@ -397,6 +529,31 @@ final class _FakeConnection implements ClusterConnection {
       throw UnsupportedError('drain');
 }
 
+/// Live loads that answer immediately until [defer] is set, then stay
+/// pending (one per cluster) until [complete] — so a test picks the order
+/// in which responses land.
+final class _DeferredLoads {
+  _DeferredLoads(this.profiles);
+
+  final List<ClusterProfile> profiles;
+  final Map<String, Completer<ClusterSnapshot>> _pending = {};
+  bool defer = false;
+
+  late final _FakeConnection connection = _FakeConnection(
+    profiles: profiles,
+    loadSnapshotOverride: (clusterId) {
+      if (defer) {
+        return (_pending[clusterId] = Completer<ClusterSnapshot>()).future;
+      }
+      final profile = profiles.firstWhere((p) => p.id == clusterId);
+      return Future.value(SampleClusterData.snapshotFor(profile));
+    },
+  );
+
+  void complete(ClusterProfile cluster, ClusterSnapshot snapshot) =>
+      _pending.remove(cluster.id)!.complete(snapshot);
+}
+
 final class _EmptyStore implements SnapshotStore {
   @override
   Future<List<ClusterProfile>> loadProfiles({Duration? maxAge}) async =>
@@ -436,10 +593,13 @@ final class _EmptyStore implements SnapshotStore {
 }
 
 final class _CachedStore implements SnapshotStore {
-  _CachedStore({required this.profiles, required this.snapshot});
+  _CachedStore({
+    required this.profiles,
+    required List<ClusterSnapshot> snapshots,
+  }) : _snapshots = {for (final s in snapshots) s.profile.id: s};
 
   final List<ClusterProfile> profiles;
-  final ClusterSnapshot snapshot;
+  final Map<String, ClusterSnapshot> _snapshots;
 
   @override
   Future<List<ClusterProfile>> loadProfiles({Duration? maxAge}) async =>
@@ -453,7 +613,7 @@ final class _CachedStore implements SnapshotStore {
     String profileId, {
     Duration? maxAge,
   }) async =>
-      snapshot;
+      _snapshots[profileId];
 
   @override
   Future<void> saveSnapshot(ClusterSnapshot snapshot) async {}
