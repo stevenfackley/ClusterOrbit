@@ -141,9 +141,14 @@ class _TopologyScreenState extends State<TopologyScreen> {
     return LayoutBuilder(
       builder: (context, constraints) {
         // Both measured on the map's own pane, which the shell's tablet rail
-        // has already narrowed; the window size would overstate it.
+        // has already narrowed; the window size would overstate it. The
+        // soft keyboard (say, the Scale dialog's) shrinks the pane but must
+        // not flip the layout and tear down the panel that opened it. The
+        // Scaffold strips the inset from this MediaQuery, so read the view's.
+        final keyboard = MediaQueryData.fromView(View.of(context)).viewInsets;
+        final paneHeight = constraints.maxHeight + keyboard.bottom;
         final isWide = constraints.maxWidth >= 900;
-        final isLandscape = constraints.maxWidth > constraints.maxHeight;
+        final isLandscape = constraints.maxWidth > paneHeight;
         final layout = TopologyLayout.build(clusterSnapshot, filter: _filter);
 
         final workspace = TopologyWorkspace(

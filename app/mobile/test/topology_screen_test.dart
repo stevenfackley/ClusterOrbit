@@ -5,6 +5,7 @@ import 'package:clusterorbit_mobile/core/connectivity/sample_cluster_data.dart';
 import 'package:clusterorbit_mobile/core/theme/clusterorbit_theme.dart';
 import 'package:clusterorbit_mobile/features/topology/entity_detail_panel.dart';
 import 'package:clusterorbit_mobile/features/topology/topology_layout.dart';
+import 'package:clusterorbit_mobile/features/topology/topology_list_view.dart';
 import 'package:clusterorbit_mobile/features/topology/topology_orbs.dart';
 import 'package:clusterorbit_mobile/features/topology/topology_panels.dart';
 import 'package:clusterorbit_mobile/features/topology/topology_screen.dart';
@@ -469,6 +470,62 @@ void main() {
 
     await resetTestSurface(tester);
   });
+
+  // ── soft keyboard ───────────────────────────────────────────────────────
+
+  // An iPad in portrait gets the phone layout. The keyboard the Scale dialog
+  // raises shrinks the pane to wider than tall, which must not flip it to
+  // the landscape layout and tear down the panel that opened the dialog.
+  for (final host in const ['list', 'map']) {
+    testWidgets('$host host at 820x1180: Scale survives the soft keyboard',
+        (tester) async {
+      final connection = RecordingClusterConnection();
+      await pumpClusterOrbitApp(tester,
+          size: const Size(820, 1180), connection: connection);
+      addTearDown(tester.view.resetViewInsets);
+
+      if (host == 'list') {
+        final row = find.descendant(
+          of: find.byKey(const ValueKey('workloads-section')),
+          matching: find.text('service-1'),
+        );
+        await tester.scrollUntilVisible(row, 200,
+            scrollable: find
+                .descendant(
+                    of: find.byType(TopologyListView),
+                    matching: find.byType(Scrollable))
+                .first);
+        await tester.ensureVisible(row);
+        await tester.pumpAndSettle();
+        await tester.tap(row);
+      } else {
+        await showPhoneMap(tester);
+        final workload = orb('workload', 'workload-1');
+        await panUntilHitTestable(tester, workload);
+        await tester.tap(workload);
+      }
+      await tester.pumpAndSettle();
+      final scale = find.widgetWithText(TextButton, 'Scale');
+      await tester.ensureVisible(scale);
+      await tester.pumpAndSettle();
+      await tester.tap(scale);
+      await tester.pumpAndSettle();
+
+      tester.view.viewInsets = const FakeViewPadding(bottom: 320);
+      await tester.pumpAndSettle();
+      expect(find.byType(EntityDetailPanel), findsOneWidget);
+      await tester.enterText(find.byType(TextField), '5');
+      await tester.tap(find.text('Apply'));
+      await tester.pumpAndSettle();
+
+      expect(connection.callsTo('scaleWorkload'), [
+        ['scaleWorkload', 'dev-orbit', 'workload-1', 5],
+      ]);
+      expect(tester.takeException(), isNull);
+
+      await resetTestSurface(tester);
+    });
+  }
 
   // ── mutation flows (sidebar, 1400×900) ────────────────────────────────
 
