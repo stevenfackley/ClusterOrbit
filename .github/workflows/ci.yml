@@ -21,10 +21,6 @@ jobs:
         run: cp .env.example .env
       - name: Install mobile deps
         run: flutter pub get
-      # flutter test never downloads the material fonts; the real-font layout
-      # tests (test/real_fonts.dart) load Roboto from that cache.
-      - name: Cache material fonts
-        run: flutter precache --universal
       - name: Format check
         run: dart format --output=none --set-exit-if-changed lib test
       - name: Analyze

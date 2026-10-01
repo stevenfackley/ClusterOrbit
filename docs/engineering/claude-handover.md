@@ -159,7 +159,7 @@ Test files:
 (call log + scriptable failures/drain), and `InMemorySavedConnectionStore`. All widget tests
 must use these — never let a test fall through to real SQLite or real kubeconfig.
 `test/flutter_test_config.dart` makes missed taps (hit-test warnings) fatal.
-`test/real_fonts.dart` loads the SDK's Roboto for layout tests that depend on text metrics
+`test/real_fonts.dart` loads Roboto (vendored in `test/fonts`) for layout tests that depend on text metrics
 (the default test font draws every glyph 1em wide).
 
 ## Environment

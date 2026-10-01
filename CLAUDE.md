@@ -58,7 +58,7 @@ In the app, the active connection comes from saved connections (onboarding / Set
 
 ### Test isolation
 
-`test/test_helpers.dart` injects deterministic fakes (`TestClusterConnection`, `RecordingClusterConnection`, `NoOpSnapshotStore`, `InMemorySavedConnectionStore`) — widget tests never depend on a real kubeconfig, live cluster or SQLite. Don't remove this isolation. `test/flutter_test_config.dart` makes missed taps fatal; layout tests that depend on text metrics load real Roboto via `test/real_fonts.dart` (the default test font has 1em-wide glyphs).
+`test/test_helpers.dart` injects deterministic fakes (`TestClusterConnection`, `RecordingClusterConnection`, `NoOpSnapshotStore`, `InMemorySavedConnectionStore`) — widget tests never depend on a real kubeconfig, live cluster or SQLite. Don't remove this isolation. `test/flutter_test_config.dart` makes missed taps fatal; layout tests that depend on text metrics load Roboto (vendored in `test/fonts`) via `test/real_fonts.dart` (the default test font has 1em-wide glyphs).
 
 ### Go gateway (`app/gateway/`)
 
