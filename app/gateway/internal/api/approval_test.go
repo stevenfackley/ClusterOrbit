@@ -12,20 +12,20 @@ import (
 	"time"
 )
 
-func TestApprovalPolicyRequires(t *testing.T) {
-	var nilPolicy *ApprovalPolicy
-	if nilPolicy.Requires(OpDrain) {
-		t.Fatal("nil policy must require nothing")
+func TestApprovalStoreRequires(t *testing.T) {
+	var nilStore *ApprovalStore
+	if nilStore.Requires(OpDrain) {
+		t.Fatal("nil store must require nothing")
 	}
-	empty := &ApprovalPolicy{}
+	empty := NewApprovalStore(time.Minute)
 	if empty.Requires(OpScale) {
-		t.Fatal("empty policy must require nothing")
+		t.Fatal("store without ops must require nothing")
 	}
-	p := &ApprovalPolicy{RequiredOps: map[string]bool{OpDrain: true}}
-	if !p.Requires(OpDrain) {
+	st := NewApprovalStore(time.Minute, OpDrain)
+	if !st.Requires(OpDrain) {
 		t.Fatal("drain should require approval")
 	}
-	if p.Requires(OpScale) {
+	if st.Requires(OpScale) {
 		t.Fatal("scale not configured, should not require approval")
 	}
 }
@@ -177,15 +177,10 @@ func TestCompleteSucceededAndFailed(t *testing.T) {
 func intPtr(n int) *int { return &n }
 
 func newApprovalServer(rb *recordingBackend, ops ...string) *Server {
-	required := map[string]bool{}
-	for _, op := range ops {
-		required[op] = true
-	}
 	return &Server{
-		Backend:        rb,
-		Tokens:         []string{"tok-a", "tok-b"},
-		ApprovalPolicy: &ApprovalPolicy{RequiredOps: required},
-		Approvals:      NewApprovalStore(15 * time.Minute),
+		Backend:   rb,
+		Tokens:    []string{"tok-a", "tok-b"},
+		Approvals: NewApprovalStore(15*time.Minute, ops...),
 	}
 }
 

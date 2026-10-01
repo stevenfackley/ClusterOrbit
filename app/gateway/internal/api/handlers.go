@@ -67,11 +67,9 @@ type Server struct {
 	// backend is called. Violations return 403 and are audited. nil skips the
 	// check. Uncordon is never gated (recovery action).
 	NodePolicy *NodePolicy
-	// ApprovalPolicy, if set, parks mutations whose op-class requires a
-	// second-person approval instead of executing them inline. When non-nil,
-	// Approvals MUST also be non-nil (main wires the two together).
-	ApprovalPolicy *ApprovalPolicy
-	// Approvals is the pending-request registry for the approval flow.
+	// Approvals, if set, parks mutations whose op-class it Requires for a
+	// second-person approval instead of executing them inline, and holds the
+	// parked requests. nil requires approval for nothing.
 	Approvals *ApprovalStore
 }
 
@@ -364,7 +362,7 @@ func (s *Server) handleStartDrain(w http.ResponseWriter, r *http.Request, cluste
 		return
 	}
 
-	if s.ApprovalPolicy.Requires(OpDrain) {
+	if s.Approvals.Requires(OpDrain) {
 		pr := s.Approvals.Park(OpDrain, clusterID, nodeID, nil, s.identity(r))
 		s.auditApproval(r, pr, http.StatusAccepted, "")
 		writeJSON(w, http.StatusAccepted, pr)
@@ -425,7 +423,7 @@ func (s *Server) handleCordon(w http.ResponseWriter, r *http.Request, clusterID,
 		return
 	}
 
-	if unschedulable && s.ApprovalPolicy.Requires(OpCordon) {
+	if unschedulable && s.Approvals.Requires(OpCordon) {
 		pr := s.Approvals.Park(OpCordon, clusterID, nodeID, nil, s.identity(r))
 		s.auditApproval(r, pr, http.StatusAccepted, "")
 		writeJSON(w, http.StatusAccepted, pr)
@@ -480,7 +478,7 @@ func (s *Server) handleScale(w http.ResponseWriter, r *http.Request, clusterID, 
 		return
 	}
 
-	if s.ApprovalPolicy.Requires(OpScale) {
+	if s.Approvals.Requires(OpScale) {
 		pr := s.Approvals.Park(OpScale, clusterID, workloadID, body.Replicas, s.identity(r))
 		s.auditApproval(r, pr, http.StatusAccepted, "")
 		writeJSON(w, http.StatusAccepted, pr)
@@ -523,7 +521,7 @@ func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request, clusterID
 		return
 	}
 
-	if s.ApprovalPolicy.Requires(OpRestart) {
+	if s.Approvals.Requires(OpRestart) {
 		pr := s.Approvals.Park(OpRestart, clusterID, workloadID, nil, s.identity(r))
 		s.auditApproval(r, pr, http.StatusAccepted, "")
 		writeJSON(w, http.StatusAccepted, pr)

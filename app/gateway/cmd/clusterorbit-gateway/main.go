@@ -50,7 +50,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("gateway: %v", err)
 	}
-	approvalPolicy, approvals, approvalLabel, err := buildApprovalPolicy(os.Getenv, tokens)
+	approvals, approvalLabel, err := buildApprovalPolicy(os.Getenv, tokens)
 	if err != nil {
 		log.Fatalf("gateway: %v", err)
 	}
@@ -61,14 +61,13 @@ func main() {
 	}
 
 	server := &api.Server{
-		Backend:        backend,
-		Tokens:         tokens,
-		Limiter:        limiter,
-		AuditSink:      auditSink,
-		ScalePolicy:    policy,
-		NodePolicy:     nodePolicy,
-		ApprovalPolicy: approvalPolicy,
-		Approvals:      approvals,
+		Backend:     backend,
+		Tokens:      tokens,
+		Limiter:     limiter,
+		AuditSink:   auditSink,
+		ScalePolicy: policy,
+		NodePolicy:  nodePolicy,
+		Approvals:   approvals,
 
 		TrustForwardedFor: trustProxy,
 	}
@@ -253,38 +252,40 @@ func buildNodePolicy(getenv func(string) string) (*api.NodePolicy, string, error
 	}, strings.Join(parts, ","), nil
 }
 
-// buildApprovalPolicy assembles an ApprovalPolicy + store from env. Returns
-// (nil, nil, "off") when no op-classes are gated so mutation handlers take the
-// no-approval fast path. Gating any op needs at least two distinct tokens:
-// without them no second person can ever approve.
+// buildApprovalPolicy assembles the approval gate (an ApprovalStore holding the
+// gated op-classes) from env. Returns (nil, "off") when no op-classes are gated
+// so mutation handlers take the no-approval fast path. Gating any op needs at
+// least two distinct tokens: without them no second person can ever approve.
 //
 //	CLUSTERORBIT_GATEWAY_POLICY_REQUIRE_APPROVAL  comma list of scale,restart,cordon,drain
 //	CLUSTERORBIT_GATEWAY_POLICY_APPROVAL_TTL      Go duration, default 15m
-func buildApprovalPolicy(getenv func(string) string, tokens []string) (*api.ApprovalPolicy, *api.ApprovalStore, string, error) {
-	required := map[string]bool{}
+func buildApprovalPolicy(getenv func(string) string, tokens []string) (*api.ApprovalStore, string, error) {
+	var required []string
 	for _, op := range splitCSV(getenv("CLUSTERORBIT_GATEWAY_POLICY_REQUIRE_APPROVAL")) {
 		switch op = strings.ToLower(op); op {
 		case api.OpScale, api.OpRestart, api.OpCordon, api.OpDrain:
-			required[op] = true
+			if !slices.Contains(required, op) {
+				required = append(required, op)
+			}
 		default:
-			return nil, nil, "", fmt.Errorf("CLUSTERORBIT_GATEWAY_POLICY_REQUIRE_APPROVAL: unknown op %q (want scale, restart, cordon or drain)", op)
+			return nil, "", fmt.Errorf("CLUSTERORBIT_GATEWAY_POLICY_REQUIRE_APPROVAL: unknown op %q (want scale, restart, cordon or drain)", op)
 		}
 	}
 	if len(required) == 0 {
-		return nil, nil, "off", nil
+		return nil, "off", nil
 	}
 	if len(tokens) < 2 {
-		return nil, nil, "", fmt.Errorf("CLUSTERORBIT_GATEWAY_POLICY_REQUIRE_APPROVAL needs >=2 distinct tokens (CLUSTERORBIT_GATEWAY_TOKEN/_TOKENS), have %d", len(tokens))
+		return nil, "", fmt.Errorf("CLUSTERORBIT_GATEWAY_POLICY_REQUIRE_APPROVAL needs >=2 distinct tokens (CLUSTERORBIT_GATEWAY_TOKEN/_TOKENS), have %d", len(tokens))
 	}
 	ttl := 15 * time.Minute
 	if raw := strings.TrimSpace(getenv("CLUSTERORBIT_GATEWAY_POLICY_APPROVAL_TTL")); raw != "" {
 		d, err := time.ParseDuration(raw)
 		if err != nil || d <= 0 {
-			return nil, nil, "", fmt.Errorf("CLUSTERORBIT_GATEWAY_POLICY_APPROVAL_TTL=%q: want a positive Go duration", raw)
+			return nil, "", fmt.Errorf("CLUSTERORBIT_GATEWAY_POLICY_APPROVAL_TTL=%q: want a positive Go duration", raw)
 		}
 		ttl = d
 	}
-	return &api.ApprovalPolicy{RequiredOps: required}, api.NewApprovalStore(ttl), fmt.Sprintf("ops=%d ttl=%s", len(required), ttl), nil
+	return api.NewApprovalStore(ttl, required...), fmt.Sprintf("ops=%d ttl=%s", len(required), ttl), nil
 }
 
 // buildLimiter reads CLUSTERORBIT_GATEWAY_RATE_LIMIT_RPS and _BURST. Both unset

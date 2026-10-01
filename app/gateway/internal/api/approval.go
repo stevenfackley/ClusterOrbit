@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// Approval op-class identifiers. These are the values an ApprovalPolicy gates
+// Approval op-class identifiers. These are the values an ApprovalStore gates
 // and the Op field of a PendingRequest. They cross the wire to clients.
 const (
 	OpScale   = "scale"
@@ -38,22 +38,6 @@ var (
 	ErrApprovalTerminal = errors.New("approval request already resolved")
 )
 
-// ApprovalPolicy names the op-classes that must be parked for a second-person
-// approval. Zero value (nil pointer or empty RequiredOps) requires approval for
-// nothing — consistent with ScalePolicy/NodePolicy permissive defaults.
-type ApprovalPolicy struct {
-	RequiredOps map[string]bool
-}
-
-// Requires reports whether op must be parked for approval. A nil policy or an
-// op not in the set returns false (execute inline).
-func (p *ApprovalPolicy) Requires(op string) bool {
-	if p == nil || len(p.RequiredOps) == 0 {
-		return false
-	}
-	return p.RequiredOps[op]
-}
-
 // PendingRequest is a parked mutation awaiting a second-person approval. The
 // deferred mutation is captured as typed fields (not a closure) so the record
 // stays inspectable and JSON-serializable, consistent with DrainJob.
@@ -73,25 +57,43 @@ type PendingRequest struct {
 	ExpiresAt int64  `json:"expiresAt"`
 }
 
-// ApprovalStore is an in-memory registry of pending approval requests. Like the
-// drain-job registry it is mutex-guarded and non-durable: a gateway restart
-// drops all pending requests (acceptable — they are short-lived and TTL'd).
+// ApprovalStore holds the op-classes that must be parked for a second-person
+// approval and the in-memory registry of parked requests. Like the drain-job
+// registry it is mutex-guarded and non-durable: a gateway restart drops all
+// pending requests (acceptable — they are short-lived and TTL'd). A nil store
+// requires approval for nothing, consistent with the ScalePolicy/NodePolicy
+// permissive defaults.
 type ApprovalStore struct {
-	mu    sync.Mutex
-	reqs  map[string]*PendingRequest
+	mu   sync.Mutex
+	reqs map[string]*PendingRequest
+	// ops is fixed at construction and only read afterwards, so Requires
+	// needs no lock.
+	ops   map[string]bool
 	ttl   time.Duration
 	now   func() time.Time
 	newID func() string
 }
 
-// NewApprovalStore builds a store whose parked requests expire after ttl.
-func NewApprovalStore(ttl time.Duration) *ApprovalStore {
+// NewApprovalStore builds a store that parks the given op-classes (OpScale,
+// OpRestart, OpCordon, OpDrain) and expires parked requests after ttl.
+func NewApprovalStore(ttl time.Duration, ops ...string) *ApprovalStore {
+	required := make(map[string]bool, len(ops))
+	for _, op := range ops {
+		required[op] = true
+	}
 	return &ApprovalStore{
 		reqs:  make(map[string]*PendingRequest),
+		ops:   required,
 		ttl:   ttl,
 		now:   time.Now,
 		newID: randomApprovalID,
 	}
+}
+
+// Requires reports whether op must be parked for approval. A nil store or an
+// op not in the set returns false (execute inline).
+func (s *ApprovalStore) Requires(op string) bool {
+	return s != nil && s.ops[op]
 }
 
 func randomApprovalID() string {

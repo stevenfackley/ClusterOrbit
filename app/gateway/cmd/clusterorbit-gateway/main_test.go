@@ -45,7 +45,7 @@ func TestBuildApprovalPolicy(t *testing.T) {
 		name      string
 		env       map[string]string
 		tokens    []string
-		wantOps   []string // nil == policy off
+		wantOps   []string // nil == approval off
 		wantLabel string
 		wantErr   bool
 	}{
@@ -100,10 +100,10 @@ func TestBuildApprovalPolicy(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			policy, store, label, err := buildApprovalPolicy(mapEnv(tc.env), tc.tokens)
+			store, label, err := buildApprovalPolicy(mapEnv(tc.env), tc.tokens)
 			if tc.wantErr {
 				if err == nil {
-					t.Fatalf("expected error, got policy %+v", policy)
+					t.Fatalf("expected error, got store %+v", store)
 				}
 				return
 			}
@@ -114,16 +114,13 @@ func TestBuildApprovalPolicy(t *testing.T) {
 				t.Fatalf("label = %q, want %q", label, tc.wantLabel)
 			}
 			if tc.wantOps == nil {
-				if policy != nil || store != nil {
-					t.Fatalf("expected no policy, got %+v", policy)
+				if store != nil {
+					t.Fatalf("expected no approval store, got %+v", store)
 				}
 				return
 			}
-			if store == nil {
-				t.Fatalf("policy without a store")
-			}
 			for _, op := range []string{api.OpScale, api.OpRestart, api.OpCordon, api.OpDrain} {
-				if got, want := policy.Requires(op), slices.Contains(tc.wantOps, op); got != want {
+				if got, want := store.Requires(op), slices.Contains(tc.wantOps, op); got != want {
 					t.Fatalf("Requires(%q) = %v, want %v", op, got, want)
 				}
 			}
