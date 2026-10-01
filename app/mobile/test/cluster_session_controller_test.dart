@@ -118,6 +118,38 @@ void main() {
           reason: 'a failed connection is not an empty cluster list');
     });
 
+    test(
+        'an unreachable first cluster keeps the list and selection, so '
+        'the switch can move past it', () async {
+      final profiles = SampleClusterData.profilesFor(ConnectionMode.direct);
+      expect(profiles, hasLength(3));
+      final connection = _FakeConnection(
+        profiles: profiles,
+        loadSnapshotOverride: (clusterId) => clusterId == profiles.first.id
+            ? Future<ClusterSnapshot>.error(StateError('unreachable'))
+            : Future.value(SampleClusterData.snapshotFor(
+                profiles.firstWhere((p) => p.id == clusterId))),
+      );
+      final controller = ClusterSessionController(
+        connection: connection,
+        store: _EmptyStore(),
+      );
+      addTearDown(controller.dispose);
+
+      await controller.bootstrap();
+
+      expect(controller.loadError, isA<StateError>());
+      expect(controller.snapshot, isNull);
+      expect(controller.clusters, hasLength(3));
+      expect(controller.selectedCluster, same(profiles.first));
+
+      await controller.cycleCluster();
+
+      expect(controller.selectedCluster, same(profiles[1]));
+      expect(controller.snapshot!.profile.id, profiles[1].id);
+      expect(controller.loadError, isNull);
+    });
+
     test('empty cluster list leaves state idle without crashing', () async {
       final connection = _FakeConnection(profiles: const []);
       final controller = ClusterSessionController(

@@ -253,6 +253,14 @@ class ClusterSessionController extends ChangeNotifier {
     try {
       snapshot = await _connection.loadSnapshot(target.id);
     } catch (error) {
+      // Keep the live list and the failed cluster selected, so Switch
+      // Cluster can move past it and Retry re-targets it rather than
+      // re-running bootstrap into the same cluster. With cache shown, the
+      // cached list and selection already allow that.
+      if (clusters != null && !cacheShown && _isCurrent(gen)) {
+        _clusters = clusters;
+        _selectedCluster = target;
+      }
       _fail(gen, error, cacheShown: cacheShown);
       return;
     }
