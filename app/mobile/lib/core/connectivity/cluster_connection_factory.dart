@@ -90,6 +90,14 @@ final class DirectClusterConnection implements ClusterConnection {
   @override
   ConnectionMode get mode => ConnectionMode.direct;
 
+  /// Drain needs the gateway's async job API.
+  @override
+  Set<ClusterOperation> get supportedOperations => const {
+        ClusterOperation.scale,
+        ClusterOperation.restart,
+        ClusterOperation.cordon,
+      };
+
   @override
   Future<List<ClusterProfile>> listClusters() async {
     final kubeconfigProfiles = await _repository.loadProfiles();
@@ -228,6 +236,9 @@ final class SampleClusterConnection implements ClusterConnection {
 
   @override
   ConnectionMode get mode => ConnectionMode.direct;
+
+  @override
+  Set<ClusterOperation> get supportedOperations => const {};
 
   @override
   Future<List<ClusterProfile>> listClusters() async =>

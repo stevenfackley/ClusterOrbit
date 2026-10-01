@@ -61,6 +61,13 @@ final class _ControllableConnection implements ClusterConnection {
   ConnectionMode get mode => ConnectionMode.direct;
 
   @override
+  Set<ClusterOperation> get supportedOperations => const {
+        ClusterOperation.scale,
+        ClusterOperation.restart,
+        ClusterOperation.cordon,
+      };
+
+  @override
   Future<List<ClusterProfile>> listClusters() async => profiles;
 
   @override

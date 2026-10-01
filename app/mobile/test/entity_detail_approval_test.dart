@@ -74,6 +74,10 @@ final class _ParkingConnection implements ClusterConnection {
   ConnectionMode get mode => ConnectionMode.gateway;
 
   @override
+  Set<ClusterOperation> get supportedOperations =>
+      ClusterOperation.values.toSet();
+
+  @override
   Future<List<ClusterProfile>> listClusters() async =>
       SampleClusterData.profilesFor(mode);
 

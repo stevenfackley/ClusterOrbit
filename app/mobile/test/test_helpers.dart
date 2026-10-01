@@ -53,6 +53,10 @@ final class TestClusterConnection implements ClusterConnection {
   ConnectionMode get mode => ConnectionMode.direct;
 
   @override
+  Set<ClusterOperation> get supportedOperations =>
+      ClusterOperation.values.toSet();
+
+  @override
   Future<List<ClusterProfile>> listClusters() async => _profiles;
 
   @override

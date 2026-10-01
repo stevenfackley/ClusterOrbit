@@ -190,6 +190,13 @@ final class _RecordingConnection implements ClusterConnection {
   ConnectionMode get mode => ConnectionMode.direct;
 
   @override
+  Set<ClusterOperation> get supportedOperations => const {
+        ClusterOperation.scale,
+        ClusterOperation.restart,
+        ClusterOperation.cordon,
+      };
+
+  @override
   Future<List<ClusterProfile>> listClusters() async => _profiles;
 
   @override

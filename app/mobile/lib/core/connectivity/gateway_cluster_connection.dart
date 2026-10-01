@@ -29,6 +29,14 @@ final class GatewayClusterConnection implements ClusterConnection {
   ConnectionMode get mode => ConnectionMode.gateway;
 
   @override
+  Set<ClusterOperation> get supportedOperations => const {
+        ClusterOperation.scale,
+        ClusterOperation.restart,
+        ClusterOperation.cordon,
+        ClusterOperation.drain,
+      };
+
+  @override
   Future<List<ClusterProfile>> listClusters() async {
     final body = await _httpClient.getJson(
       _endpoint(['v1', 'clusters']),

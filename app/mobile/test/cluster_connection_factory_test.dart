@@ -17,6 +17,20 @@ void main() {
     expect(connection, isA<DirectClusterConnection>());
   });
 
+  test('connections declare the operations they support', () {
+    expect(const SampleClusterConnection().supportedOperations, isEmpty);
+    expect(DirectClusterConnection().supportedOperations, {
+      ClusterOperation.scale,
+      ClusterOperation.restart,
+      ClusterOperation.cordon,
+    });
+    expect(
+      GatewayClusterConnection(gatewayBaseUrl: 'https://gw.example.internal')
+          .supportedOperations,
+      ClusterOperation.values.toSet(),
+    );
+  });
+
   test('direct connection reads cluster metadata from kubeconfig', () async {
     final tempDir = await Directory.systemTemp.createTemp('clusterorbit_test');
     addTearDown(() async => tempDir.delete(recursive: true));

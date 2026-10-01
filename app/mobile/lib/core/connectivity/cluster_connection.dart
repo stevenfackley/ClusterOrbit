@@ -1,7 +1,14 @@
 import '../cluster_domain/cluster_models.dart';
 
+/// Cluster mutations a connection may support.
+enum ClusterOperation { scale, restart, cordon, drain }
+
 abstract interface class ClusterConnection {
   ConnectionMode get mode;
+
+  /// Mutations this connection can perform; the rest throw when called. UI
+  /// should offer actions from this set rather than infer them from [mode].
+  Set<ClusterOperation> get supportedOperations;
 
   Future<List<ClusterProfile>> listClusters();
 
