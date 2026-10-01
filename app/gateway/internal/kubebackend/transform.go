@@ -238,7 +238,7 @@ func transformSnapshot(
 
 	alerts := []api.ClusterAlert{}
 	alerts = append(alerts, nodeAlerts(nodesOut)...)
-	alerts = append(alerts, workloadAlerts(workloads)...)
+	alerts = append(alerts, workloadAlerts(workloads, failedJobIDs(jobItems))...)
 	alerts = append(alerts, serviceAlerts(servicesOut)...)
 
 	links := []api.TopologyLink{}
@@ -431,14 +431,7 @@ func workloadsFromItems(
 ) []api.ClusterWorkload {
 	out := make([]api.ClusterWorkload, 0, len(items))
 	for _, item := range items {
-		namespace := stringAt(item, "metadata", "namespace")
-		if namespace == "" {
-			namespace = "default"
-		}
-		name := stringAt(item, "metadata", "name")
-		if name == "" {
-			name = "unknown"
-		}
+		namespace, name := namespaceAndName(item)
 		wid := workloadID(kind, namespace, name)
 
 		var desired, ready int
@@ -461,8 +454,10 @@ func workloadsFromItems(
 			}
 		}
 
+		// A running Job always has succeeded < completions, so only a failed
+		// Job counts as unhealthy; other kinds warn on replica skew.
 		var health string
-		if ready < desired {
+		if jobFailed(item) || (kind != workloadKindJob && ready < desired) {
 			health = healthWarning
 		} else if signal := healthSignals[wid]; signal != "" {
 			health = signal
@@ -503,6 +498,41 @@ func workloadsFromItems(
 	return out
 }
 
+// jobFailed reports whether a Job has a Failed condition, or has failures
+// with nothing left running and fewer completions than wanted.
+func jobFailed(item map[string]any) bool {
+	for _, c := range listAt(item, "status", "conditions") {
+		m, ok := c.(map[string]any)
+		if ok && stringAt(m, "type") == "Failed" && stringAt(m, "status") == "True" {
+			return true
+		}
+	}
+	completions := intAt(item, "spec", "completions")
+	if completions == 0 {
+		completions = 1
+	}
+	return intAt(item, "status", "failed") > 0 &&
+		intAt(item, "status", "active") == 0 &&
+		intAt(item, "status", "succeeded") < completions
+}
+
+// failedJobIDs returns the workload IDs of failed Jobs.
+func failedJobIDs(items []map[string]any) map[string]bool {
+	out := map[string]bool{}
+	for _, item := range items {
+		if jobFailed(item) {
+			namespace, name := namespaceAndName(item)
+			out[workloadID(workloadKindJob, namespace, name)] = true
+		}
+	}
+	return out
+}
+
+func namespaceAndName(item map[string]any) (namespace, name string) {
+	return orDefault(stringAt(item, "metadata", "namespace"), "default"),
+		orDefault(stringAt(item, "metadata", "name"), "unknown")
+}
+
 func serviceFromItem(
 	item map[string]any,
 	workloadsByID map[string]api.ClusterWorkload,
@@ -521,8 +551,9 @@ func serviceFromItem(
 	// Non-nil so selectorless services marshal as [] not null.
 	targets := []string{}
 	if len(selector) > 0 {
-		for wid := range workloadsByID {
-			if matchesSelector(selector, podLabelsByWorkload[wid]) {
+		for wid, w := range workloadsByID {
+			// Selectors only match pods in the service's own namespace.
+			if w.Namespace == namespace && matchesSelector(selector, podLabelsByWorkload[wid]) {
 				targets = append(targets, wid)
 			}
 		}
@@ -545,7 +576,9 @@ func serviceFromItem(
 
 	exposure := serviceExposure(item)
 	health := healthHealthy
-	if len(targets) == 0 {
+	// Selectorless services (default/kubernetes, ExternalName) have no
+	// targets by design; only a selector that matches nothing is a problem.
+	if len(selector) > 0 && len(targets) == 0 {
 		health = healthWarning
 	}
 
@@ -672,10 +705,16 @@ func nodeAlerts(nodes []api.ClusterNode) []api.ClusterAlert {
 	return out
 }
 
-func workloadAlerts(workloads []api.ClusterWorkload) []api.ClusterAlert {
+// workloadAlerts flags replica skew. Jobs are exempt while running (they are
+// always below completions); only failed Jobs alert.
+func workloadAlerts(workloads []api.ClusterWorkload, failedJobs map[string]bool) []api.ClusterAlert {
 	var out []api.ClusterAlert
 	for _, w := range workloads {
-		if w.ReadyReplicas < w.DesiredReplicas {
+		skewed := w.ReadyReplicas < w.DesiredReplicas
+		if w.Kind == workloadKindJob {
+			skewed = failedJobs[w.ID]
+		}
+		if skewed {
 			out = append(out, api.ClusterAlert{
 				ID:      "workload-" + w.ID,
 				Title:   "Replica skew detected",
@@ -691,7 +730,7 @@ func workloadAlerts(workloads []api.ClusterWorkload) []api.ClusterAlert {
 func serviceAlerts(services []api.ClusterService) []api.ClusterAlert {
 	var out []api.ClusterAlert
 	for _, s := range services {
-		if len(s.TargetWorkloadIDs) == 0 {
+		if s.Health == healthWarning {
 			out = append(out, api.ClusterAlert{
 				ID:      "service-" + s.ID,
 				Title:   "Service has no backing workloads",
