@@ -132,23 +132,24 @@ func resourceID(prefix, namespace, name string) string {
 	return prefix + ":" + namespace + "/" + name
 }
 
+// rawLists holds the raw Kubernetes list responses a snapshot is built from.
+type rawLists struct {
+	nodes, pods, services, deployments, daemonSets, statefulSets, jobs, replicaSets map[string]any
+}
+
 // transformSnapshot builds a ClusterSnapshot from raw Kubernetes API list
 // responses. Mirrors the Dart transformation 1:1 for the entities supported
 // here (nodes, pods, services, deployments, daemonsets, statefulsets, jobs,
 // replicasets).
-func transformSnapshot(
-	profile api.ClusterProfile,
-	generatedAt time.Time,
-	nodes, pods, services, deployments, daemonSets, statefulSets, jobs, replicaSets map[string]any,
-) api.ClusterSnapshot {
-	nodeItems := listItems(nodes)
-	podItems := listItems(pods)
-	serviceItems := listItems(services)
-	deploymentItems := listItems(deployments)
-	daemonSetItems := listItems(daemonSets)
-	statefulSetItems := listItems(statefulSets)
-	jobItems := listItems(jobs)
-	replicaSetItems := listItems(replicaSets)
+func transformSnapshot(profile api.ClusterProfile, generatedAt time.Time, raw rawLists) api.ClusterSnapshot {
+	nodeItems := listItems(raw.nodes)
+	podItems := listItems(raw.pods)
+	serviceItems := listItems(raw.services)
+	deploymentItems := listItems(raw.deployments)
+	daemonSetItems := listItems(raw.daemonSets)
+	statefulSetItems := listItems(raw.statefulSets)
+	jobItems := listItems(raw.jobs)
+	replicaSetItems := listItems(raw.replicaSets)
 
 	nodePodCounts := map[string]int{}
 	replicaSetOwners := replicaSetOwnerMap(replicaSetItems)

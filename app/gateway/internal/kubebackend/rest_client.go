@@ -11,15 +11,16 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/stevenfackley/clusterorbit/app/gateway/internal/kubeconfig"
 )
 
-// RestClient is a minimal read-only client for the Kubernetes API server.
-// It only supports bearer-token auth and CA validation (or the explicit
-// insecure-skip option) because those are the only paths the mobile app
-// exercises today. Anything fancier should go through client-go.
+// RestClient is a minimal client for the Kubernetes API server: JSON GETs,
+// PATCHes and POSTs. It only supports bearer-token auth and CA validation (or
+// the explicit insecure-skip option) because those are the only paths the
+// mobile app exercises today. Anything fancier should go through client-go.
 type RestClient struct {
 	baseURL     *url.URL
 	bearerToken string
@@ -52,7 +53,12 @@ func NewRestClient(cluster *kubeconfig.ResolvedCluster) (*RestClient, error) {
 		tlsConfig.RootCAs = pool
 	}
 
-	transport := &http.Transport{TLSClientConfig: tlsConfig}
+	// Clone the default transport to keep proxy-from-environment, HTTP/2 and
+	// the dial/handshake timeouts. The snapshot's 8 parallel LISTs need more
+	// than the default 2 idle connections per host to be reused.
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = tlsConfig
+	transport.MaxIdleConnsPerHost = 8
 	return &RestClient{
 		baseURL:     base,
 		bearerToken: cluster.BearerToken,
@@ -63,35 +69,102 @@ func NewRestClient(cluster *kubeconfig.ResolvedCluster) (*RestClient, error) {
 	}, nil
 }
 
-// GetJSON issues GET against a path (joined to the base URL) with an
-// optional query. The response body is decoded into a generic map so the
-// rest of the package can walk it the same way the Dart transformer does.
-func (c *RestClient) GetJSON(ctx context.Context, path string, query url.Values) (map[string]any, error) {
+// maxStatusMessage caps the apiserver message kept in a StatusError so a
+// verbose Status body never reaches clients or job records.
+const maxStatusMessage = 256
+
+// StatusError is a non-2xx response from the API server, reduced to the HTTP
+// code plus the Status object's reason and (truncated) message. It never
+// carries the raw response body.
+type StatusError struct {
+	Code    int
+	Reason  string
+	Message string
+}
+
+func (e *StatusError) Error() string {
+	msg := fmt.Sprintf("kube api returned %d %s", e.Code, e.Reason)
+	if e.Message != "" {
+		msg += ": " + e.Message
+	}
+	return msg
+}
+
+// newStatusError builds a StatusError from a response, decoding the body as a
+// Kubernetes metav1.Status when possible.
+func newStatusError(code int, body []byte) *StatusError {
+	var st struct {
+		Reason  string `json:"reason"`
+		Message string `json:"message"`
+	}
+	_ = json.Unmarshal(body, &st)
+	e := &StatusError{Code: code, Reason: st.Reason, Message: st.Message}
+	if e.Reason == "" {
+		e.Reason = http.StatusText(code)
+	}
+	if len(e.Message) > maxStatusMessage {
+		e.Message = e.Message[:maxStatusMessage] + "…"
+	}
+	return e
+}
+
+// do issues one request against path joined to the base URL, keeping any path
+// prefix in the server URL (e.g. Rancher's /k8s/clusters/c-1). The error slot
+// is reserved for transport/read failures; callers inspect the status.
+func (c *RestClient) do(
+	ctx context.Context,
+	method, path string,
+	query url.Values,
+	contentType string,
+	body []byte,
+) (int, []byte, error) {
 	u := *c.baseURL
-	u.Path = path
+	u.Path = strings.TrimSuffix(c.baseURL.Path, "/") + path
+	u.RawPath = ""
 	u.RawQuery = query.Encode()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	var reader io.Reader
+	if body != nil {
+		reader = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, u.String(), reader)
 	if err != nil {
-		return nil, err
+		return 0, nil, err
 	}
 	req.Header.Set("Accept", "application/json")
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
 	if c.bearerToken != "" {
 		req.Header.Set("Authorization", "Bearer "+c.bearerToken)
 	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("kube api request: %w", err)
+		return 0, nil, fmt.Errorf("kube api request: %w", err)
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("read response body: %w", err)
+		return resp.StatusCode, nil, fmt.Errorf("read response body: %w", err)
 	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("kube api %s returned %d: %s", u.Path, resp.StatusCode, string(body))
+	return resp.StatusCode, respBody, nil
+}
+
+func isSuccess(status int) bool { return status >= 200 && status < 300 }
+
+// GetJSON issues GET against a path (joined to the base URL) with an
+// optional query. The response body is decoded into a generic map so the
+// rest of the package can walk it the same way the Dart transformer does.
+// Non-2xx responses return a *StatusError.
+func (c *RestClient) GetJSON(ctx context.Context, path string, query url.Values) (map[string]any, error) {
+	status, body, err := c.do(ctx, http.MethodGet, path, query, "", nil)
+	if err != nil {
+		return nil, err
+	}
+	if !isSuccess(status) {
+		return nil, newStatusError(status, body)
 	}
 
 	out := map[string]any{}
@@ -111,33 +184,14 @@ func (c *RestClient) BaseURL() string {
 
 // Patch issues a PATCH against path with the given body + Content-Type. The
 // response body is returned raw so callers can decide whether to decode it;
-// non-2xx responses return an error with the server's message embedded.
+// non-2xx responses return a *StatusError.
 func (c *RestClient) Patch(ctx context.Context, path, contentType string, body []byte) ([]byte, error) {
-	u := *c.baseURL
-	u.Path = path
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, u.String(), bytes.NewReader(body))
+	status, respBody, err := c.do(ctx, http.MethodPatch, path, nil, contentType, body)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Content-Type", contentType)
-	if c.bearerToken != "" {
-		req.Header.Set("Authorization", "Bearer "+c.bearerToken)
-	}
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("kube api request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read response body: %w", err)
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("kube api %s returned %d: %s", u.Path, resp.StatusCode, string(respBody))
+	if !isSuccess(status) {
+		return nil, newStatusError(status, respBody)
 	}
 	return respBody, nil
 }
@@ -149,28 +203,5 @@ func (c *RestClient) Patch(ctx context.Context, path, contentType string, body [
 // PodDisruptionBudget would be violated and the caller should back off and
 // retry, not treat it as fatal.
 func (c *RestClient) Post(ctx context.Context, path, contentType string, body []byte) (int, []byte, error) {
-	u := *c.baseURL
-	u.Path = path
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader(body))
-	if err != nil {
-		return 0, nil, err
-	}
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Content-Type", contentType)
-	if c.bearerToken != "" {
-		req.Header.Set("Authorization", "Bearer "+c.bearerToken)
-	}
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return 0, nil, fmt.Errorf("kube api request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return resp.StatusCode, nil, fmt.Errorf("read response body: %w", err)
-	}
-	return resp.StatusCode, respBody, nil
+	return c.do(ctx, http.MethodPost, path, nil, contentType, body)
 }

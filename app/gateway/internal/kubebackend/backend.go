@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strings"
 	"sync"
@@ -95,29 +96,34 @@ func (b *KubeBackend) LoadSnapshot(ctx context.Context, clusterID string) (api.C
 		return api.ClusterSnapshot{}, api.ErrNotFound
 	}
 
+	// resourceVersion=0 lets the apiserver answer these cluster-wide LISTs
+	// from its watch cache instead of a quorum read.
+	cached := url.Values{"resourceVersion": []string{"0"}}
+	var raw rawLists
 	fetches := []struct {
-		name  string
-		path  string
-		query url.Values
-		dst   *map[string]any
+		name string
+		path string
+		dst  *map[string]any
 	}{
-		{"nodes", "/api/v1/nodes", nil, new(map[string]any)},
-		{"pods", "/api/v1/pods", nil, new(map[string]any)},
-		{"services", "/api/v1/services", nil, new(map[string]any)},
-		{"deployments", "/apis/apps/v1/deployments", nil, new(map[string]any)},
-		{"daemonsets", "/apis/apps/v1/daemonsets", nil, new(map[string]any)},
-		{"statefulsets", "/apis/apps/v1/statefulsets", nil, new(map[string]any)},
-		{"jobs", "/apis/batch/v1/jobs", nil, new(map[string]any)},
-		{"replicasets", "/apis/apps/v1/replicasets", nil, new(map[string]any)},
+		{"nodes", "/api/v1/nodes", &raw.nodes},
+		{"pods", "/api/v1/pods", &raw.pods},
+		{"services", "/api/v1/services", &raw.services},
+		{"deployments", "/apis/apps/v1/deployments", &raw.deployments},
+		{"daemonsets", "/apis/apps/v1/daemonsets", &raw.daemonSets},
+		{"statefulsets", "/apis/apps/v1/statefulsets", &raw.statefulSets},
+		{"jobs", "/apis/batch/v1/jobs", &raw.jobs},
+		{"replicasets", "/apis/apps/v1/replicasets", &raw.replicaSets},
 	}
 
+	// Each goroutine writes only its own raw field, and wg.Wait orders those
+	// writes before the transform reads them.
 	var wg sync.WaitGroup
 	errCh := make(chan error, len(fetches))
 	for i := range fetches {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			body, err := b.client.GetJSON(ctx, fetches[i].path, fetches[i].query)
+			body, err := b.client.GetJSON(ctx, fetches[i].path, cached)
 			if err != nil {
 				errCh <- fmt.Errorf("%s: %w", fetches[i].name, err)
 				return
@@ -133,18 +139,7 @@ func (b *KubeBackend) LoadSnapshot(ctx context.Context, clusterID string) (api.C
 		}
 	}
 
-	return transformSnapshot(
-		b.profile,
-		b.now(),
-		*fetches[0].dst,
-		*fetches[1].dst,
-		*fetches[2].dst,
-		*fetches[3].dst,
-		*fetches[4].dst,
-		*fetches[5].dst,
-		*fetches[6].dst,
-		*fetches[7].dst,
-	), nil
+	return transformSnapshot(b.profile, b.now(), raw), nil
 }
 
 // LoadEvents fetches recent events for the given object. Kubernetes returns
@@ -264,7 +259,7 @@ func (b *KubeBackend) ScaleWorkload(
 	body := []byte(fmt.Sprintf(`{"spec":{"replicas":%d}}`, replicas))
 	_, err = b.client.Patch(ctx, path, "application/merge-patch+json", body)
 	if err != nil {
-		return fmt.Errorf("scale %s %s/%s: %w", kind, namespace, name, err)
+		return fmt.Errorf("scale %s %s/%s: %w", kind, namespace, name, mutationErr(err))
 	}
 	return nil
 }
@@ -304,7 +299,7 @@ func (b *KubeBackend) RestartWorkload(ctx context.Context, clusterID, workloadID
 	))
 	_, err = b.client.Patch(ctx, path, "application/strategic-merge-patch+json", body)
 	if err != nil {
-		return fmt.Errorf("restart %s %s/%s: %w", kind, namespace, name, err)
+		return fmt.Errorf("restart %s %s/%s: %w", kind, namespace, name, mutationErr(err))
 	}
 	return nil
 }
@@ -322,7 +317,7 @@ func (b *KubeBackend) CordonNode(ctx context.Context, clusterID, nodeID string, 
 	body := []byte(fmt.Sprintf(`{"spec":{"unschedulable":%t}}`, unschedulable))
 	_, err := b.client.Patch(ctx, path, "application/merge-patch+json", body)
 	if err != nil {
-		return fmt.Errorf("cordon node %s: %w", nodeID, err)
+		return fmt.Errorf("cordon node %s: %w", nodeID, mutationErr(err))
 	}
 	return nil
 }
@@ -373,4 +368,31 @@ func kubernetesKind(kind string) string {
 		// Preserve PascalCase inputs (e.g. "Deployment") untouched.
 		return kind
 	}
+}
+
+// sentinelError tags a backend error with an api sentinel so handlers map it
+// to the right HTTP status, while Error() keeps the original short message.
+type sentinelError struct {
+	sentinel error
+	err      error
+}
+
+func (e *sentinelError) Error() string   { return e.err.Error() }
+func (e *sentinelError) Unwrap() []error { return []error{e.sentinel, e.err} }
+
+// mutationErr maps an apiserver 404 to api.ErrNotFound and 400/422 to
+// api.ErrBadRequest for the mutation methods; anything else passes through
+// (and surfaces as a 502).
+func mutationErr(err error) error {
+	var se *StatusError
+	if !errors.As(err, &se) {
+		return err
+	}
+	switch se.Code {
+	case http.StatusNotFound:
+		return &sentinelError{api.ErrNotFound, err}
+	case http.StatusBadRequest, http.StatusUnprocessableEntity:
+		return &sentinelError{api.ErrBadRequest, err}
+	}
+	return err
 }

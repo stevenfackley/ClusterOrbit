@@ -49,8 +49,7 @@ func TestTransformSnapshotNeverMarshalsNullArrays(t *testing.T) {
 	snap := transformSnapshot(
 		api.ClusterProfile{ID: "c"},
 		time.Unix(0, 0),
-		map[string]any{}, map[string]any{}, services,
-		map[string]any{}, map[string]any{}, map[string]any{}, map[string]any{}, map[string]any{},
+		rawLists{services: services},
 	)
 	raw, err := json.Marshal(snap)
 	if err != nil {
@@ -83,8 +82,7 @@ func snapshotFor(pods, services, daemonSets, jobs []any) api.ClusterSnapshot {
 	return transformSnapshot(
 		api.ClusterProfile{ID: "c"},
 		time.Unix(0, 0),
-		map[string]any{}, list(pods), list(services),
-		map[string]any{}, list(daemonSets), map[string]any{}, list(jobs), map[string]any{},
+		rawLists{pods: list(pods), services: list(services), daemonSets: list(daemonSets), jobs: list(jobs)},
 	)
 }
 

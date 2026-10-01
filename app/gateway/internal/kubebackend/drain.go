@@ -233,7 +233,7 @@ func (b *KubeBackend) evictPod(ctx context.Context, ref podRef) error {
 				backoff = b.drainMaxBackoff
 			}
 		default:
-			return fmt.Errorf("eviction returned %d: %s", status, strings.TrimSpace(string(respBody)))
+			return newStatusError(status, respBody)
 		}
 	}
 }
