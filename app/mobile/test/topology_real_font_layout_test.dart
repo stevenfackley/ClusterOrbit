@@ -2,6 +2,7 @@ import 'package:clusterorbit_mobile/core/cluster_domain/cluster_models.dart';
 import 'package:clusterorbit_mobile/core/connectivity/sample_cluster_data.dart';
 import 'package:clusterorbit_mobile/core/theme/clusterorbit_theme.dart';
 import 'package:clusterorbit_mobile/features/topology/entity_detail_panel.dart';
+import 'package:clusterorbit_mobile/features/topology/topology_orbs.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -22,6 +23,12 @@ void main() {
     tester.view.padding = FakeViewPadding.zero;
     tester.view.viewPadding = FakeViewPadding.zero;
     addTearDown(tester.view.reset);
+  }
+
+  Future<void> showPhoneMap(WidgetTester tester) async {
+    final toggle = find.byKey(const ValueKey('phone-view-toggle'));
+    await tester.tap(find.descendant(of: toggle, matching: find.text('Map')));
+    await tester.pumpAndSettle();
   }
 
   testWidgets(
@@ -68,6 +75,34 @@ void main() {
     await tester.ensureVisible(field);
     await tester.pumpAndSettle();
     expect(field.hitTestable(), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('map overlays: left off a portrait phone canvas', (tester) async {
+    setSurface(tester, const Size(390, 844));
+    await pumpClusterOrbitApp(tester);
+    await showPhoneMap(tester);
+
+    expect(find.byType(InteractiveViewer), findsOneWidget);
+    expect(find.byType(LegendCard), findsNothing);
+    expect(find.byType(MiniStatusCard), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('map overlays: side by side inside a tablet canvas',
+      (tester) async {
+    setSurface(tester, const Size(1280, 800));
+    await pumpClusterOrbitApp(tester);
+
+    final canvas = tester.getRect(find.byType(InteractiveViewer));
+    final legend = tester.getRect(find.byType(LegendCard));
+    final status = tester.getRect(find.byType(MiniStatusCard));
+    expect(legend.overlaps(status), isFalse);
+    for (final card in [legend, status]) {
+      expect(canvas.contains(card.topLeft), isTrue, reason: '$card');
+      expect(canvas.contains(card.bottomRight - const Offset(1, 1)), isTrue,
+          reason: '$card');
+    }
     expect(tester.takeException(), isNull);
   });
 }

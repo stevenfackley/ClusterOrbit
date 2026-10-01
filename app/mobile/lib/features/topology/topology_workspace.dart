@@ -135,17 +135,33 @@ class TopologyWorkspace extends StatelessWidget {
                                   viewport: viewport,
                                 ),
                               ),
-                              Positioned(
+                              // A portrait phone's canvas has no room for
+                              // them beside the orbs; its chips and the list
+                              // carry the same facts. In one row, the status
+                              // card gets what the legend leaves.
+                              if (constraints.maxWidth - 32 >= 420)
+                                Positioned(
                                   left: 16,
-                                  bottom: 16,
-                                  child: IgnorePointer(
-                                      child: LegendCard(palette: palette))),
-                              Positioned(
                                   right: 16,
                                   bottom: 16,
                                   child: IgnorePointer(
-                                      child:
-                                          MiniStatusCard(snapshot: snapshot))),
+                                    child: Row(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.end,
+                                      children: [
+                                        LegendCard(palette: palette),
+                                        const SizedBox(width: 16),
+                                        Expanded(
+                                          child: Align(
+                                            alignment: Alignment.bottomRight,
+                                            child: MiniStatusCard(
+                                                snapshot: snapshot),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
                               if (showPortraitPanel && selectedEntity != null)
                                 // Up to 60% of the canvas, on its bottom edge.
                                 Positioned.fill(
