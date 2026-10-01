@@ -139,8 +139,11 @@ class _OrbitShellState extends State<OrbitShell> {
         final palette = Theme.of(context).extension<ClusterOrbitPalette>()!;
         final screens = _buildScreens();
         final selectedCluster = _session.selectedCluster;
+        final canSwitchCluster = _session.clusters.length >= 2 &&
+            !_session.isLoading &&
+            selectedCluster != null;
         final subtitle = selectedCluster != null
-            ? '${selectedCluster.apiServerHost} / ${selectedCluster.environmentLabel}'
+            ? '${selectedCluster.environmentLabel} · ${selectedCluster.apiServerHost}'
             : _session.loadError != null
                 ? 'Connection failed'
                 : _session.hasNoClusters
@@ -173,14 +176,12 @@ class _OrbitShellState extends State<OrbitShell> {
               if (isCompact)
                 IconButton(
                   tooltip: 'Switch cluster',
-                  onPressed:
-                      _session.clusters.isEmpty ? null : _session.cycleCluster,
+                  onPressed: canSwitchCluster ? _session.cycleCluster : null,
                   icon: const Icon(Icons.hub_outlined),
                 )
               else
                 TextButton.icon(
-                  onPressed:
-                      _session.clusters.isEmpty ? null : _session.cycleCluster,
+                  onPressed: canSwitchCluster ? _session.cycleCluster : null,
                   icon: const Icon(Icons.hub_outlined),
                   label: const Text('Switch Cluster'),
                 ),

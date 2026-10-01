@@ -22,7 +22,7 @@ class AlertDetailSheet extends StatelessWidget {
     final levelColor =
         alert.level.color(theme.extension<ClusterOrbitPalette>()!);
 
-    return Padding(
+    return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,

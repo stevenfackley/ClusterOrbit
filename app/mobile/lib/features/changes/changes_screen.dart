@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/cluster_domain/cluster_models.dart';
+import '../../core/theme/clusterorbit_theme.dart';
 import '../../shared/widgets/refreshable.dart';
 
 class ChangesScreen extends StatelessWidget {
@@ -39,6 +40,7 @@ class ChangesScreen extends StatelessWidget {
     final unschedulable = snapshot.nodes.where((n) => !n.schedulable).toList();
 
     final theme = Theme.of(context);
+    final palette = theme.extension<ClusterOrbitPalette>()!;
     return MaybeRefreshIndicator(
         onRefresh: onRefresh,
         child: ListView(
@@ -78,8 +80,8 @@ class ChangesScreen extends StatelessWidget {
               for (final w in drift)
                 Card(
                   child: ListTile(
-                    leading: const Icon(Icons.sync_problem_outlined,
-                        color: Colors.amber),
+                    leading: Icon(Icons.sync_problem_outlined,
+                        color: palette.warning),
                     title: Text('${w.namespace} / ${w.name}'),
                     subtitle: Text(
                         '${w.kind.label} · ${w.readyReplicas}/${w.desiredReplicas} ready'),
@@ -100,8 +102,7 @@ class ChangesScreen extends StatelessWidget {
               for (final n in unschedulable)
                 Card(
                   child: ListTile(
-                    leading:
-                        const Icon(Icons.block_outlined, color: Colors.amber),
+                    leading: Icon(Icons.block_outlined, color: palette.warning),
                     title: Text(n.name),
                     subtitle: Text('${n.role.label} · ${n.zone}'),
                   ),

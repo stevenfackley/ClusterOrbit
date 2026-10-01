@@ -210,9 +210,8 @@ class _NodeRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final healthColor = node.health.color(
-      Theme.of(context).extension<ClusterOrbitPalette>()!,
-    );
+    final palette = Theme.of(context).extension<ClusterOrbitPalette>()!;
+    final healthColor = node.health.color(palette);
     return ListTile(
       dense: true,
       leading: StatusDot(color: healthColor),
@@ -220,7 +219,7 @@ class _NodeRow extends StatelessWidget {
       subtitle: Text(
         node.schedulable ? 'Ready' : 'Unschedulable',
         style: TextStyle(
-          color: node.schedulable ? Colors.white54 : const Color(0xFFFFB86B),
+          color: node.schedulable ? Colors.white54 : palette.warning,
         ),
       ),
       trailing: _badge(
