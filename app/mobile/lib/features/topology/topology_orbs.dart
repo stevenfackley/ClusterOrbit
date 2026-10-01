@@ -5,10 +5,6 @@ import '../../core/theme/clusterorbit_theme.dart';
 import '../../core/theme/health_style.dart';
 import 'topology_layout.dart';
 
-/// Tints an entity by its health level using the active palette.
-Color healthTint(ClusterHealthLevel level, ClusterOrbitPalette palette) =>
-    level.color(palette);
-
 /// Positions an orb on the canvas at [offset] and wires tap handling.
 class CanvasNode extends StatelessWidget {
   const CanvasNode({
@@ -59,7 +55,7 @@ class NodeOrb extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final tint = healthTint(node.health, palette);
+    final tint = node.health.color(palette);
 
     return Container(
       width: OrbMetrics.nodeWidth,
@@ -137,7 +133,7 @@ class WorkloadOrb extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final tint = healthTint(workload.health, palette);
+    final tint = workload.health.color(palette);
 
     return Container(
       width: OrbMetrics.workloadWidth,
@@ -205,7 +201,7 @@ class ServiceOrb extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final tint = healthTint(service.health, palette);
+    final tint = service.health.color(palette);
 
     return Container(
       width: OrbMetrics.serviceWidth,
@@ -459,7 +455,7 @@ class AlertTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final palette = theme.extension<ClusterOrbitPalette>()!;
-    final tint = healthTint(alert.level, palette);
+    final tint = alert.level.color(palette);
 
     return Container(
       padding: const EdgeInsets.all(16),

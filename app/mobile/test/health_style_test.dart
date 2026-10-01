@@ -23,7 +23,6 @@ void main() {
     expect(ClusterHealthLevel.healthy.color(_palette), _palette.accentTeal);
     expect(ClusterHealthLevel.warning.color(_palette), _palette.warning);
     expect(ClusterHealthLevel.critical.color(_palette), _palette.danger);
-    expect(healthTint(ClusterHealthLevel.critical, _palette), _palette.danger);
   });
 
   test('each level has a distinct icon and label', () {

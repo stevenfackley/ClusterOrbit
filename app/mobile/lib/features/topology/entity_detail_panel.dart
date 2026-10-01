@@ -8,6 +8,7 @@ import '../../core/connectivity/cluster_connection.dart';
 import '../../core/connectivity/connection_errors.dart';
 import '../../core/sync_cache/snapshot_store.dart';
 import '../../core/theme/clusterorbit_theme.dart';
+import '../../core/theme/health_style.dart';
 import 'drain_progress_dialog.dart';
 import 'entity_events_controller.dart';
 import 'topology_orbs.dart';
@@ -238,7 +239,7 @@ class _EntityDetailPanelState extends State<EntityDetailPanel> {
       };
 
   List<Widget> _nodeFields(ClusterNode n, ThemeData theme) {
-    final tint = healthTint(n.health, widget.palette);
+    final tint = n.health.color(widget.palette);
     return [
       _DetailRow(label: 'Role', value: n.role.label, theme: theme),
       _DetailRow(label: 'Zone', value: n.zone, theme: theme),
@@ -449,7 +450,7 @@ class _EntityDetailPanelState extends State<EntityDetailPanel> {
   }
 
   List<Widget> _workloadFields(ClusterWorkload w, ThemeData theme) {
-    final tint = healthTint(w.health, widget.palette);
+    final tint = w.health.color(widget.palette);
     final isScalable =
         w.kind == WorkloadKind.deployment || w.kind == WorkloadKind.statefulSet;
     final isRestartable = isScalable || w.kind == WorkloadKind.daemonSet;
@@ -532,7 +533,7 @@ class _EntityDetailPanelState extends State<EntityDetailPanel> {
   }
 
   List<Widget> _serviceFields(ClusterService s, ThemeData theme) {
-    final tint = healthTint(s.health, widget.palette);
+    final tint = s.health.color(widget.palette);
     return [
       _DetailRow(label: 'Namespace', value: s.namespace, theme: theme),
       _DetailRow(label: 'Exposure', value: s.exposure.label, theme: theme),
