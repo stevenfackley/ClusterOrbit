@@ -204,8 +204,8 @@ func (s *Server) handleClusterScoped(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// GET .../nodes/{nodeID}/drain/{jobID} — drain job status poll. Node names
-	// can't contain "/", so splitting on "/drain/" cleanly separates the node
-	// from the job ID.
+	// can't contain "/" (handleDrainStatus validates it), so splitting on
+	// "/drain/" cleanly separates the node from the job ID.
 	if rest := strings.TrimPrefix(subpath, "nodes/"); rest != subpath {
 		if idx := strings.Index(rest, "/drain/"); idx >= 0 {
 			nodeID := rest[:idx]
@@ -246,6 +246,10 @@ func (s *Server) handleClusterScoped(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "kind and objectName are required")
 			return
 		}
+		if err := ValidateEventQuery(kind, objectName, namespace); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		events, err := s.Backend.LoadEvents(r.Context(), clusterID, kind, objectName, namespace, limit)
 		if err != nil {
 			writeBackendError(w, err)
@@ -258,10 +262,10 @@ func (s *Server) handleClusterScoped(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleMutation routes POST /v1/clusters/{id}/{resource}/{target}/{action}.
-// Resource IDs (workload "{kind}:{namespace}/{name}", node name) can contain a
-// literal "/", so we peel the resource prefix and the trailing action verb
-// rather than splitting the whole subpath by slash. Every attempt is audited
-// downstream.
+// Workload IDs ("{kind}:{namespace}/{name}") contain a literal "/", so we peel
+// the resource prefix and the trailing action verb rather than splitting the
+// whole subpath by slash; each handler then validates the target ID. Every
+// attempt is audited downstream.
 func (s *Server) handleMutation(w http.ResponseWriter, r *http.Request, clusterID, subpath string) {
 	switch {
 	case strings.HasPrefix(subpath, "workloads/"):
@@ -312,6 +316,11 @@ func (s *Server) handleStartDrain(w http.ResponseWriter, r *http.Request, cluste
 		writeError(w, http.StatusNotFound, "not found")
 		return
 	}
+	if err := ValidateNodeID(nodeID); err != nil {
+		s.audit(r, clusterID, nodeID, nil, http.StatusBadRequest, err.Error())
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	if reason := s.NodePolicy.EvaluateDrain(nodeID); reason != "" {
 		s.audit(r, clusterID, nodeID, nil, http.StatusForbidden, "policy: "+reason)
@@ -347,6 +356,10 @@ func (s *Server) handleDrainStatus(w http.ResponseWriter, r *http.Request, clust
 		writeError(w, http.StatusNotFound, "not found")
 		return
 	}
+	if err := ValidateNodeID(nodeID); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	job, err := s.Backend.DrainStatus(r.Context(), clusterID, nodeID, jobID)
 	if err != nil {
 		writeBackendError(w, err)
@@ -362,6 +375,11 @@ func (s *Server) handleDrainStatus(w http.ResponseWriter, r *http.Request, clust
 func (s *Server) handleCordon(w http.ResponseWriter, r *http.Request, clusterID, nodeID string, unschedulable bool) {
 	if nodeID == "" {
 		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	if err := ValidateNodeID(nodeID); err != nil {
+		s.audit(r, clusterID, nodeID, nil, http.StatusBadRequest, err.Error())
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -398,6 +416,12 @@ func (s *Server) handleScale(w http.ResponseWriter, r *http.Request, clusterID, 
 		writeError(w, http.StatusNotFound, "not found")
 		return
 	}
+	_, namespace, _, err := ParseWorkloadID(workloadID)
+	if err != nil {
+		s.audit(r, clusterID, workloadID, nil, http.StatusBadRequest, err.Error())
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, maxScaleBodyBytes)
 	var body struct {
@@ -414,7 +438,7 @@ func (s *Server) handleScale(w http.ResponseWriter, r *http.Request, clusterID, 
 		return
 	}
 
-	if reason := s.ScalePolicy.Evaluate(workloadID, *body.Replicas); reason != "" {
+	if reason := s.ScalePolicy.Evaluate(namespace, *body.Replicas); reason != "" {
 		s.audit(r, clusterID, workloadID, body.Replicas, http.StatusForbidden, "policy: "+reason)
 		writeError(w, http.StatusForbidden, "policy violation: "+reason)
 		return
@@ -427,7 +451,7 @@ func (s *Server) handleScale(w http.ResponseWriter, r *http.Request, clusterID, 
 		return
 	}
 
-	err := s.Backend.ScaleWorkload(r.Context(), clusterID, workloadID, *body.Replicas)
+	err = s.Backend.ScaleWorkload(r.Context(), clusterID, workloadID, *body.Replicas)
 	status, msg := scaleStatus(err)
 	s.audit(r, clusterID, workloadID, body.Replicas, status, msg)
 	if err != nil {
@@ -450,8 +474,14 @@ func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request, clusterID
 		writeError(w, http.StatusNotFound, "not found")
 		return
 	}
+	_, namespace, _, err := ParseWorkloadID(workloadID)
+	if err != nil {
+		s.audit(r, clusterID, workloadID, nil, http.StatusBadRequest, err.Error())
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
-	if reason := s.ScalePolicy.EvaluateNamespace(workloadID); reason != "" {
+	if reason := s.ScalePolicy.EvaluateNamespace(namespace); reason != "" {
 		s.audit(r, clusterID, workloadID, nil, http.StatusForbidden, "policy: "+reason)
 		writeError(w, http.StatusForbidden, "policy violation: "+reason)
 		return
@@ -464,7 +494,7 @@ func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request, clusterID
 		return
 	}
 
-	err := s.Backend.RestartWorkload(r.Context(), clusterID, workloadID)
+	err = s.Backend.RestartWorkload(r.Context(), clusterID, workloadID)
 	status, msg := scaleStatus(err)
 	s.audit(r, clusterID, workloadID, nil, status, msg)
 	if err != nil {

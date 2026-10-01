@@ -160,19 +160,19 @@ func (b *KubeBackend) LoadEvents(
 	if limit <= 0 {
 		limit = 5
 	}
-	if objectName == "" {
-		return nil, errors.New("objectName is required")
+	if err := api.ValidateEventQuery(kind, objectName, namespace); err != nil {
+		return nil, err
 	}
 
 	path := "/api/v1/events"
 	if namespace != "" {
-		path = "/api/v1/namespaces/" + namespace + "/events"
+		path = "/api/v1/namespaces/" + url.PathEscape(namespace) + "/events"
 	}
 
 	query := url.Values{}
 	selectors := []string{"involvedObject.name=" + objectName}
-	if kind != "" {
-		selectors = append(selectors, "involvedObject.kind="+kubernetesKind(kind))
+	if apiKind, _ := api.InvolvedObjectKind(kind); apiKind != "" {
+		selectors = append(selectors, "involvedObject.kind="+apiKind)
 	}
 	query.Set("fieldSelector", strings.Join(selectors, ","))
 
@@ -250,7 +250,7 @@ func (b *KubeBackend) ScaleWorkload(
 	if replicas < 0 {
 		return fmt.Errorf("%w: replicas must be >=0", api.ErrBadRequest)
 	}
-	kind, namespace, name, err := parseWorkloadID(workloadID)
+	kind, namespace, name, err := api.ParseWorkloadID(workloadID)
 	if err != nil {
 		return err
 	}
@@ -259,7 +259,7 @@ func (b *KubeBackend) ScaleWorkload(
 		return fmt.Errorf("%w: kind %q cannot be scaled", api.ErrBadRequest, kind)
 	}
 
-	path := fmt.Sprintf("/apis/apps/v1/namespaces/%s/%s/%s/scale", namespace, resource, name)
+	path := fmt.Sprintf("/apis/apps/v1/namespaces/%s/%s/%s/scale", url.PathEscape(namespace), resource, url.PathEscape(name))
 	body := []byte(fmt.Sprintf(`{"spec":{"replicas":%d}}`, replicas))
 	_, err = b.client.Patch(ctx, path, "application/merge-patch+json", body)
 	if err != nil {
@@ -286,7 +286,7 @@ func (b *KubeBackend) RestartWorkload(ctx context.Context, clusterID, workloadID
 	if clusterID != "" && clusterID != b.profile.ID {
 		return api.ErrNotFound
 	}
-	kind, namespace, name, err := parseWorkloadID(workloadID)
+	kind, namespace, name, err := api.ParseWorkloadID(workloadID)
 	if err != nil {
 		return err
 	}
@@ -295,7 +295,7 @@ func (b *KubeBackend) RestartWorkload(ctx context.Context, clusterID, workloadID
 		return fmt.Errorf("%w: kind %q cannot be restarted", api.ErrBadRequest, kind)
 	}
 
-	path := fmt.Sprintf("/apis/apps/v1/namespaces/%s/%s/%s", namespace, resource, name)
+	path := fmt.Sprintf("/apis/apps/v1/namespaces/%s/%s/%s", url.PathEscape(namespace), resource, url.PathEscape(name))
 	ts := time.Now().UTC().Format(time.RFC3339)
 	body := []byte(fmt.Sprintf(
 		`{"spec":{"template":{"metadata":{"annotations":{"kubectl.kubernetes.io/restartedAt":%q}}}}}`,
@@ -314,10 +314,10 @@ func (b *KubeBackend) CordonNode(ctx context.Context, clusterID, nodeID string, 
 	if clusterID != "" && clusterID != b.profile.ID {
 		return api.ErrNotFound
 	}
-	if nodeID == "" {
-		return fmt.Errorf("%w: nodeID is required", api.ErrBadRequest)
+	if err := api.ValidateNodeID(nodeID); err != nil {
+		return err
 	}
-	path := fmt.Sprintf("/api/v1/nodes/%s", nodeID)
+	path := "/api/v1/nodes/" + url.PathEscape(nodeID)
 	body := []byte(fmt.Sprintf(`{"spec":{"unschedulable":%t}}`, unschedulable))
 	_, err := b.client.Patch(ctx, path, "application/merge-patch+json", body)
 	if err != nil {
@@ -336,41 +336,6 @@ func restartResourceFor(kind string) (string, bool) {
 		return "daemonsets", true
 	default:
 		return "", false
-	}
-}
-
-// parseWorkloadID splits "{kind}:{namespace}/{name}" back into its parts.
-// Returns api.ErrBadRequest for any malformation so handlers map to 400.
-func parseWorkloadID(id string) (kind, namespace, name string, err error) {
-	colon := strings.IndexByte(id, ':')
-	slash := strings.IndexByte(id, '/')
-	if colon <= 0 || slash <= colon+1 || slash == len(id)-1 {
-		return "", "", "", fmt.Errorf("%w: workloadID %q must be kind:namespace/name", api.ErrBadRequest, id)
-	}
-	return id[:colon], id[colon+1 : slash], id[slash+1:], nil
-}
-
-// kubernetesKind maps the mobile-side workload kind strings back to the
-// Kubernetes API kind value used in fieldSelector (involvedObject.kind).
-func kubernetesKind(kind string) string {
-	switch kind {
-	case workloadKindDeployment:
-		return "Deployment"
-	case workloadKindDaemonSet:
-		return "DaemonSet"
-	case workloadKindStatefulSet:
-		return "StatefulSet"
-	case workloadKindJob:
-		return "Job"
-	case "node":
-		return "Node"
-	case "service":
-		return "Service"
-	case "pod":
-		return "Pod"
-	default:
-		// Preserve PascalCase inputs (e.g. "Deployment") untouched.
-		return kind
 	}
 }
 

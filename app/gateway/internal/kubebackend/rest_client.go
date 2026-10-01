@@ -117,8 +117,10 @@ func newStatusError(code int, body []byte) *StatusError {
 }
 
 // do issues one request against path joined to the base URL, keeping any path
-// prefix in the server URL (e.g. Rancher's /k8s/clusters/c-1). The error slot
-// is reserved for transport/read failures; callers inspect the status.
+// prefix in the server URL (e.g. Rancher's /k8s/clusters/c-1). path is already
+// escaped: callers url.PathEscape each variable segment, so a "/" inside one
+// goes out as %2F rather than as a separator. The error slot is reserved for
+// transport/read failures; callers inspect the status.
 func (c *RestClient) do(
 	ctx context.Context,
 	method, path string,
@@ -127,8 +129,12 @@ func (c *RestClient) do(
 	body []byte,
 ) (int, []byte, error) {
 	u := *c.baseURL
-	u.Path = strings.TrimSuffix(c.baseURL.Path, "/") + path
-	u.RawPath = ""
+	u.RawPath = strings.TrimSuffix(c.baseURL.EscapedPath(), "/") + path
+	decoded, err := url.PathUnescape(u.RawPath)
+	if err != nil {
+		return 0, nil, fmt.Errorf("invalid request path %q: %w", path, err)
+	}
+	u.Path = decoded
 	u.RawQuery = query.Encode()
 
 	var reader io.Reader

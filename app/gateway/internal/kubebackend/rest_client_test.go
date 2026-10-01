@@ -123,6 +123,28 @@ func TestRestClientKeepsServerPathPrefix(t *testing.T) {
 	}
 }
 
+func TestRestClientSendsEscapedSegmentsVerbatim(t *testing.T) {
+	var gotPath string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.EscapedPath()
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer ts.Close()
+
+	client, err := NewRestClient(&kubeconfig.ResolvedCluster{Server: ts.URL + "/k8s/clusters/c-1"})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	// A PathEscape'd "/" must stay one segment, not be escaped a second time.
+	path := "/api/v1/nodes/" + url.PathEscape("n1/proxy")
+	if _, err := client.GetJSON(context.Background(), path, nil); err != nil {
+		t.Fatalf("GetJSON: %v", err)
+	}
+	if want := "/k8s/clusters/c-1/api/v1/nodes/n1%2Fproxy"; gotPath != want {
+		t.Fatalf("path = %q, want %q", gotPath, want)
+	}
+}
+
 func TestRestClientReturnsShortStatusError(t *testing.T) {
 	long := strings.Repeat("x", 1000)
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

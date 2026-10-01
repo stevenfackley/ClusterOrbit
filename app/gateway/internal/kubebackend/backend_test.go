@@ -246,6 +246,90 @@ func TestKubeBackendLoadEventsRequiresObjectName(t *testing.T) {
 	}
 }
 
+func TestKubeBackendLoadEventsWorkloadKindFiltersByNameOnly(t *testing.T) {
+	var gotQuery string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		_, _ = w.Write([]byte(`{"items":[]}`))
+	}))
+	defer ts.Close()
+
+	backend, err := NewKubeBackend(&kubeconfig.ResolvedCluster{Server: ts.URL, ContextName: "test"})
+	if err != nil {
+		t.Fatalf("new backend: %v", err)
+	}
+	// The mobile app sends kind=workload, which names no Kubernetes kind.
+	if _, err := backend.LoadEvents(context.Background(), "test", "workload", "api", "platform", 5); err != nil {
+		t.Fatalf("LoadEvents: %v", err)
+	}
+	if !strings.Contains(gotQuery, "involvedObject.name%3Dapi") || strings.Contains(gotQuery, "involvedObject.kind") {
+		t.Fatalf("query = %q, want a name-only fieldSelector", gotQuery)
+	}
+}
+
+// Names are spliced into apiserver paths and fieldSelectors, so a "/" or ".."
+// in one could reach another object or a proxy subresource with the gateway's
+// credentials. Every such call must fail with ErrBadRequest before any request.
+func TestKubeBackendRejectsUnsafeNames(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("apiserver called: %s %s?%s", r.Method, r.URL.EscapedPath(), r.URL.RawQuery)
+	}))
+	defer ts.Close()
+	b := newDrainBackend(t, ts.URL)
+	ctx := context.Background()
+
+	cases := []struct {
+		name string
+		call func() error
+	}{
+		{"scale into status subresource", func() error {
+			return b.ScaleWorkload(ctx, "test", "deployment:ns/x/status", 1)
+		}},
+		{"scale dot-dot namespace", func() error {
+			return b.ScaleWorkload(ctx, "test", "deployment:../x", 1)
+		}},
+		{"restart escaped slash", func() error {
+			return b.RestartWorkload(ctx, "test", "deployment:ns/a%2Fb")
+		}},
+		{"cordon node proxy", func() error {
+			return b.CordonNode(ctx, "test", "n1/proxy/pods", true)
+		}},
+		{"uncordon dot-dot", func() error {
+			return b.CordonNode(ctx, "test", "..", false)
+		}},
+		{"drain node proxy", func() error {
+			_, err := b.StartDrain(ctx, "test", "n1/proxy")
+			return err
+		}},
+		{"events namespace into service proxy", func() error {
+			_, err := b.LoadEvents(ctx, "test", "service", "x", "kube-system/services/http:dash:80/proxy/admin", 5)
+			return err
+		}},
+		{"events name adds selector", func() error {
+			_, err := b.LoadEvents(ctx, "test", "pod", "x,involvedObject.namespace=y", "", 5)
+			return err
+		}},
+		{"events kind adds selector", func() error {
+			_, err := b.LoadEvents(ctx, "test", "Pod,reason=Killing", "x", "", 5)
+			return err
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := tc.call(); !errors.Is(err, api.ErrBadRequest) {
+				t.Fatalf("expected ErrBadRequest, got %v", err)
+			}
+		})
+	}
+
+	// StartDrain must reject synchronously, before registering a job.
+	b.drainMu.Lock()
+	defer b.drainMu.Unlock()
+	if len(b.drainJobs) != 0 {
+		t.Fatalf("drain jobs = %d, want 0", len(b.drainJobs))
+	}
+}
+
 func TestKubeBackendScaleDeploymentPatchesScaleSubresource(t *testing.T) {
 	var gotMethod, gotPath, gotContentType, gotBody string
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

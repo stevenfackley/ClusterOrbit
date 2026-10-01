@@ -28,8 +28,10 @@ func (b *KubeBackend) StartDrain(_ context.Context, clusterID, nodeID string) (a
 	if clusterID != "" && clusterID != b.profile.ID {
 		return api.DrainJob{}, api.ErrNotFound
 	}
-	if nodeID == "" {
-		return api.DrainJob{}, fmt.Errorf("%w: nodeID is required", api.ErrBadRequest)
+	// Validate before any worker starts: runDrain splices nodeID into API
+	// paths and the pod fieldSelector.
+	if err := api.ValidateNodeID(nodeID); err != nil {
+		return api.DrainJob{}, err
 	}
 
 	b.drainMu.Lock()
@@ -304,7 +306,7 @@ func classifyPod(pod map[string]any) (ref podRef, action podAction) {
 // server returns 429 (a PodDisruptionBudget would be violated). 404/410 mean
 // the pod is already gone — success. Honors the context deadline.
 func (b *KubeBackend) evictPod(ctx context.Context, ref podRef) error {
-	path := fmt.Sprintf("/api/v1/namespaces/%s/pods/%s/eviction", ref.namespace, ref.name)
+	path := fmt.Sprintf("/api/v1/namespaces/%s/pods/%s/eviction", url.PathEscape(ref.namespace), url.PathEscape(ref.name))
 	payload := []byte(fmt.Sprintf(
 		`{"apiVersion":"policy/v1","kind":"Eviction","metadata":{"name":%q,"namespace":%q}}`,
 		ref.name, ref.namespace,
@@ -342,7 +344,7 @@ func (b *KubeBackend) evictPod(ctx context.Context, ref podRef) error {
 // with the same name (different UID), as kubectl drain does. Honors the
 // context deadline.
 func (b *KubeBackend) waitPodGone(ctx context.Context, ref podRef) error {
-	path := fmt.Sprintf("/api/v1/namespaces/%s/pods/%s", ref.namespace, ref.name)
+	path := fmt.Sprintf("/api/v1/namespaces/%s/pods/%s", url.PathEscape(ref.namespace), url.PathEscape(ref.name))
 	for {
 		pod, err := b.client.GetJSON(ctx, path, nil)
 		var statusErr *StatusError
