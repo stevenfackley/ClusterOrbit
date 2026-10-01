@@ -250,6 +250,24 @@ void main() {
     });
   }
 
+  testWidgets(
+      'a short 932x430 window gets the landscape layout, not the sidebar',
+      (tester) async {
+    // A desktop window: real phones this wide have side insets that keep
+    // the pane under 900.
+    tester.view.padding = FakeViewPadding.zero;
+    tester.view.viewPadding = FakeViewPadding.zero;
+    addTearDown(tester.view.resetPadding);
+    addTearDown(tester.view.resetViewPadding);
+    await pumpClusterOrbitApp(tester, size: const Size(932, 430));
+
+    expect(find.byType(TopologySidebar), findsNothing);
+    expect(find.byType(InteractiveViewer), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    await resetTestSurface(tester);
+  });
+
   testWidgets('phone map at 390x700: header ends above the canvas',
       (tester) async {
     await pumpTopologyScreen(tester, size: const Size(390, 700));

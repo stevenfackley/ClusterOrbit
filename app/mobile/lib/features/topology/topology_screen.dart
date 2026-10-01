@@ -147,7 +147,8 @@ class _TopologyScreenState extends State<TopologyScreen> {
         // Scaffold strips the inset from this MediaQuery, so read the view's.
         final keyboard = MediaQueryData.fromView(View.of(context)).viewInsets;
         final paneHeight = constraints.maxHeight + keyboard.bottom;
-        final isWide = constraints.maxWidth >= 900;
+        // Too short a pane can't fit the sidebar's alerts beside the map.
+        final isWide = constraints.maxWidth >= 900 && paneHeight >= 480;
         final isLandscape = constraints.maxWidth > paneHeight;
         final layout = TopologyLayout.build(clusterSnapshot, filter: _filter);
 
