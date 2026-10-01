@@ -3,7 +3,8 @@ import 'package:flutter/material.dart';
 import '../../core/cluster_domain/saved_connection.dart';
 import '../../core/sync_cache/snapshot_store.dart';
 import '../../shared/widgets/feature_placeholder.dart';
-import '../onboarding/onboarding_screen.dart';
+import '../connections/add_gateway_screen.dart';
+import '../connections/connection_builders.dart';
 
 /// Connection manager. Lists saved connections from [SavedConnectionStore]
 /// and lets the user add (Gateway or Sample) or remove them. When the store
@@ -101,11 +102,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     try {
       await _guarded(
         () => widget.savedConnectionStore!.saveConnection(
-          SavedConnection(
-            id: 'sample-${DateTime.now().millisecondsSinceEpoch}',
-            displayName: 'Sample data',
-            kind: SavedConnectionKind.sample,
-          ),
+          newSampleConnection(),
         ),
       );
     } finally {

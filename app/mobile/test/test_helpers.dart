@@ -1,7 +1,9 @@
+import 'dart:async';
 import 'dart:ui';
 
 import 'package:clusterorbit_mobile/app/clusterorbit_app.dart';
 import 'package:clusterorbit_mobile/core/cluster_domain/cluster_models.dart';
+import 'package:clusterorbit_mobile/core/cluster_domain/saved_connection.dart';
 import 'package:clusterorbit_mobile/core/connectivity/cluster_connection.dart';
 import 'package:clusterorbit_mobile/core/connectivity/sample_cluster_data.dart';
 import 'package:clusterorbit_mobile/core/sync_cache/snapshot_store.dart';
@@ -166,4 +168,51 @@ final class NoOpSnapshotStore implements SnapshotStore {
     String? namespace,
     required List<ClusterEvent> events,
   }) async {}
+}
+
+/// In-memory [SavedConnectionStore] that honors the store contract: the list
+/// is most-recently-touched first, so [saveConnection] inserts at index 0 and
+/// the head is the active connection. Failure hooks let tests exercise error
+/// paths without a real database.
+final class InMemorySavedConnectionStore implements SavedConnectionStore {
+  final List<SavedConnection> saved = [];
+
+  /// Number of upcoming [listConnections] calls that throw.
+  int failListings = 0;
+
+  /// When true, [saveConnection] throws.
+  bool failSaves = false;
+
+  /// When set, [saveConnection] waits on it before writing.
+  Completer<void>? saveGate;
+
+  @override
+  Future<List<SavedConnection>> listConnections() async {
+    if (failListings > 0) {
+      failListings--;
+      throw StateError('db locked');
+    }
+    return List.of(saved);
+  }
+
+  @override
+  Future<void> saveConnection(SavedConnection connection) async {
+    if (failSaves) throw StateError('disk full');
+    await saveGate?.future;
+    saved.removeWhere((c) => c.id == connection.id);
+    saved.insert(0, connection);
+  }
+
+  @override
+  Future<void> deleteConnection(String id) async {
+    saved.removeWhere((c) => c.id == id);
+  }
+
+  @override
+  Future<void> setActiveConnection(String id) async {
+    final idx = saved.indexWhere((c) => c.id == id);
+    if (idx <= 0) return;
+    final promoted = saved.removeAt(idx);
+    saved.insert(0, promoted);
+  }
 }

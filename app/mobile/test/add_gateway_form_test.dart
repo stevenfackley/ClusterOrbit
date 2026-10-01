@@ -3,7 +3,7 @@ import 'dart:async';
 import 'package:clusterorbit_mobile/core/cluster_domain/saved_connection.dart';
 import 'package:clusterorbit_mobile/core/connectivity/cluster_connection_factory.dart';
 import 'package:clusterorbit_mobile/core/theme/clusterorbit_theme.dart';
-import 'package:clusterorbit_mobile/features/onboarding/onboarding_screen.dart';
+import 'package:clusterorbit_mobile/features/connections/add_gateway_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
