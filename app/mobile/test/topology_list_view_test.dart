@@ -1,4 +1,5 @@
 import 'package:clusterorbit_mobile/core/cluster_domain/cluster_models.dart';
+import 'package:clusterorbit_mobile/core/connectivity/cluster_connection.dart';
 import 'package:clusterorbit_mobile/core/connectivity/sample_cluster_data.dart';
 import 'package:clusterorbit_mobile/core/theme/clusterorbit_theme.dart';
 import 'package:clusterorbit_mobile/features/topology/entity_detail_panel.dart';
@@ -99,7 +100,11 @@ void main() {
 
   // ── the detail sheet follows the list ───────────────────────────────────
 
-  Future<void> pumpList(WidgetTester tester, ClusterSnapshot snapshot) async {
+  Future<void> pumpList(
+    WidgetTester tester,
+    ClusterSnapshot snapshot, {
+    ClusterConnection? connection,
+  }) async {
     tester.view.devicePixelRatio = 1.0;
     tester.view.physicalSize = const Size(400, 820);
     addTearDown(tester.view.reset);
@@ -108,7 +113,7 @@ void main() {
       home: Scaffold(
         body: TopologyListView(
           snapshot: snapshot,
-          connection: TestClusterConnection(),
+          connection: connection ?? TestClusterConnection(),
           clusterId: snapshot.profile.id,
         ),
       ),
@@ -153,6 +158,30 @@ void main() {
 
     expect(find.byType(EntityDetailPanel), findsNothing);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('a failed action is reported inside the sheet, not under it',
+      (tester) async {
+    final connection = RecordingClusterConnection()
+      ..mutationError = StateError('forbidden');
+    await pumpList(tester, snapshot, connection: connection);
+    await tester.tap(find.text('cp-1.dev-orbit'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Cordon'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Cordon'));
+    await tester.pumpAndSettle();
+
+    final failure = find.text('Cordon failed: Bad state: forbidden');
+    // Once inline in the sheet, once in the SnackBar beneath it.
+    expect(failure, findsNWidgets(2));
+    expect(
+      find
+          .descendant(of: find.byType(EntityDetailPanel), matching: failure)
+          .hitTestable(),
+      findsOneWidget,
+    );
   });
 
   testWidgets('the detail sheet closes with the list', (tester) async {

@@ -218,8 +218,9 @@ final class InMemorySavedConnectionStore implements SavedConnectionStore {
 }
 
 /// Records every events load and mutation, cluster id included, so a test
-/// can assert exactly what was asked of which cluster. Mutations succeed and
-/// change nothing; drain is unsupported, as in [TestClusterConnection].
+/// can assert exactly what was asked of which cluster. Mutations change
+/// nothing and succeed unless [mutationError] is set; drain is unsupported,
+/// as in [TestClusterConnection].
 final class RecordingClusterConnection implements ClusterConnection {
   RecordingClusterConnection({this.mode = ConnectionMode.direct});
 
@@ -228,6 +229,12 @@ final class RecordingClusterConnection implements ClusterConnection {
 
   /// Every call after the snapshot loads, as `[method, clusterId, ...args]`.
   final List<List<Object?>> calls = [];
+
+  /// Thrown by every mutation, after it is recorded, while set.
+  Object? mutationError;
+
+  /// Answers loadEvents while set, instead of the sample events.
+  Future<List<ClusterEvent>> Function()? onLoadEvents;
 
   final List<ClusterProfile> _profiles =
       SampleClusterData.profilesFor(ConnectionMode.direct);
@@ -262,6 +269,8 @@ final class RecordingClusterConnection implements ClusterConnection {
     int limit = 5,
   }) async {
     calls.add(['loadEvents', clusterId, kind, objectName]);
+    final onLoadEvents = this.onLoadEvents;
+    if (onLoadEvents != null) return onLoadEvents();
     return SampleClusterData.eventsFor(kind: kind, objectName: objectName)
         .take(limit)
         .toList();
@@ -274,6 +283,7 @@ final class RecordingClusterConnection implements ClusterConnection {
     required int replicas,
   }) async {
     calls.add(['scaleWorkload', clusterId, workloadId, replicas]);
+    if (mutationError case final error?) throw error;
   }
 
   @override
@@ -282,6 +292,7 @@ final class RecordingClusterConnection implements ClusterConnection {
     required String workloadId,
   }) async {
     calls.add(['restartWorkload', clusterId, workloadId]);
+    if (mutationError case final error?) throw error;
   }
 
   @override
@@ -291,6 +302,7 @@ final class RecordingClusterConnection implements ClusterConnection {
     required bool schedulable,
   }) async {
     calls.add(['setNodeSchedulable', clusterId, nodeId, schedulable]);
+    if (mutationError case final error?) throw error;
   }
 
   @override
