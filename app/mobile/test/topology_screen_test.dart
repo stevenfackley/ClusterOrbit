@@ -32,6 +32,27 @@ Future<void> pumpTopologyScreen(WidgetTester tester,
   await tester.pumpAndSettle();
 }
 
+/// Drags the map in short, slow strokes (no fling) until [target]'s center
+/// is hit-testable.
+Future<void> panUntilHitTestable(WidgetTester tester, Finder target) async {
+  final viewer = find.byType(InteractiveViewer);
+  for (var i = 0; i < 40; i++) {
+    if (target.hitTestable().evaluate().isNotEmpty) return;
+    final viewport = tester.getRect(viewer);
+    final delta = viewport.center - tester.getCenter(target);
+    final step = Offset(
+      delta.dx.clamp(-120.0, 120.0),
+      delta.dy.clamp(-120.0, 120.0),
+    );
+    final gesture = await tester.startGesture(viewport.center);
+    await gesture.moveBy(step / 2);
+    await gesture.moveBy(step / 2);
+    await tester.pump(const Duration(milliseconds: 300));
+    await gesture.up();
+    await tester.pumpAndSettle();
+  }
+}
+
 void main() {
   testWidgets('topology screen renders interactive canvas with live entities',
       (tester) async {
@@ -113,11 +134,11 @@ void main() {
   });
 
   testWidgets('tablet: tapping a service shows service fields', (tester) async {
-    // The service lane sits right of the workload grid; this surface shows it
-    // without panning.
-    await pumpTopologyScreen(tester, size: const Size(1920, 1080));
+    await pumpTopologyScreen(tester, size: const Size(1400, 900));
 
-    await tester.tap(find.text('ClusterIP / platform').first);
+    final service = find.text('ClusterIP / platform').first;
+    await panUntilHitTestable(tester, service);
+    await tester.tap(service);
     await tester.pumpAndSettle();
 
     expect(find.text('Exposure'), findsOneWidget);
@@ -184,6 +205,26 @@ void main() {
     await tester.tap(find.byTooltip('Dismiss'));
     await tester.pumpAndSettle();
     expect(find.text('K8s Version'), findsNothing);
+
+    await resetTestSurface(tester);
+  });
+
+  testWidgets('phone map: the last service can be panned to and selected',
+      (tester) async {
+    await pumpClusterOrbitApp(tester, size: const Size(390, 700));
+    final toggle = find.byKey(const ValueKey('phone-view-toggle'));
+    await tester.tap(find.descendant(of: toggle, matching: find.text('Map')));
+    await tester.pumpAndSettle();
+
+    final lastService = find.byType(ServiceOrb).last;
+    expect(lastService.hitTestable(), findsNothing);
+    await panUntilHitTestable(tester, lastService);
+    expect(lastService.hitTestable(), findsOneWidget);
+
+    await tester.tap(lastService);
+    await tester.pumpAndSettle();
+    expect(find.text('Exposure'), findsOneWidget);
+    expect(tester.takeException(), isNull);
 
     await resetTestSurface(tester);
   });

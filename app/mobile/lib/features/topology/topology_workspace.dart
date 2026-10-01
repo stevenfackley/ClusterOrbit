@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 import '../../core/cluster_domain/cluster_models.dart';
@@ -182,88 +184,13 @@ class TopologyWorkspace extends StatelessWidget {
                         ),
                       ),
                       Positioned.fill(
-                        child: InteractiveViewer(
-                          transformationController: viewport,
-                          constrained: true,
-                          minScale: 0.8,
-                          maxScale: 1.8,
-                          boundaryMargin: const EdgeInsets.all(24),
-                          child: SizedBox(
-                            width: layout.canvasWidth,
-                            height: layout.canvasHeight,
-                            child: ListenableBuilder(
-                              listenable: viewport,
-                              builder: (context, _) {
-                                final scale =
-                                    viewport.value.getMaxScaleOnAxis();
-                                final showLabels = scale >= 0.9;
-                                // Orbs have a fixed height; cap text so it
-                                // fits (see OrbMetrics.maxTextScale).
-                                return MediaQuery.withClampedTextScaling(
-                                  maxScaleFactor: OrbMetrics.maxTextScale,
-                                  child: Stack(
-                                    children: [
-                                      Positioned.fill(
-                                        child: CustomPaint(
-                                          painter: TopologyLinkPainter(
-                                            layout: layout,
-                                            accent: palette.accentCyan,
-                                          ),
-                                        ),
-                                      ),
-                                      for (final node in snapshot.nodes)
-                                        if (layout.visibleNodeIds
-                                            .contains(node.id))
-                                          CanvasNode(
-                                            offset: layout.positions[node.id]!,
-                                            onTap: () => onEntityTap(node),
-                                            selected: selectedEntity == node,
-                                            child: NodeOrb(
-                                              node: node,
-                                              palette: palette,
-                                              selected: selectedEntity == node,
-                                              showLabels: showLabels,
-                                            ),
-                                          ),
-                                      for (final workload in snapshot.workloads)
-                                        if (layout.visibleWorkloadIds
-                                            .contains(workload.id))
-                                          CanvasNode(
-                                            offset:
-                                                layout.positions[workload.id]!,
-                                            onTap: () => onEntityTap(workload),
-                                            selected:
-                                                selectedEntity == workload,
-                                            child: WorkloadOrb(
-                                              workload: workload,
-                                              palette: palette,
-                                              selected:
-                                                  selectedEntity == workload,
-                                              showLabels: showLabels,
-                                            ),
-                                          ),
-                                      for (final service in snapshot.services)
-                                        if (layout.visibleServiceIds
-                                            .contains(service.id))
-                                          CanvasNode(
-                                            offset:
-                                                layout.positions[service.id]!,
-                                            onTap: () => onEntityTap(service),
-                                            selected: selectedEntity == service,
-                                            child: ServiceOrb(
-                                              service: service,
-                                              palette: palette,
-                                              selected:
-                                                  selectedEntity == service,
-                                              showLabels: showLabels,
-                                            ),
-                                          ),
-                                    ],
-                                  ),
-                                );
-                              },
-                            ),
-                          ),
+                        child: _TopologyCanvas(
+                          snapshot: snapshot,
+                          layout: layout,
+                          palette: palette,
+                          selectedEntity: selectedEntity,
+                          onEntityTap: onEntityTap,
+                          viewport: viewport,
                         ),
                       ),
                       Positioned(
@@ -307,5 +234,122 @@ class TopologyWorkspace extends StatelessWidget {
         );
       }),
     );
+  }
+}
+
+/// The pan/zoom viewer over the full-size canvas of links and orbs.
+class _TopologyCanvas extends StatelessWidget {
+  const _TopologyCanvas({
+    required this.snapshot,
+    required this.layout,
+    required this.palette,
+    required this.selectedEntity,
+    required this.onEntityTap,
+    required this.viewport,
+  });
+
+  final ClusterSnapshot snapshot;
+  final TopologyLayout layout;
+  final ClusterOrbitPalette palette;
+  final Object? selectedEntity;
+  final void Function(Object) onEntityTap;
+  final TransformationController viewport;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(builder: (context, box) {
+      if (box.biggest.isEmpty) return const SizedBox.shrink();
+      // Allow zooming out until the whole canvas fits, but open at 1:1: on a
+      // phone the fit scale is far below the label threshold.
+      final fitScale = math.min(
+        box.maxWidth / layout.canvasWidth,
+        box.maxHeight / layout.canvasHeight,
+      );
+      final minScale = math.min(0.8, fitScale);
+      // InteractiveViewer stops zooming out once the boundary no longer
+      // covers the viewport, so pad the boundary enough to reach minScale.
+      final boundaryMargin = EdgeInsets.symmetric(
+        horizontal:
+            math.max(24.0, (box.maxWidth / minScale - layout.canvasWidth) / 2),
+        vertical: math.max(
+            24.0, (box.maxHeight / minScale - layout.canvasHeight) / 2),
+      );
+
+      return InteractiveViewer(
+        transformationController: viewport,
+        // The canvas keeps its own size; the viewport pans over it.
+        constrained: false,
+        minScale: minScale,
+        maxScale: 1.8,
+        boundaryMargin: boundaryMargin,
+        child: SizedBox(
+          width: layout.canvasWidth,
+          height: layout.canvasHeight,
+          child: ListenableBuilder(
+            listenable: viewport,
+            builder: (context, _) {
+              final scale = viewport.value.getMaxScaleOnAxis();
+              final showLabels = scale >= 0.9;
+              // Orbs have a fixed height; cap text so it fits (see
+              // OrbMetrics.maxTextScale).
+              return MediaQuery.withClampedTextScaling(
+                maxScaleFactor: OrbMetrics.maxTextScale,
+                child: Stack(
+                  children: [
+                    Positioned.fill(
+                      child: CustomPaint(
+                        painter: TopologyLinkPainter(
+                          layout: layout,
+                          accent: palette.accentCyan,
+                        ),
+                      ),
+                    ),
+                    for (final node in snapshot.nodes)
+                      if (layout.visibleNodeIds.contains(node.id))
+                        CanvasNode(
+                          offset: layout.positions[node.id]!,
+                          onTap: () => onEntityTap(node),
+                          selected: selectedEntity == node,
+                          child: NodeOrb(
+                            node: node,
+                            palette: palette,
+                            selected: selectedEntity == node,
+                            showLabels: showLabels,
+                          ),
+                        ),
+                    for (final workload in snapshot.workloads)
+                      if (layout.visibleWorkloadIds.contains(workload.id))
+                        CanvasNode(
+                          offset: layout.positions[workload.id]!,
+                          onTap: () => onEntityTap(workload),
+                          selected: selectedEntity == workload,
+                          child: WorkloadOrb(
+                            workload: workload,
+                            palette: palette,
+                            selected: selectedEntity == workload,
+                            showLabels: showLabels,
+                          ),
+                        ),
+                    for (final service in snapshot.services)
+                      if (layout.visibleServiceIds.contains(service.id))
+                        CanvasNode(
+                          offset: layout.positions[service.id]!,
+                          onTap: () => onEntityTap(service),
+                          selected: selectedEntity == service,
+                          child: ServiceOrb(
+                            service: service,
+                            palette: palette,
+                            selected: selectedEntity == service,
+                            showLabels: showLabels,
+                          ),
+                        ),
+                  ],
+                ),
+              );
+            },
+          ),
+        ),
+      );
+    });
   }
 }
