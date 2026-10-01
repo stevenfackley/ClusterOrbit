@@ -136,7 +136,7 @@ current-context: prod-admin
     expect(snapshot.nodes.first.role, ClusterNodeRole.controlPlane);
   });
 
-  test('gateway connection falls back to sample data when url is empty',
+  test('gateway connection without a url fails instead of serving samples',
       () async {
     final connection = ClusterConnectionFactory.fromEnvironment(const {
       'CLUSTERORBIT_CONNECTION_MODE': 'gateway',
@@ -144,11 +144,37 @@ current-context: prod-admin
 
     expect(connection, isA<GatewayClusterConnection>());
 
-    final clusters = await connection.listClusters();
-    final snapshot = await connection.loadSnapshot(clusters.first.id);
+    final notConfigured = isA<GatewayException>()
+        .having((e) => e.statusCode, 'statusCode', isNull)
+        .having(
+            (e) => e.userMessage, 'userMessage', contains('not configured'));
+    await expectLater(connection.listClusters(), throwsA(notConfigured));
+    await expectLater(
+        connection.loadSnapshot('dev-orbit'), throwsA(notConfigured));
+  });
 
-    expect(snapshot.profile.connectionMode, ConnectionMode.gateway);
-    expect(snapshot.nodes, isNotEmpty);
+  test('gateway connection with an unparseable url fails without a request',
+      () async {
+    final fake = _FakeGatewayHttpClient(const {});
+    final connection = GatewayClusterConnection(
+      gatewayBaseUrl: 'http://[bad/',
+      httpClient: fake,
+    );
+
+    await expectLater(
+      connection.listClusters(),
+      throwsA(isA<GatewayException>()
+          .having((e) => e.userMessage, 'userMessage', contains('not valid'))),
+    );
+    await expectLater(
+      connection.loadEvents(
+        clusterId: 'dev-orbit',
+        kind: TopologyEntityKind.node,
+        objectName: 'worker-1',
+      ),
+      throwsA(isA<GatewayException>()),
+    );
+    expect(fake.requested, isEmpty);
   });
 
   test('gateway connection fetches clusters over HTTP with token header',

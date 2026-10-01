@@ -44,4 +44,53 @@ void main() {
       );
     }, timeout: const Timeout(Duration(seconds: 10)));
   });
+
+  group('DartIoGatewayHttpClient errors', () {
+    late HttpServer server;
+
+    setUp(() async {
+      server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    });
+    tearDown(() => server.close(force: true));
+
+    void answer(int status, String body) {
+      server.listen((request) async {
+        request.response
+          ..statusCode = status
+          ..write(body);
+        await request.response.close();
+      });
+    }
+
+    test('a 403 carries the status and the gateway error text', () async {
+      answer(403, '{"error":"policy violation: replicas 9 exceed max 5"}');
+      final url = Uri.parse('http://127.0.0.1:${server.port}/v1/clusters');
+
+      await expectLater(
+        const DartIoGatewayHttpClient()
+            .postJson(url, body: const {'replicas': 9}),
+        throwsA(isA<GatewayException>()
+            .having((e) => e.statusCode, 'statusCode', 403)
+            .having((e) => e.serverMessage, 'serverMessage',
+                'policy violation: replicas 9 exceed max 5')
+            .having((e) => e.userMessage, 'userMessage',
+                'Not allowed by the gateway: policy violation: replicas 9 exceed max 5')
+            .having((e) => e.message, 'message', contains('$url'))),
+      );
+    });
+
+    test('a non-JSON 5xx body still yields a short message', () async {
+      answer(502, '<html>Bad Gateway</html>');
+      final url = Uri.parse('http://127.0.0.1:${server.port}/v1/clusters');
+
+      await expectLater(
+        const DartIoGatewayHttpClient().getJson(url),
+        throwsA(isA<GatewayException>()
+            .having((e) => e.statusCode, 'statusCode', 502)
+            .having((e) => e.serverMessage, 'serverMessage', isNull)
+            .having(
+                (e) => e.userMessage, 'userMessage', 'Gateway error (502)')),
+      );
+    });
+  });
 }

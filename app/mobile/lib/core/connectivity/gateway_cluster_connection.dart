@@ -4,14 +4,13 @@ import 'dart:io';
 
 import '../cluster_domain/cluster_models.dart';
 import 'cluster_connection.dart';
-import 'sample_cluster_data.dart';
 
 /// HTTP-backed gateway connection.
 ///
-/// When [gatewayBaseUrl] is empty or unparseable the connection falls back
-/// to sample data so the app remains usable without a live gateway. A
-/// configured base URL triggers real HTTP calls that add the token header
-/// when [token] is non-empty.
+/// Every call goes to [gatewayBaseUrl] and adds the token header when [token]
+/// is non-empty. A missing or invalid base URL fails each call with a
+/// [GatewayException] rather than serving sample data, so a misconfigured
+/// gateway cannot pass for a working one.
 final class GatewayClusterConnection implements ClusterConnection {
   GatewayClusterConnection({
     required this.gatewayBaseUrl,
@@ -30,10 +29,8 @@ final class GatewayClusterConnection implements ClusterConnection {
 
   @override
   Future<List<ClusterProfile>> listClusters() async {
-    if (_parseBase() == null) return SampleClusterData.profilesFor(mode);
-
     final body = await _httpClient.getJson(
-      _endpoint('list', ['v1', 'clusters']),
+      _endpoint(['v1', 'clusters']),
       headers: _headers(),
     );
     final list = body as List<dynamic>;
@@ -44,12 +41,8 @@ final class GatewayClusterConnection implements ClusterConnection {
 
   @override
   Future<ClusterSnapshot> loadSnapshot(String clusterId) async {
-    if (_parseBase() == null) {
-      final profile = await _resolveSampleCluster(clusterId);
-      return SampleClusterData.snapshotFor(profile);
-    }
     final body = await _httpClient.getJson(
-      _endpoint('snapshot', ['v1', 'clusters', clusterId, 'snapshot']),
+      _endpoint(['v1', 'clusters', clusterId, 'snapshot']),
       headers: _headers(),
     );
     return ClusterSnapshot.fromJson(body as Map<String, dynamic>);
@@ -63,11 +56,6 @@ final class GatewayClusterConnection implements ClusterConnection {
     String? namespace,
     int limit = 5,
   }) async {
-    if (_parseBase() == null) {
-      return SampleClusterData.eventsFor(kind: kind, objectName: objectName)
-          .take(limit)
-          .toList();
-    }
     final query = <String, String>{
       'kind': kind.name,
       'objectName': objectName,
@@ -75,8 +63,7 @@ final class GatewayClusterConnection implements ClusterConnection {
       if (namespace != null && namespace.isNotEmpty) 'namespace': namespace,
     };
     final body = await _httpClient.getJson(
-      _endpoint('events', ['v1', 'clusters', clusterId, 'events'],
-          query: query),
+      _endpoint(['v1', 'clusters', clusterId, 'events'], query: query),
       headers: _headers(),
     );
     final list = body as List<dynamic>;
@@ -95,7 +82,7 @@ final class GatewayClusterConnection implements ClusterConnection {
       throw ArgumentError.value(
           replicas, 'replicas', 'must be a non-negative integer');
     }
-    final target = _endpoint('scale', [
+    final target = _endpoint([
       'v1',
       'clusters',
       clusterId,
@@ -115,7 +102,7 @@ final class GatewayClusterConnection implements ClusterConnection {
     required String clusterId,
     required String workloadId,
   }) async {
-    final target = _endpoint('restart', [
+    final target = _endpoint([
       'v1',
       'clusters',
       clusterId,
@@ -136,7 +123,7 @@ final class GatewayClusterConnection implements ClusterConnection {
     required String nodeId,
     required bool schedulable,
   }) async {
-    final target = _endpoint('cordon', [
+    final target = _endpoint([
       'v1',
       'clusters',
       clusterId,
@@ -156,7 +143,7 @@ final class GatewayClusterConnection implements ClusterConnection {
     required String clusterId,
     required String nodeId,
   }) async {
-    final target = _endpoint('drain', [
+    final target = _endpoint([
       'v1',
       'clusters',
       clusterId,
@@ -178,7 +165,7 @@ final class GatewayClusterConnection implements ClusterConnection {
     required String nodeId,
     required String jobId,
   }) async {
-    final target = _endpoint('drain', [
+    final target = _endpoint([
       'v1',
       'clusters',
       clusterId,
@@ -191,30 +178,17 @@ final class GatewayClusterConnection implements ClusterConnection {
     return DrainJob.fromJson(body as Map<String, dynamic>);
   }
 
-  Uri? _parseBase() {
-    if (gatewayBaseUrl.isEmpty) return null;
-    final trimmed =
-        gatewayBaseUrl.endsWith('/') ? gatewayBaseUrl : '$gatewayBaseUrl/';
-    try {
-      return Uri.parse(trimmed);
-    } catch (_) {
-      return null;
-    }
-  }
-
   /// Builds a gateway URL from path segments: the base URL's own path is
   /// kept and every segment (cluster ids, workload ids with `/`) is
-  /// percent-encoded rather than interpolated into a path string.
-  Uri _endpoint(
-    String op,
-    List<String> segments, {
-    Map<String, String>? query,
-  }) {
-    final base = _parseBase();
-    if (base == null) {
-      throw StateError(
-        'Gateway base URL is not configured — $op is unsupported in sample-only mode.',
-      );
+  /// percent-encoded rather than interpolated into a path string. Throws a
+  /// [GatewayException] when the base URL is missing or invalid.
+  Uri _endpoint(List<String> segments, {Map<String, String>? query}) {
+    if (gatewayBaseUrl.trim().isEmpty) {
+      throw GatewayException('Gateway URL is not configured.');
+    }
+    final base = Uri.tryParse(gatewayBaseUrl.trim());
+    if (base == null || base.host.isEmpty) {
+      throw GatewayException('Gateway URL "$gatewayBaseUrl" is not valid.');
     }
     return base.replace(
       pathSegments: [
@@ -228,14 +202,6 @@ final class GatewayClusterConnection implements ClusterConnection {
   Map<String, String> _headers() => {
         if (token.isNotEmpty) _tokenHeader: token,
       };
-
-  Future<ClusterProfile> _resolveSampleCluster(String clusterId) async {
-    final profiles = SampleClusterData.profilesFor(mode);
-    return profiles.firstWhere(
-      (profile) => profile.id == clusterId,
-      orElse: () => profiles.first,
-    );
-  }
 }
 
 /// Abstraction over HTTP GETs/POSTs so tests can inject deterministic
@@ -296,9 +262,8 @@ final class DartIoGatewayHttpClient implements GatewayHttpClient {
           .join()
           .timeout(responseTimeout);
       if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw GatewayException(
-          'Gateway request failed (${response.statusCode}) for $url: $responseBody',
-        );
+        throw GatewayException.fromResponse(
+            response.statusCode, url, responseBody);
       }
       return responseBody.isEmpty ? null : jsonDecode(responseBody);
     } finally {
@@ -307,9 +272,50 @@ final class DartIoGatewayHttpClient implements GatewayHttpClient {
   }
 }
 
+/// A failed gateway call: a non-2xx response ([statusCode] set) or a base
+/// URL that cannot be used ([statusCode] null).
 class GatewayException implements Exception {
-  GatewayException(this.message);
+  GatewayException(this.message, {this.statusCode, this.serverMessage});
+
+  /// Wraps a non-2xx response; the gateway explains failures as
+  /// `{"error": "..."}`, which becomes [serverMessage].
+  factory GatewayException.fromResponse(int statusCode, Uri url, String body) =>
+      GatewayException(
+        'Gateway request failed ($statusCode) for $url: $body',
+        statusCode: statusCode,
+        serverMessage: _errorField(body),
+      );
+
+  /// Full diagnostic text, including the URL and raw body. For logs; show
+  /// [userMessage] to people.
   final String message;
+  final int? statusCode;
+  final String? serverMessage;
+
+  /// Short text for a snackbar or banner: no URL, no raw JSON.
+  String get userMessage {
+    final status = statusCode;
+    if (status == null) return message;
+    final reason = switch (status) {
+      401 => 'Gateway rejected the access token',
+      403 => 'Not allowed by the gateway',
+      404 => 'Not found on the gateway',
+      429 => 'Gateway rate limit reached',
+      >= 500 => 'Gateway error ($status)',
+      _ => 'Gateway request failed ($status)',
+    };
+    return serverMessage == null ? reason : '$reason: $serverMessage';
+  }
+
+  static String? _errorField(String body) {
+    try {
+      final decoded = jsonDecode(body);
+      final error = decoded is Map ? decoded['error'] : null;
+      return error is String && error.isNotEmpty ? error : null;
+    } on FormatException {
+      return null;
+    }
+  }
 
   @override
   String toString() => 'GatewayException: $message';

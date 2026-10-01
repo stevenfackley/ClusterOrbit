@@ -45,6 +45,35 @@ void main() {
     }, timeout: const Timeout(Duration(seconds: 10)));
   });
 
+  test('an API error carries the status and the Status message', () async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => server.close(force: true));
+    server.listen((request) async {
+      request.response
+        ..statusCode = 403
+        ..write(jsonEncode({
+          'kind': 'Status',
+          'status': 'Failure',
+          'message': 'nodes "worker-1" is forbidden: User "dev" cannot patch',
+          'reason': 'Forbidden',
+          'code': 403,
+        }));
+      await request.response.close();
+    });
+
+    await expectLater(
+      const HttpKubernetesTransport().getJson(_request(server)),
+      throwsA(isA<HttpException>()
+          .having((e) => (e as KubernetesApiException).statusCode, 'statusCode',
+              403)
+          .having(
+              (e) => (e as KubernetesApiException).userMessage,
+              'userMessage',
+              'Forbidden by the cluster: nodes "worker-1" is forbidden: '
+                  'User "dev" cannot patch')),
+    );
+  });
+
   test('a client certificate without a CA keeps the system trust roots', () {
     final trustedRoots = <bool>[];
     SecurityContext record({bool withTrustedRoots = false}) {

@@ -117,10 +117,8 @@ final class HttpKubernetesTransport implements KubernetesTransport {
           .join()
           .timeout(responseTimeout);
       if (response.statusCode >= 400) {
-        throw HttpException(
-          'Kubernetes API request failed with status ${response.statusCode}: $responseBody',
-          uri: request.uri,
-        );
+        throw KubernetesApiException.fromResponse(
+            response.statusCode, request.uri, responseBody);
       }
 
       if (responseBody.isEmpty) {
@@ -135,6 +133,56 @@ final class HttpKubernetesTransport implements KubernetesTransport {
       return decoded.map((key, value) => MapEntry('$key', value));
     } finally {
       client.close(force: true);
+    }
+  }
+}
+
+/// A non-2xx answer from the Kubernetes API. Still an [HttpException]
+/// ([message] keeps the raw body for logs); [serverMessage] is the
+/// `Status.message` the API server explains failures with.
+class KubernetesApiException extends HttpException {
+  const KubernetesApiException(
+    super.message, {
+    super.uri,
+    required this.statusCode,
+    this.serverMessage,
+  });
+
+  factory KubernetesApiException.fromResponse(
+    int statusCode,
+    Uri uri,
+    String body,
+  ) =>
+      KubernetesApiException(
+        'Kubernetes API request failed with status $statusCode: $body',
+        uri: uri,
+        statusCode: statusCode,
+        serverMessage: _statusMessage(body),
+      );
+
+  final int statusCode;
+  final String? serverMessage;
+
+  /// Short text for a snackbar or banner: no URL, no raw JSON.
+  String get userMessage {
+    final reason = switch (statusCode) {
+      401 => 'Kubernetes API rejected the credentials',
+      403 => 'Forbidden by the cluster',
+      404 => 'Not found on the cluster',
+      409 => 'Conflicting change on the cluster; refresh and retry',
+      >= 500 => 'Kubernetes API error ($statusCode)',
+      _ => 'Kubernetes API request failed ($statusCode)',
+    };
+    return serverMessage == null ? reason : '$reason: $serverMessage';
+  }
+
+  static String? _statusMessage(String body) {
+    try {
+      final decoded = jsonDecode(body);
+      final message = decoded is Map ? decoded['message'] : null;
+      return message is String && message.isNotEmpty ? message : null;
+    } on FormatException {
+      return null;
     }
   }
 }

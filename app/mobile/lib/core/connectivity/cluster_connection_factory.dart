@@ -38,7 +38,8 @@ final class ClusterConnectionFactory {
   /// gate to wire the active connection for the shell.
   ///
   /// - `sample`: in-process fake data; no I/O.
-  /// - `gateway`: HTTP-backed, sample-fallback when URL is empty/unparseable.
+  /// - `gateway`: HTTP-backed; a missing or invalid URL fails every call
+  ///   with a [GatewayException] instead of serving sample data.
   /// - `direct`: kubeconfig provided by the saved entry (or env if null).
   static ClusterConnection fromSavedConnection(SavedConnection saved) {
     return switch (saved.kind) {
