@@ -12,6 +12,7 @@ class ClusterOrbitApp extends StatefulWidget {
     this.connection,
     this.store,
     this.savedConnectionStore,
+    this.autoRefreshInterval = const Duration(seconds: 30),
   });
 
   /// When non-null, bypasses the root gate and mounts [OrbitShell] directly.
@@ -23,6 +24,10 @@ class ClusterOrbitApp extends StatefulWidget {
   /// Optional override for the saved-connection persistence backend.
   /// Defaults to the sqflite store when null and [connection] is null.
   final SavedConnectionStore? savedConnectionStore;
+
+  /// Forwarded to the [OrbitShell] mounted for [connection]; `null`
+  /// disables auto-refresh. The root-gate path keeps the shell's default.
+  final Duration? autoRefreshInterval;
 
   @override
   State<ClusterOrbitApp> createState() => _ClusterOrbitAppState();
@@ -42,7 +47,11 @@ class _ClusterOrbitAppState extends State<ClusterOrbitApp> {
       darkTheme: ClusterOrbitTheme.dark(),
       themeMode: ThemeMode.dark,
       home: widget.connection != null
-          ? OrbitShell(connection: widget.connection, store: widget.store)
+          ? OrbitShell(
+              connection: widget.connection,
+              store: widget.store,
+              autoRefreshInterval: widget.autoRefreshInterval,
+            )
           : ClusterOrbitRootGate(
               savedConnectionStore: widget.savedConnectionStore ?? _sqliteLazy,
               snapshotStore: widget.store ?? _sqliteLazy,

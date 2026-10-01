@@ -155,7 +155,7 @@ final class _NoopStore implements SnapshotStore {
   Future<void> deleteProfiles(Iterable<String> ids) async {}
 
   @override
-  Future<ClusterSnapshot?> loadSnapshot(
+  Future<SnapshotCacheEntry?> loadSnapshotEntry(
     String profileId, {
     Duration? maxAge,
   }) async =>

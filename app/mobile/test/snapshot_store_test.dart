@@ -141,14 +141,15 @@ void main() {
   });
 
   group('snapshots', () {
-    test('loadSnapshot returns null for unknown profile', () async {
-      expect(await store.loadSnapshot('nonexistent'), isNull);
+    test('loadSnapshotEntry returns null for unknown profile', () async {
+      expect(await store.loadSnapshotEntry('nonexistent'), isNull);
     });
 
-    test('saveSnapshot then loadSnapshot returns saved snapshot', () async {
+    test('saveSnapshot then loadSnapshotEntry returns saved snapshot',
+        () async {
       final snap = makeSnapshot();
       await store.saveSnapshot(snap);
-      final loaded = await store.loadSnapshot('p1');
+      final loaded = (await store.loadSnapshotEntry('p1'))?.snapshot;
       expect(loaded, isNotNull);
       expect(loaded!.profile.id, 'p1');
       expect(loaded.generatedAt, DateTime.utc(2026, 4, 16));
@@ -159,18 +160,31 @@ void main() {
           .saveSnapshot(makeSnapshot(generatedAt: DateTime.utc(2026, 4, 16)));
       await store
           .saveSnapshot(makeSnapshot(generatedAt: DateTime.utc(2026, 4, 17)));
-      final loaded = await store.loadSnapshot('p1');
+      final loaded = (await store.loadSnapshotEntry('p1'))?.snapshot;
       expect(loaded!.generatedAt, DateTime.utc(2026, 4, 17));
     });
 
-    test('loadSnapshot returns null for corrupted payload', () async {
+    test('loadSnapshotEntry reports when the row was cached', () async {
+      final before = DateTime.now();
+      await store.saveSnapshot(makeSnapshot());
+      final entry = await store.loadSnapshotEntry('p1');
+      expect(
+        entry!.cachedAt.millisecondsSinceEpoch,
+        greaterThanOrEqualTo(before.millisecondsSinceEpoch),
+      );
+      expect(entry.cachedAt.isAfter(DateTime.now()), isFalse);
+      expect(entry.snapshot.generatedAt, DateTime.utc(2026, 4, 16),
+          reason: 'cachedAt is when we cached it, not when it was generated');
+    });
+
+    test('loadSnapshotEntry returns null for corrupted payload', () async {
       await store.saveSnapshot(makeSnapshot());
       final db = await store.dbForTest;
       final count = await db.rawUpdate(
         "UPDATE cluster_snapshots SET payload = 'not-valid-json' WHERE profile_id = 'p1'",
       );
       expect(count, 1, reason: 'update should have modified exactly one row');
-      expect(await store.loadSnapshot('p1'), isNull);
+      expect(await store.loadSnapshotEntry('p1'), isNull);
     });
   });
 
@@ -234,7 +248,7 @@ void main() {
       await cacheEverything(storeA, 'Dev on A');
 
       expect(await storeB.loadProfiles(), isEmpty);
-      expect(await storeB.loadSnapshot('dev'), isNull);
+      expect(await storeB.loadSnapshotEntry('dev'), isNull);
       expect(await loadEvents(storeB), isNull);
 
       await cacheEverything(storeB, 'Dev on B');
@@ -244,7 +258,7 @@ void main() {
       expect(profilesA.single.name, 'Dev on A');
       expect((await storeB.loadProfiles()).single.name, 'Dev on B');
 
-      final snapshotA = await storeA.loadSnapshot('dev');
+      final snapshotA = (await storeA.loadSnapshotEntry('dev'))?.snapshot;
       expect(snapshotA!.profile.id, 'dev');
       expect(snapshotA.profile.name, 'Dev on A');
       expect((await loadEvents(storeA))!.single.reason, 'BackOff');
@@ -270,25 +284,25 @@ void main() {
       await store.deleteConnection('gateway-1');
 
       expect(await storeA.loadProfiles(), isEmpty);
-      expect(await storeA.loadSnapshot('dev'), isNull);
+      expect(await storeA.loadSnapshotEntry('dev'), isNull);
       expect(await loadEvents(storeA), isNull);
       expect((await storeB.loadProfiles()).single.name, 'Dev on B');
-      expect(await storeB.loadSnapshot('dev'), isNotNull);
+      expect(await storeB.loadSnapshotEntry('dev'), isNotNull);
       expect(await loadEvents(storeB), isNotNull);
     });
   });
 
   group('cache TTL', () {
-    test('loadSnapshot returns snapshot when within maxAge', () async {
+    test('loadSnapshotEntry returns snapshot when within maxAge', () async {
       await store.saveSnapshot(makeSnapshot());
-      final loaded = await store.loadSnapshot(
+      final loaded = await store.loadSnapshotEntry(
         'p1',
         maxAge: const Duration(minutes: 10),
       );
       expect(loaded, isNotNull);
     });
 
-    test('loadSnapshot returns null when cached_at older than maxAge',
+    test('loadSnapshotEntry returns null when cached_at older than maxAge',
         () async {
       await store.saveSnapshot(makeSnapshot());
       final db = await store.dbForTest;
@@ -300,7 +314,7 @@ void main() {
         'UPDATE cluster_snapshots SET cached_at = ? WHERE profile_id = ?',
         [oneHourAgo, 'p1'],
       );
-      final loaded = await store.loadSnapshot(
+      final loaded = await store.loadSnapshotEntry(
         'p1',
         maxAge: const Duration(minutes: 10),
       );

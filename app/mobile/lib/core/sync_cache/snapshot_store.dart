@@ -21,6 +21,10 @@ abstract interface class SavedConnectionStore {
   Future<void> setActiveConnection(String id);
 }
 
+/// A cached snapshot plus when it was written, so a cache hit can report
+/// its real age instead of passing for live data.
+typedef SnapshotCacheEntry = ({ClusterSnapshot snapshot, DateTime cachedAt});
+
 abstract interface class SnapshotStore {
   /// Loads cached profiles, most recently saved first. If [maxAge] is
   /// non-null, rows whose `cached_at` is older than `now - maxAge` are
@@ -31,9 +35,13 @@ abstract interface class SnapshotStore {
   /// Drops the cached profiles with these ids. Unknown ids are ignored.
   Future<void> deleteProfiles(Iterable<String> ids);
 
-  /// Loads the cached snapshot for [profileId]. If [maxAge] is non-null and
-  /// the cached row is older than `now - maxAge`, returns null.
-  Future<ClusterSnapshot?> loadSnapshot(String profileId, {Duration? maxAge});
+  /// Loads the cached snapshot for [profileId] with its `cached_at`. If
+  /// [maxAge] is non-null and the cached row is older than `now - maxAge`,
+  /// returns null.
+  Future<SnapshotCacheEntry?> loadSnapshotEntry(
+    String profileId, {
+    Duration? maxAge,
+  });
   Future<void> saveSnapshot(ClusterSnapshot snapshot);
 
   /// Loads the cached event list for a single entity. Returns null when no
@@ -102,15 +110,19 @@ final class ScopedSnapshotStore implements SnapshotStore {
       _inner.deleteProfiles(ids.map(_scoped));
 
   @override
-  Future<ClusterSnapshot?> loadSnapshot(
+  Future<SnapshotCacheEntry?> loadSnapshotEntry(
     String profileId, {
     Duration? maxAge,
   }) async {
-    final cached = await _inner.loadSnapshot(
+    final entry = await _inner.loadSnapshotEntry(
       _scoped(profileId),
       maxAge: maxAge,
     );
-    return cached == null ? null : _withSnapshotProfileId(cached, profileId);
+    if (entry == null) return null;
+    return (
+      snapshot: _withSnapshotProfileId(entry.snapshot, profileId),
+      cachedAt: entry.cachedAt,
+    );
   }
 
   @override
@@ -303,7 +315,7 @@ final class SqfliteSnapshotStore
   }
 
   @override
-  Future<ClusterSnapshot?> loadSnapshot(
+  Future<SnapshotCacheEntry?> loadSnapshotEntry(
     String profileId, {
     Duration? maxAge,
   }) async {
@@ -322,10 +334,13 @@ final class SqfliteSnapshotStore
       whereArgs: whereArgs,
     );
     if (rows.isEmpty) return null;
+    final row = rows.first;
     try {
-      final map =
-          jsonDecode(rows.first['payload'] as String) as Map<String, dynamic>;
-      return ClusterSnapshot.fromJson(map);
+      final map = jsonDecode(row['payload'] as String) as Map<String, dynamic>;
+      return (
+        snapshot: ClusterSnapshot.fromJson(map),
+        cachedAt: DateTime.fromMillisecondsSinceEpoch(row['cached_at'] as int),
+      );
     } catch (_) {
       return null;
     }

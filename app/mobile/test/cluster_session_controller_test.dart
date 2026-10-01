@@ -55,15 +55,19 @@ void main() {
       expect(controller.snapshot, equals(cachedSnapshot));
       expect(controller.isLoading, isFalse);
       expect(controller.isRefreshing, isTrue);
+      expect(controller.lastRefreshedAt, _CachedStore.cachedAt,
+          reason: 'cached data is dated by when it was cached');
 
       liveCompleter.complete(cachedSnapshot);
       await bootstrapFuture;
 
       expect(controller.isRefreshing, isFalse);
-      expect(controller.lastRefreshedAt, isNotNull);
+      expect(
+          controller.lastRefreshedAt!.isAfter(_CachedStore.cachedAt), isTrue);
+      expect(controller.staleError, isNull);
     });
 
-    test('cache preserved when live fetch errors after cache was shown',
+    test('cache kept, dated and flagged stale when live fetch errors after',
         () async {
       final profiles = SampleClusterData.profilesFor(ConnectionMode.direct);
       final cachedSnapshot = SampleClusterData.snapshotFor(profiles.first);
@@ -86,7 +90,9 @@ void main() {
       expect(controller.snapshot, equals(cachedSnapshot));
       expect(controller.isRefreshing, isFalse);
       expect(controller.loadError, isNull,
-          reason: 'swallow live error when cache is visible');
+          reason: 'the cache stays on screen instead of the error card');
+      expect(controller.staleError, isA<StateError>());
+      expect(controller.lastRefreshedAt, _CachedStore.cachedAt);
     });
 
     test('loadError set when live fails and no cache available', () async {
@@ -280,6 +286,46 @@ void main() {
       final before = controller.selectedCluster;
       await controller.cycleCluster();
       expect(controller.selectedCluster, same(before));
+    });
+
+    test(
+        "cached target is dated by its cache row, not the last cluster's "
+        'fetch, and flagged stale when its live fetch fails', () async {
+      final profiles = SampleClusterData.profilesFor(ConnectionMode.direct);
+      var offline = false;
+      final connection = _FakeConnection(
+        profiles: profiles,
+        loadSnapshotOverride: (clusterId) => offline
+            ? Future<ClusterSnapshot>.error(StateError('network down'))
+            : Future.value(SampleClusterData.snapshotFor(
+                profiles.firstWhere((p) => p.id == clusterId))),
+      );
+      final controller = ClusterSessionController(
+        connection: connection,
+        store: _CachedStore(
+          profiles: profiles,
+          snapshots: [SampleClusterData.snapshotFor(profiles[1])],
+        ),
+      );
+      addTearDown(controller.dispose);
+
+      await controller.bootstrap();
+      expect(
+          controller.lastRefreshedAt!.isAfter(_CachedStore.cachedAt), isTrue);
+
+      offline = true;
+      await controller.cycleCluster();
+      expect(controller.selectedCluster, same(profiles[1]));
+      expect(controller.snapshot!.profile.id, profiles[1].id);
+      expect(controller.lastRefreshedAt, _CachedStore.cachedAt);
+      expect(controller.staleError, isA<StateError>());
+      expect(controller.loadError, isNull);
+
+      offline = false;
+      expect(await controller.refresh(), isNull);
+      expect(controller.staleError, isNull);
+      expect(
+          controller.lastRefreshedAt!.isAfter(_CachedStore.cachedAt), isTrue);
     });
   });
 
@@ -661,7 +707,7 @@ final class _EmptyStore implements SnapshotStore {
   Future<void> deleteProfiles(Iterable<String> ids) async {}
 
   @override
-  Future<ClusterSnapshot?> loadSnapshot(
+  Future<SnapshotCacheEntry?> loadSnapshotEntry(
     String profileId, {
     Duration? maxAge,
   }) async =>
@@ -706,6 +752,9 @@ final class _CachedStore implements SnapshotStore {
     required List<ClusterSnapshot> snapshots,
   }) : _snapshots = {for (final s in snapshots) s.profile.id: s};
 
+  /// Every row reads as cached at this fixed instant.
+  static final cachedAt = DateTime(2026, 9, 30, 8, 15);
+
   final List<ClusterProfile> profiles;
   final Map<String, ClusterSnapshot> _snapshots;
 
@@ -720,11 +769,13 @@ final class _CachedStore implements SnapshotStore {
   Future<void> deleteProfiles(Iterable<String> ids) async {}
 
   @override
-  Future<ClusterSnapshot?> loadSnapshot(
+  Future<SnapshotCacheEntry?> loadSnapshotEntry(
     String profileId, {
     Duration? maxAge,
-  }) async =>
-      _snapshots[profileId];
+  }) async {
+    final snapshot = _snapshots[profileId];
+    return snapshot == null ? null : (snapshot: snapshot, cachedAt: cachedAt);
+  }
 
   @override
   Future<void> saveSnapshot(ClusterSnapshot snapshot) async {}

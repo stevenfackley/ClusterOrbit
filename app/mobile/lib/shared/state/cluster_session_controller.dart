@@ -57,6 +57,7 @@ class ClusterSessionController extends ChangeNotifier {
   ClusterProfile? _selectedCluster;
   ClusterSnapshot? _snapshot;
   Object? _loadError;
+  Object? _staleError;
   bool _isLoading = true;
   bool _isRefreshing = false;
   DateTime? _lastRefreshedAt;
@@ -70,6 +71,10 @@ class ClusterSessionController extends ChangeNotifier {
   bool get isLoading => _isLoading;
   bool get isRefreshing => _isRefreshing;
   DateTime? get lastRefreshedAt => _lastRefreshedAt;
+
+  /// Why the live fetch behind an on-screen cached snapshot failed; null
+  /// while the data is live. The cache's age is [lastRefreshedAt].
+  Object? get staleError => _staleError;
 
   /// The live cluster list came back empty: nothing to show, yet not a
   /// failure. Tells "no clusters" apart from a failed connection, which
@@ -127,6 +132,7 @@ class ClusterSessionController extends ChangeNotifier {
   Future<void> retry() {
     if (_disposed) return Future.value();
     _loadError = null;
+    _staleError = null;
     _isLoading = true;
     notifyListeners();
     return bootstrap();
@@ -168,6 +174,7 @@ class ClusterSessionController extends ChangeNotifier {
 
     _snapshot = snapshot;
     _loadError = null;
+    _staleError = null;
     _isRefreshing = false;
     _lastRefreshedAt = DateTime.now();
     notifyListeners();
@@ -192,6 +199,7 @@ class ClusterSessionController extends ChangeNotifier {
     _snapshot = null;
     _lastRefreshedAt = null;
     _loadError = null;
+    _staleError = null;
     _isLoading = true;
     notifyListeners();
 
@@ -200,15 +208,16 @@ class ClusterSessionController extends ChangeNotifier {
   }
 
   /// Shows [target]'s cached snapshot (and [clusters], when given) if the
-  /// cache holds a fresh one. Returns whether it did.
+  /// cache holds a fresh one, dated by when it was cached. Returns whether
+  /// it did.
   Future<bool> _showCached(
     int gen,
     ClusterProfile target, {
     List<ClusterProfile>? clusters,
   }) async {
-    final ClusterSnapshot? cached;
+    final SnapshotCacheEntry? cached;
     try {
-      cached = await _store.loadSnapshot(target.id, maxAge: _cacheMaxAge);
+      cached = await _store.loadSnapshotEntry(target.id, maxAge: _cacheMaxAge);
     } catch (_) {
       // Cache read failure is non-fatal — fall through to live fetch.
       return false;
@@ -217,8 +226,10 @@ class ClusterSessionController extends ChangeNotifier {
 
     if (clusters != null) _clusters = clusters;
     _selectedCluster = target;
-    _snapshot = cached;
+    _snapshot = cached.snapshot;
+    _lastRefreshedAt = cached.cachedAt;
     _loadError = null;
+    _staleError = null;
     _isLoading = false;
     _isRefreshing = true;
     notifyListeners();
@@ -228,7 +239,7 @@ class ClusterSessionController extends ChangeNotifier {
   /// Live-fetches [target]'s snapshot and makes it (with [clusters], when
   /// given) the session state. The one load path behind [bootstrap] and
   /// [cycleCluster]; with [cacheShown], a failed fetch keeps the cached
-  /// snapshot on screen instead of raising [loadError].
+  /// snapshot on screen and reports [staleError] instead of [loadError].
   Future<void> _activate(
     int gen,
     ClusterProfile target, {
@@ -248,6 +259,7 @@ class ClusterSessionController extends ChangeNotifier {
     _selectedCluster = target;
     _snapshot = snapshot;
     _loadError = null;
+    _staleError = null;
     _isLoading = false;
     _isRefreshing = false;
     _lastRefreshedAt = DateTime.now();
@@ -272,7 +284,11 @@ class ClusterSessionController extends ChangeNotifier {
 
   void _fail(int gen, Object error, {required bool cacheShown}) {
     if (!_isCurrent(gen)) return;
-    if (!cacheShown) _loadError = error;
+    if (cacheShown) {
+      _staleError = error;
+    } else {
+      _loadError = error;
+    }
     _isLoading = false;
     _isRefreshing = false;
     notifyListeners();
