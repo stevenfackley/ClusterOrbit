@@ -248,27 +248,44 @@ class _EntityDetailPanelState extends State<EntityDetailPanel> {
           theme: theme),
       _DetailStatusRow(
           label: 'Health', value: n.health.name, tint: tint, theme: theme),
-      if (widget.connection != null && widget.clusterId != null)
-        ..._actions(theme, [
+      ..._actions(theme, [
+        if (_supports(ClusterOperation.cordon))
           _ActionButton(
             icon: n.schedulable ? Icons.block : Icons.play_circle_outline,
             label: n.schedulable ? 'Cordon' : 'Uncordon',
             onPressed: () => _onCordonPressed(n),
           ),
-          // Drain evicts pods via the gateway's async job API; direct and
-          // sample connections don't implement it, so gate on gateway mode.
-          if (widget.connection!.mode == ConnectionMode.gateway)
-            _ActionButton(
-              icon: Icons.cleaning_services_outlined,
-              label: 'Drain',
-              onPressed: () => _onDrainPressed(n),
-            ),
-        ]),
+        if (_supports(ClusterOperation.drain))
+          _ActionButton(
+            icon: Icons.cleaning_services_outlined,
+            label: 'Drain',
+            onPressed: () => _onDrainPressed(n),
+          ),
+      ]),
     ];
   }
 
-  /// The action buttons, under the last mutation's outcome.
+  /// Whether the connection can perform [op] on this panel's cluster.
+  bool _supports(ClusterOperation op) =>
+      widget.clusterId != null &&
+      (widget.connection?.supportedOperations.contains(op) ?? false);
+
+  /// The action buttons, under the last mutation's outcome. A connection
+  /// that can't mutate anything (sample data) says so instead of offering
+  /// actions that would only fail.
   List<Widget> _actions(ThemeData theme, List<Widget> buttons) {
+    final connection = widget.connection;
+    if (connection == null || widget.clusterId == null) return const [];
+    if (connection.supportedOperations.isEmpty) {
+      return [
+        const SizedBox(height: 4),
+        Text(
+          'Actions are available on live connections',
+          style: theme.textTheme.bodySmall?.copyWith(color: Colors.white60),
+        ),
+      ];
+    }
+    if (buttons.isEmpty) return const [];
     final result = _lastActionResult;
     return [
       const SizedBox(height: 4),
@@ -418,9 +435,6 @@ class _EntityDetailPanelState extends State<EntityDetailPanel> {
     final isScalable =
         w.kind == WorkloadKind.deployment || w.kind == WorkloadKind.statefulSet;
     final isRestartable = isScalable || w.kind == WorkloadKind.daemonSet;
-    final hasActions = (isScalable || isRestartable) &&
-        widget.connection != null &&
-        widget.clusterId != null;
     return [
       _DetailRow(label: 'Namespace', value: w.namespace, theme: theme),
       _DetailRow(label: 'Kind', value: w.kind.label, theme: theme),
@@ -436,15 +450,15 @@ class _EntityDetailPanelState extends State<EntityDetailPanel> {
         _DetailRow(label: 'Image', value: image, theme: theme),
       _DetailStatusRow(
           label: 'Health', value: w.health.name, tint: tint, theme: theme),
-      if (hasActions)
+      if (isScalable || isRestartable)
         ..._actions(theme, [
-          if (isScalable)
+          if (isScalable && _supports(ClusterOperation.scale))
             _ActionButton(
               icon: Icons.tune,
               label: 'Scale',
               onPressed: () => _onScalePressed(w),
             ),
-          if (isRestartable)
+          if (isRestartable && _supports(ClusterOperation.restart))
             _ActionButton(
               icon: Icons.restart_alt,
               label: 'Restart',

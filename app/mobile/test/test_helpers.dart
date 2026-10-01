@@ -55,9 +55,13 @@ final class TestClusterConnection implements ClusterConnection {
   @override
   ConnectionMode get mode => ConnectionMode.direct;
 
+  /// What a direct connection supports: everything but drain.
   @override
-  Set<ClusterOperation> get supportedOperations =>
-      ClusterOperation.values.toSet();
+  Set<ClusterOperation> get supportedOperations => const {
+        ClusterOperation.scale,
+        ClusterOperation.restart,
+        ClusterOperation.cordon,
+      };
 
   @override
   Future<List<ClusterProfile>> listClusters() async => _profiles;
@@ -223,16 +227,27 @@ final class InMemorySavedConnectionStore implements SavedConnectionStore {
 /// Records every events load and mutation, cluster id included, so a test
 /// can assert exactly what was asked of which cluster. Mutations change
 /// nothing and succeed unless [mutationError] is set; drain works once
-/// [drainJob] and [onDrainStatus] are set.
+/// [drainJob] and [onDrainStatus] are set. Supports what a real connection
+/// of [mode] does (drain only on the gateway) unless [supportedOperations]
+/// says otherwise.
 final class RecordingClusterConnection implements ClusterConnection {
-  RecordingClusterConnection({this.mode = ConnectionMode.direct});
+  RecordingClusterConnection({
+    this.mode = ConnectionMode.direct,
+    Set<ClusterOperation>? supportedOperations,
+  }) : supportedOperations = supportedOperations ??
+            (mode == ConnectionMode.gateway
+                ? ClusterOperation.values.toSet()
+                : const {
+                    ClusterOperation.scale,
+                    ClusterOperation.restart,
+                    ClusterOperation.cordon,
+                  });
 
   @override
   final ConnectionMode mode;
 
   @override
-  Set<ClusterOperation> get supportedOperations =>
-      ClusterOperation.values.toSet();
+  final Set<ClusterOperation> supportedOperations;
 
   /// Every call after the snapshot loads, as `[method, clusterId, ...args]`.
   final List<List<Object?>> calls = [];

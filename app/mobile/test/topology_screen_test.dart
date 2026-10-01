@@ -496,7 +496,7 @@ void main() {
         size: const Size(1400, 900), connection: connection);
 
     await openAction(tester, orb('node', 'cp-1'), 'Cordon');
-    // Direct mode has no drain.
+    // A direct connection doesn't support drain.
     expect(inPanel('Drain'), findsNothing);
     expect(find.text('Cordon cp-1.dev-orbit?'), findsOneWidget);
     await tester.tap(find.text('Cancel'));
