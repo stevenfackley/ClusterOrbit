@@ -4,10 +4,9 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"errors"
 	"fmt"
-	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -115,8 +114,9 @@ func (b *KubeBackend) update(jobID string, fn func(*api.DrainJob)) {
 	job.UpdatedAt = b.now().UnixMilli()
 }
 
-// drainWorkers bounds how many pods one drain evicts at once, so a single
-// PDB-blocked pod doesn't hold up the rest of the node.
+// drainWorkers bounds how many evictions one drain has in flight, so a single
+// PDB-blocked pod doesn't hold up the rest of the node. Waiting for an evicted
+// pod to terminate holds no worker.
 const drainWorkers = 5
 
 // runDrain is the background worker: cordon, enumerate pods, then evict the
@@ -134,9 +134,7 @@ func (b *KubeBackend) runDrain(jobID, nodeID string) {
 		return
 	}
 
-	query := url.Values{}
-	query.Set("fieldSelector", "spec.nodeName="+nodeID)
-	body, err := b.client.GetJSON(ctx, "/api/v1/pods", query)
+	pods, err := b.listNodePods(ctx, nodeID)
 	if err != nil {
 		b.failDrain(jobID, fmt.Sprintf("list pods: %v", err))
 		return
@@ -144,7 +142,7 @@ func (b *KubeBackend) runDrain(jobID, nodeID string) {
 
 	var evictable []podRef
 	var unmanaged []string
-	for _, pod := range listItems(body) {
+	for _, pod := range pods {
 		ref, action := classifyPod(pod)
 		if ref.name == "" {
 			continue
@@ -170,7 +168,7 @@ func (b *KubeBackend) runDrain(jobID, nodeID string) {
 
 	b.update(jobID, func(j *api.DrainJob) { j.Remaining = len(evictable) })
 
-	if err := b.evictAll(ctx, jobID, evictable); err != nil {
+	if err := b.evictAll(ctx, jobID, nodeID, evictable); err != nil {
 		b.failDrain(jobID, err.Error())
 		return
 	}
@@ -181,17 +179,48 @@ func (b *KubeBackend) runDrain(jobID, nodeID string) {
 	})
 }
 
-// evictAll evicts pods on up to drainWorkers goroutines, recording each one
-// once it is gone. It returns the first failure, which cancels the rest.
-func (b *KubeBackend) evictAll(ctx context.Context, jobID string, pods []podRef) error {
+// listNodePods lists the pods bound to nodeID.
+func (b *KubeBackend) listNodePods(ctx context.Context, nodeID string) ([]map[string]any, error) {
+	query := url.Values{}
+	query.Set("fieldSelector", "spec.nodeName="+nodeID)
+	body, err := b.client.GetJSON(ctx, "/api/v1/pods", query)
+	if err != nil {
+		return nil, err
+	}
+	return listItems(body), nil
+}
+
+// evictAll evicts pods on up to drainWorkers goroutines and records each one
+// once it is gone. A worker is busy only while its eviction (with any PDB
+// backoff) is in flight; accepted evictions go to one poller, so the pods
+// terminate together rather than drainWorkers at a time. The first failure
+// cancels the rest and is returned.
+func (b *KubeBackend) evictAll(ctx context.Context, jobID, nodeID string, pods []podRef) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	var (
-		wg       sync.WaitGroup
 		failOnce sync.Once
 		firstErr error
 	)
+	fail := func(err error) {
+		failOnce.Do(func() {
+			firstErr = err
+			cancel()
+		})
+	}
+
+	// Room for every pod, so a worker never blocks on the poller.
+	accepted := make(chan podRef, len(pods))
+	polled := make(chan struct{})
+	go func() {
+		defer close(polled)
+		if err := b.awaitPodsGone(ctx, jobID, nodeID, accepted); err != nil {
+			fail(err)
+		}
+	}()
+
+	var wg sync.WaitGroup
 	work := make(chan podRef)
 	for range min(drainWorkers, len(pods)) {
 		wg.Add(1)
@@ -203,22 +232,11 @@ func (b *KubeBackend) evictAll(ctx context.Context, jobID string, pods []podRef)
 				if err == nil {
 					err = b.evictPod(ctx, ref)
 				}
-				if err == nil {
-					err = b.waitPodGone(ctx, ref)
-				}
 				if err != nil {
-					failOnce.Do(func() {
-						firstErr = fmt.Errorf("evict %s: %w", ref.key(), err)
-						cancel()
-					})
+					fail(fmt.Errorf("evict %s: %w", ref.key(), err))
 					continue
 				}
-				b.update(jobID, func(j *api.DrainJob) {
-					j.Evicted = append(j.Evicted, ref.key())
-					if j.Remaining > 0 {
-						j.Remaining--
-					}
-				})
+				accepted <- ref
 			}
 		}()
 	}
@@ -227,7 +245,78 @@ func (b *KubeBackend) evictAll(ctx context.Context, jobID string, pods []podRef)
 	}
 	close(work)
 	wg.Wait()
+	close(accepted)
+	<-polled
 	return firstErr
+}
+
+// awaitPodsGone waits for each pod received on accepted to be gone: deleted,
+// or replaced by a same-named pod with a new UID, as kubectl drain checks.
+// Rather than GET each pod, it lists the node's pods every drainPollInterval
+// and records the pods missing from the list on the job. It returns nil once
+// accepted is closed and every pod is gone, or an error if a list fails or
+// ctx ends first.
+func (b *KubeBackend) awaitPodsGone(ctx context.Context, jobID, nodeID string, accepted <-chan podRef) error {
+	pending := map[podRef]struct{}{}
+	timedOut := func() error {
+		keys := make([]string, 0, len(pending))
+		for ref := range pending {
+			keys = append(keys, ref.key())
+		}
+		if len(keys) == 0 {
+			return fmt.Errorf("timed out waiting for pod deletion: %w", ctx.Err())
+		}
+		sort.Strings(keys)
+		return fmt.Errorf("timed out waiting for pod deletion of %s: %w", strings.Join(keys, ", "), ctx.Err())
+	}
+
+	tick := time.NewTicker(b.drainPollInterval)
+	defer tick.Stop()
+	for accepted != nil || len(pending) > 0 {
+		select {
+		case ref, ok := <-accepted:
+			if ok {
+				pending[ref] = struct{}{}
+			} else {
+				accepted = nil
+			}
+			continue
+		case <-ctx.Done():
+			return timedOut()
+		case <-tick.C:
+		}
+		if len(pending) == 0 {
+			continue
+		}
+
+		pods, err := b.listNodePods(ctx, nodeID)
+		if err != nil {
+			if ctx.Err() != nil {
+				return timedOut()
+			}
+			return fmt.Errorf("list pods: %w", err)
+		}
+		present := make(map[podRef]struct{}, len(pods))
+		for _, pod := range pods {
+			ref, _ := classifyPod(pod)
+			present[ref] = struct{}{}
+		}
+		var gone []string
+		for ref := range pending {
+			if _, ok := present[ref]; !ok {
+				delete(pending, ref)
+				gone = append(gone, ref.key())
+			}
+		}
+		if len(gone) > 0 {
+			sort.Strings(gone)
+			b.update(jobID, func(j *api.DrainJob) {
+				j.Evicted = append(j.Evicted, gone...)
+				j.Remaining = max(j.Remaining-len(gone), 0)
+			})
+		}
+	}
+	return nil
 }
 
 func (b *KubeBackend) failDrain(jobID, msg string) {
@@ -336,30 +425,6 @@ func (b *KubeBackend) evictPod(ctx context.Context, ref podRef) error {
 			}
 		default:
 			return newStatusError(status, respBody)
-		}
-	}
-}
-
-// waitPodGone polls the pod until it is deleted (404) or replaced by a new pod
-// with the same name (different UID), as kubectl drain does. Honors the
-// context deadline.
-func (b *KubeBackend) waitPodGone(ctx context.Context, ref podRef) error {
-	path := fmt.Sprintf("/api/v1/namespaces/%s/pods/%s", url.PathEscape(ref.namespace), url.PathEscape(ref.name))
-	for {
-		pod, err := b.client.GetJSON(ctx, path, nil)
-		var statusErr *StatusError
-		switch {
-		case errors.As(err, &statusErr) && statusErr.Code == http.StatusNotFound:
-			return nil
-		case err == nil && stringAt(pod, "metadata", "uid") != ref.uid:
-			return nil
-		case err != nil && ctx.Err() == nil:
-			return err
-		}
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("timed out waiting for pod deletion: %w", ctx.Err())
-		case <-time.After(b.drainPollInterval):
 		}
 	}
 }
