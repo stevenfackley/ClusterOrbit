@@ -2,6 +2,7 @@ package kubebackend
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/stevenfackley/clusterorbit/app/gateway/internal/api"
 	"github.com/stevenfackley/clusterorbit/app/gateway/internal/kubeconfig"
@@ -29,6 +30,11 @@ func NewMultiClusterBackend(clusters []*kubeconfig.ResolvedCluster) (*MultiClust
 		kb, err := NewKubeBackend(c)
 		if err != nil {
 			errs = append(errs, err)
+			continue
+		}
+		if _, dup := m.backends[kb.profile.ID]; dup {
+			// A second entry would desync the profile list from routing.
+			errs = append(errs, fmt.Errorf("duplicate cluster id %q skipped", kb.profile.ID))
 			continue
 		}
 		m.backends[kb.profile.ID] = kb

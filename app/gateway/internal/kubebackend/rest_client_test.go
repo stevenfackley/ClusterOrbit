@@ -2,8 +2,16 @@ package kubebackend
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -11,6 +19,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stevenfackley/clusterorbit/app/gateway/internal/api"
 	"github.com/stevenfackley/clusterorbit/app/gateway/internal/kubeconfig"
@@ -247,5 +256,75 @@ func TestKubeBackendLoadSnapshotRequestsCachedLists(t *testing.T) {
 		if q != "resourceVersion=0" {
 			t.Fatalf("query = %q, want resourceVersion=0", q)
 		}
+	}
+}
+
+// selfSignedPEM returns a throwaway self-signed client certificate and key.
+func selfSignedPEM(t *testing.T) (certPEM, keyPEM []byte) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "test-client"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("create cert: %v", err)
+	}
+	keyDER, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatalf("marshal key: %v", err)
+	}
+	certPEM = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	keyPEM = pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+	return certPEM, keyPEM
+}
+
+func TestRestClientPresentsClientCertificate(t *testing.T) {
+	certPEM, keyPEM := selfSignedPEM(t)
+
+	var gotCN string
+	ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if len(r.TLS.PeerCertificates) > 0 {
+			gotCN = r.TLS.PeerCertificates[0].Subject.CommonName
+		}
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	ts.TLS = &tls.Config{ClientAuth: tls.RequireAnyClientCert}
+	ts.StartTLS()
+	defer ts.Close()
+
+	client, err := NewRestClient(&kubeconfig.ResolvedCluster{
+		Server:          ts.URL,
+		InsecureSkipTLS: true,
+		ClientCertData:  certPEM,
+		ClientKeyData:   keyPEM,
+	})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	if _, err := client.GetJSON(context.Background(), "/api/v1/nodes", nil); err != nil {
+		t.Fatalf("GetJSON: %v", err)
+	}
+	if gotCN != "test-client" {
+		t.Fatalf("server saw client CN %q, want test-client", gotCN)
+	}
+}
+
+func TestRestClientRejectsBadClientCertificate(t *testing.T) {
+	_, err := NewRestClient(&kubeconfig.ResolvedCluster{
+		Server:         "https://example.com",
+		ClientCertData: []byte("not a cert"),
+		ClientKeyData:  []byte("not a key"),
+	})
+	if err == nil {
+		t.Fatalf("expected error for unusable client certificate")
 	}
 }

@@ -18,9 +18,9 @@ import (
 )
 
 // RestClient is a minimal client for the Kubernetes API server: JSON GETs,
-// PATCHes and POSTs. It only supports bearer-token auth and CA validation (or
-// the explicit insecure-skip option) because those are the only paths the
-// mobile app exercises today. Anything fancier should go through client-go.
+// PATCHes and POSTs. It supports bearer-token and client-certificate auth plus
+// CA validation (or the explicit insecure-skip option); exec plugins and auth
+// providers are not supported. Anything fancier should go through client-go.
 type RestClient struct {
 	baseURL     *url.URL
 	bearerToken string
@@ -51,6 +51,14 @@ func NewRestClient(cluster *kubeconfig.ResolvedCluster) (*RestClient, error) {
 			return nil, errors.New("CA data did not parse as PEM certificates")
 		}
 		tlsConfig.RootCAs = pool
+	}
+
+	if len(cluster.ClientCertData) > 0 {
+		cert, err := tls.X509KeyPair(cluster.ClientCertData, cluster.ClientKeyData)
+		if err != nil {
+			return nil, fmt.Errorf("load client certificate: %w", err)
+		}
+		tlsConfig.Certificates = []tls.Certificate{cert}
 	}
 
 	// Clone the default transport to keep proxy-from-environment, HTTP/2 and
