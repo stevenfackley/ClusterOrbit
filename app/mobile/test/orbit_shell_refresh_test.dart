@@ -61,16 +61,18 @@ final class _ControllableConnection implements ClusterConnection {
   ConnectionMode get mode => ConnectionMode.direct;
 
   @override
+  Set<ClusterOperation> get supportedOperations => const {
+        ClusterOperation.scale,
+        ClusterOperation.restart,
+        ClusterOperation.cordon,
+      };
+
+  @override
   Future<List<ClusterProfile>> listClusters() async => profiles;
 
   @override
   Future<ClusterSnapshot> loadSnapshot(String clusterId) =>
       loadSnapshotFuture();
-
-  @override
-  Stream<ClusterSnapshot> watchSnapshot(String clusterId) async* {
-    yield await loadSnapshot(clusterId);
-  }
 
   @override
   Future<List<ClusterEvent>> loadEvents({
@@ -132,11 +134,14 @@ final class _CachedStore implements SnapshotStore {
   Future<void> saveProfiles(List<ClusterProfile> profiles) async {}
 
   @override
-  Future<ClusterSnapshot?> loadSnapshot(
+  Future<void> deleteProfiles(Iterable<String> ids) async {}
+
+  @override
+  Future<SnapshotCacheEntry?> loadSnapshotEntry(
     String profileId, {
     Duration? maxAge,
   }) async =>
-      snapshot;
+      (snapshot: snapshot, cachedAt: DateTime.now());
 
   @override
   Future<void> saveSnapshot(ClusterSnapshot snapshot) async {}

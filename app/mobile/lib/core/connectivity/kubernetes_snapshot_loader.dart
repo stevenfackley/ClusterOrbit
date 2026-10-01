@@ -1,7 +1,5 @@
-import 'dart:convert';
-import 'dart:io';
-
 import '../cluster_domain/cluster_models.dart';
+import 'kube_transport.dart';
 import 'kubeconfig_repository.dart';
 
 final class KubernetesSnapshotLoader {
@@ -13,60 +11,62 @@ final class KubernetesSnapshotLoader {
 
   Future<ClusterSnapshot> loadSnapshot(
       KubeconfigResolvedCluster cluster) async {
-    final baseUri = Uri.parse(cluster.server);
     final responses = await Future.wait([
       _transport.getJson(
         KubernetesRequest(
-          uri: baseUri.resolve('/api/v1/nodes'),
+          uri: kubeApiUri(cluster.server, ['api', 'v1', 'nodes']),
           auth: cluster.auth,
           tls: cluster.tls,
         ),
       ),
       _transport.getJson(
         KubernetesRequest(
-          uri: baseUri.resolve('/api/v1/pods'),
+          uri: kubeApiUri(cluster.server, ['api', 'v1', 'pods']),
           auth: cluster.auth,
           tls: cluster.tls,
         ),
       ),
       _transport.getJson(
         KubernetesRequest(
-          uri: baseUri.resolve('/api/v1/services'),
+          uri: kubeApiUri(cluster.server, ['api', 'v1', 'services']),
           auth: cluster.auth,
           tls: cluster.tls,
         ),
       ),
       _transport.getJson(
         KubernetesRequest(
-          uri: baseUri.resolve('/apis/apps/v1/deployments'),
+          uri:
+              kubeApiUri(cluster.server, ['apis', 'apps', 'v1', 'deployments']),
           auth: cluster.auth,
           tls: cluster.tls,
         ),
       ),
       _transport.getJson(
         KubernetesRequest(
-          uri: baseUri.resolve('/apis/apps/v1/daemonsets'),
+          uri: kubeApiUri(cluster.server, ['apis', 'apps', 'v1', 'daemonsets']),
           auth: cluster.auth,
           tls: cluster.tls,
         ),
       ),
       _transport.getJson(
         KubernetesRequest(
-          uri: baseUri.resolve('/apis/apps/v1/statefulsets'),
+          uri: kubeApiUri(
+              cluster.server, ['apis', 'apps', 'v1', 'statefulsets']),
           auth: cluster.auth,
           tls: cluster.tls,
         ),
       ),
       _transport.getJson(
         KubernetesRequest(
-          uri: baseUri.resolve('/apis/batch/v1/jobs'),
+          uri: kubeApiUri(cluster.server, ['apis', 'batch', 'v1', 'jobs']),
           auth: cluster.auth,
           tls: cluster.tls,
         ),
       ),
       _transport.getJson(
         KubernetesRequest(
-          uri: baseUri.resolve('/apis/apps/v1/replicasets'),
+          uri:
+              kubeApiUri(cluster.server, ['apis', 'apps', 'v1', 'replicasets']),
           auth: cluster.auth,
           tls: cluster.tls,
         ),
@@ -99,17 +99,25 @@ final class KubernetesSnapshotLoader {
         continue;
       }
 
-      final podKey = _resourceKey(
-        _stringAt(pod, ['metadata', 'namespace']) ?? 'default',
-        _stringAt(pod, ['metadata', 'name']) ?? workloadId,
-      );
-      podWorkloadIds[podKey] = workloadId;
+      // A workload id implies a namespace; nameless pods can't be matched
+      // to labels later, so they get no key.
+      final podNamespace = _stringAt(pod, ['metadata', 'namespace']);
+      final podName = _stringAt(pod, ['metadata', 'name']);
+      if (podNamespace != null && podName != null) {
+        podWorkloadIds[_resourceKey(podNamespace, podName)] = workloadId;
+      }
 
       if (nodeName != null) {
         workloadNodeIds.putIfAbsent(workloadId, () => <String>{}).add(nodeName);
       }
 
       final podPhase = _stringAt(pod, ['status', 'phase'])?.toLowerCase();
+      // A Job's Failed and Succeeded pods are earlier or finished attempts;
+      // only its live pods say how it is doing now.
+      if (workloadId.startsWith('${WorkloadKind.job.name}:') &&
+          (podPhase == 'failed' || podPhase == 'succeeded')) {
+        continue;
+      }
       final containerStatuses = _listAt(pod, ['status', 'containerStatuses']);
       final hasRestartingContainer = containerStatuses.any(
         (status) =>
@@ -181,7 +189,7 @@ final class KubernetesSnapshotLoader {
 
     final alerts = [
       ..._nodeAlerts(nodes),
-      ..._workloadAlerts(workloads),
+      ..._workloadAlerts(workloads, _failedJobIds(jobItems)),
       ..._serviceAlerts(services),
     ];
 
@@ -381,10 +389,16 @@ final class KubernetesSnapshotLoader {
         ? (_intAt(item, ['status', 'active']) > 0 ? 1 : readyReplicas)
         : desiredReplicas;
 
-    final healthSignal = healthSignals[workloadId];
-    final health = readyReplicas < target
-        ? ClusterHealthLevel.warning
-        : (healthSignal ?? ClusterHealthLevel.healthy);
+    // A Job is below its completions until it finishes, so it warns only
+    // once failed; other kinds warn on replica skew. Otherwise the pod
+    // signals decide.
+    final health = switch (kind) {
+      WorkloadKind.job when _jobFailed(item) => ClusterHealthLevel.warning,
+      WorkloadKind.job =>
+        healthSignals[workloadId] ?? ClusterHealthLevel.healthy,
+      _ when readyReplicas < target => ClusterHealthLevel.warning,
+      _ => healthSignals[workloadId] ?? ClusterHealthLevel.healthy,
+    };
 
     final containers = _listAt(item, ['spec', 'template', 'spec', 'containers'])
         .cast<Map?>()
@@ -406,6 +420,27 @@ final class KubernetesSnapshotLoader {
     );
   }
 
+  /// Whether the Job controller has declared [item] failed: a Failed or
+  /// FailureTarget condition with status True. Failed pods alone don't
+  /// count, since the controller may still retry them (between attempts a
+  /// Job has failed pods and none active).
+  bool _jobFailed(Map<String, dynamic> item) =>
+      _listAt(item, ['status', 'conditions']).cast<Map?>().whereType<Map>().any(
+          (c) =>
+              (c['type'] == 'Failed' || c['type'] == 'FailureTarget') &&
+              c['status'] == 'True');
+
+  /// The workload ids of the failed Jobs among [jobItems].
+  Set<String> _failedJobIds(List<Map<String, dynamic>> jobItems) => {
+        for (final item in jobItems)
+          if (_jobFailed(item))
+            _workloadId(
+              WorkloadKind.job,
+              _stringAt(item, ['metadata', 'namespace']) ?? 'default',
+              _stringAt(item, ['metadata', 'name']) ?? 'unknown',
+            ),
+      };
+
   ClusterService _serviceFromItem(
     Map<String, dynamic> item,
     Map<String, ClusterWorkload> workloadsById,
@@ -416,13 +451,13 @@ final class KubernetesSnapshotLoader {
     final selector = _mapAt(item, ['spec', 'selector']);
     final targetWorkloadIds = selector.isEmpty
         ? const <String>[]
-        : [
+        : ([
             for (final entry in workloadsById.entries)
-              if (_matchesSelector(
-                  selector, podLabelsByWorkload[entry.key] ?? const []))
+              if (entry.value.namespace == namespace &&
+                  _matchesSelector(
+                      selector, podLabelsByWorkload[entry.key] ?? const []))
                 entry.key,
-          ]
-      ..sort();
+          ]..sort());
 
     return ClusterService(
       id: _resourceId('service', namespace, name),
@@ -439,7 +474,8 @@ final class KubernetesSnapshotLoader {
             protocol: _stringAt(port, ['protocol']) ?? 'TCP',
           ),
       ],
-      health: targetWorkloadIds.isEmpty
+      // Selectorless services (e.g. default/kubernetes) route by other means.
+      health: selector.isNotEmpty && targetWorkloadIds.isEmpty
           ? ClusterHealthLevel.warning
           : ClusterHealthLevel.healthy,
       clusterIp: _toNullableClusterIp(_stringAt(item, ['spec', 'clusterIP'])),
@@ -477,10 +513,27 @@ final class KubernetesSnapshotLoader {
     ];
   }
 
-  List<ClusterAlert> _workloadAlerts(List<ClusterWorkload> workloads) {
+  /// Replica skew on controllers, and failed Jobs. A Job is below its
+  /// completions until it finishes, so it never alerts on skew, and its pods
+  /// never raise an alert; only [_jobFailed] does.
+  List<ClusterAlert> _workloadAlerts(
+    List<ClusterWorkload> workloads,
+    Set<String> failedJobIds,
+  ) {
     return [
       for (final workload in workloads)
-        if (workload.readyReplicas < workload.desiredReplicas)
+        if (workload.kind == WorkloadKind.job)
+          if (failedJobIds.contains(workload.id))
+            ClusterAlert(
+              id: 'workload-${workload.id}',
+              title: 'Job failed',
+              summary: '${workload.name} has failed.',
+              level: ClusterHealthLevel.warning,
+              scope: 'Workload health',
+            )
+          else
+            ...const <ClusterAlert>[]
+        else if (workload.readyReplicas < workload.desiredReplicas)
           ClusterAlert(
             id: 'workload-${workload.id}',
             title: 'Replica skew detected',
@@ -495,7 +548,7 @@ final class KubernetesSnapshotLoader {
   List<ClusterAlert> _serviceAlerts(List<ClusterService> services) {
     return [
       for (final service in services)
-        if (service.targetWorkloadIds.isEmpty)
+        if (service.health == ClusterHealthLevel.warning)
           ClusterAlert(
             id: 'service-${service.id}',
             title: 'Service has no backing workloads',
@@ -626,128 +679,5 @@ final class KubernetesSnapshotLoader {
       }
     }
     return current;
-  }
-}
-
-final class KubernetesRequest {
-  const KubernetesRequest({
-    required this.uri,
-    required this.auth,
-    required this.tls,
-  });
-
-  final Uri uri;
-  final KubeconfigAuth auth;
-  final KubeconfigTlsConfig tls;
-}
-
-abstract interface class KubernetesTransport {
-  Future<Map<String, dynamic>> getJson(KubernetesRequest request);
-
-  /// Send a JSON-body PATCH. [contentType] is typically
-  /// `application/merge-patch+json` for K8s merge patches.
-  Future<Map<String, dynamic>> patchJson(
-    KubernetesRequest request, {
-    required String contentType,
-    required List<int> body,
-  });
-}
-
-final class HttpKubernetesTransport implements KubernetesTransport {
-  @override
-  Future<Map<String, dynamic>> getJson(KubernetesRequest request) =>
-      _send(request, method: 'GET', contentType: null, body: null);
-
-  @override
-  Future<Map<String, dynamic>> patchJson(
-    KubernetesRequest request, {
-    required String contentType,
-    required List<int> body,
-  }) =>
-      _send(request, method: 'PATCH', contentType: contentType, body: body);
-
-  Future<Map<String, dynamic>> _send(
-    KubernetesRequest request, {
-    required String method,
-    required String? contentType,
-    required List<int>? body,
-  }) async {
-    final client = HttpClient(
-      context: _buildSecurityContext(request.tls, request.auth),
-    );
-    if (request.tls.insecureSkipTlsVerify) {
-      client.badCertificateCallback = (_, __, ___) => true;
-    }
-
-    try {
-      final httpRequest = await client.openUrl(method, request.uri);
-      httpRequest.headers.set(HttpHeaders.acceptHeader, 'application/json');
-      if (contentType != null) {
-        httpRequest.headers.set(HttpHeaders.contentTypeHeader, contentType);
-      }
-      if (request.auth.bearerToken != null &&
-          request.auth.bearerToken!.isNotEmpty) {
-        httpRequest.headers.set(
-          HttpHeaders.authorizationHeader,
-          'Bearer ${request.auth.bearerToken}',
-        );
-      } else if (request.auth.basicUsername != null &&
-          request.auth.basicPassword != null) {
-        final token = base64Encode(
-          utf8.encode(
-              '${request.auth.basicUsername}:${request.auth.basicPassword}'),
-        );
-        httpRequest.headers.set(
-          HttpHeaders.authorizationHeader,
-          'Basic $token',
-        );
-      }
-      if (body != null) {
-        httpRequest.add(body);
-      }
-
-      final response = await httpRequest.close();
-      final responseBody = await response.transform(utf8.decoder).join();
-      if (response.statusCode >= 400) {
-        throw HttpException(
-          'Kubernetes API request failed with status ${response.statusCode}: $responseBody',
-          uri: request.uri,
-        );
-      }
-
-      if (responseBody.isEmpty) {
-        return const {};
-      }
-      final decoded = jsonDecode(responseBody);
-      if (decoded is! Map) {
-        throw const FormatException(
-            'Kubernetes API response was not an object');
-      }
-
-      return decoded.map((key, value) => MapEntry('$key', value));
-    } finally {
-      client.close(force: true);
-    }
-  }
-
-  SecurityContext? _buildSecurityContext(
-    KubeconfigTlsConfig tls,
-    KubeconfigAuth auth,
-  ) {
-    final hasCustomContext = tls.certificateAuthorityData != null ||
-        (auth.clientCertificateData != null && auth.clientKeyData != null);
-    if (!hasCustomContext) {
-      return null;
-    }
-
-    final context = SecurityContext();
-    if (tls.certificateAuthorityData != null) {
-      context.setTrustedCertificatesBytes(tls.certificateAuthorityData!);
-    }
-    if (auth.clientCertificateData != null && auth.clientKeyData != null) {
-      context.useCertificateChainBytes(auth.clientCertificateData!);
-      context.usePrivateKeyBytes(auth.clientKeyData!);
-    }
-    return context;
   }
 }

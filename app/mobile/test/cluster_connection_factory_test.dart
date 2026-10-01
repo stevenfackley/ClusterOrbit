@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:clusterorbit_mobile/core/cluster_domain/cluster_models.dart';
 import 'package:clusterorbit_mobile/core/connectivity/cluster_connection.dart';
 import 'package:clusterorbit_mobile/core/connectivity/cluster_connection_factory.dart';
+import 'package:clusterorbit_mobile/core/connectivity/kube_transport.dart';
 import 'package:clusterorbit_mobile/core/connectivity/kubeconfig_repository.dart';
 import 'package:clusterorbit_mobile/core/connectivity/kubernetes_snapshot_loader.dart';
 import 'package:clusterorbit_mobile/core/connectivity/kubernetes_workload_scaler.dart';
@@ -14,6 +15,20 @@ void main() {
     final connection = ClusterConnectionFactory.fromEnvironment(const {});
 
     expect(connection, isA<DirectClusterConnection>());
+  });
+
+  test('connections declare the operations they support', () {
+    expect(const SampleClusterConnection().supportedOperations, isEmpty);
+    expect(DirectClusterConnection().supportedOperations, {
+      ClusterOperation.scale,
+      ClusterOperation.restart,
+      ClusterOperation.cordon,
+    });
+    expect(
+      GatewayClusterConnection(gatewayBaseUrl: 'https://gw.example.internal')
+          .supportedOperations,
+      ClusterOperation.values.toSet(),
+    );
   });
 
   test('direct connection reads cluster metadata from kubeconfig', () async {
@@ -135,7 +150,7 @@ current-context: prod-admin
     expect(snapshot.nodes.first.role, ClusterNodeRole.controlPlane);
   });
 
-  test('gateway connection falls back to sample data when url is empty',
+  test('gateway connection without a url fails instead of serving samples',
       () async {
     final connection = ClusterConnectionFactory.fromEnvironment(const {
       'CLUSTERORBIT_CONNECTION_MODE': 'gateway',
@@ -143,11 +158,37 @@ current-context: prod-admin
 
     expect(connection, isA<GatewayClusterConnection>());
 
-    final clusters = await connection.listClusters();
-    final snapshot = await connection.loadSnapshot(clusters.first.id);
+    final notConfigured = isA<GatewayException>()
+        .having((e) => e.statusCode, 'statusCode', isNull)
+        .having(
+            (e) => e.userMessage, 'userMessage', contains('not configured'));
+    await expectLater(connection.listClusters(), throwsA(notConfigured));
+    await expectLater(
+        connection.loadSnapshot('dev-orbit'), throwsA(notConfigured));
+  });
 
-    expect(snapshot.profile.connectionMode, ConnectionMode.gateway);
-    expect(snapshot.nodes, isNotEmpty);
+  test('gateway connection with an unparseable url fails without a request',
+      () async {
+    final fake = _FakeGatewayHttpClient(const {});
+    final connection = GatewayClusterConnection(
+      gatewayBaseUrl: 'http://[bad/',
+      httpClient: fake,
+    );
+
+    await expectLater(
+      connection.listClusters(),
+      throwsA(isA<GatewayException>()
+          .having((e) => e.userMessage, 'userMessage', contains('not valid'))),
+    );
+    await expectLater(
+      connection.loadEvents(
+        clusterId: 'dev-orbit',
+        kind: TopologyEntityKind.node,
+        objectName: 'worker-1',
+      ),
+      throwsA(isA<GatewayException>()),
+    );
+    expect(fake.requested, isEmpty);
   });
 
   test('gateway connection fetches clusters over HTTP with token header',
@@ -421,7 +462,7 @@ current-context: prod-admin
         'skipped': <String>[],
         'remaining': 0,
       },
-    });
+    }, postStatus: 202);
     final connection = GatewayClusterConnection(
       gatewayBaseUrl: 'https://gateway.example.internal/',
       token: 's3cret',
@@ -439,6 +480,79 @@ current-context: prod-admin
     expect(job.id, 'job-1');
     expect(job.nodeId, 'worker-1');
     expect(job.phase, DrainPhase.pending);
+  });
+
+  group('gateway mutations parked for approval', () {
+    const cluster = 'https://gateway.example.internal/v1/clusters/remote-alpha';
+    Map<String, dynamic> parked(String op, String targetId) => {
+          'id': 'apr-$op',
+          'op': op,
+          'clusterId': 'remote-alpha',
+          'targetId': targetId,
+          'phase': 'pending',
+          'requester': 'tok:abc',
+          'createdAt': 1700000000000,
+          'updatedAt': 1700000000000,
+          'expiresAt': 1700000900000,
+        };
+    Matcher awaitsApproval(String op, String targetId) =>
+        throwsA(isA<ApprovalPendingException>()
+            .having((e) => e.pending.id, 'id', 'apr-$op')
+            .having((e) => e.pending.op, 'op', op)
+            .having((e) => e.pending.targetId, 'targetId', targetId)
+            .having((e) => e.pending.expiresAt, 'expiresAt',
+                DateTime.utc(2023, 11, 14, 22, 28, 20)));
+    GatewayClusterConnection connect(Map<String, dynamic> responses) =>
+        GatewayClusterConnection(
+          gatewayBaseUrl: 'https://gateway.example.internal/',
+          httpClient: _FakeGatewayHttpClient(responses, postStatus: 202),
+        );
+
+    test('scale', () async {
+      const id = 'deployment:platform/api';
+      final connection = connect({
+        '$cluster/workloads/deployment:platform%2Fapi/scale':
+            parked('scale', id),
+      });
+      await expectLater(
+        connection.scaleWorkload(
+            clusterId: 'remote-alpha', workloadId: id, replicas: 3),
+        awaitsApproval('scale', id),
+      );
+    });
+
+    test('restart', () async {
+      const id = 'deployment:platform/api';
+      final connection = connect({
+        '$cluster/workloads/deployment:platform%2Fapi/restart':
+            parked('restart', id),
+      });
+      await expectLater(
+        connection.restartWorkload(clusterId: 'remote-alpha', workloadId: id),
+        awaitsApproval('restart', id),
+      );
+    });
+
+    test('cordon', () async {
+      final connection = connect({
+        '$cluster/nodes/worker-1/cordon': parked('cordon', 'worker-1'),
+      });
+      await expectLater(
+        connection.setNodeSchedulable(
+            clusterId: 'remote-alpha', nodeId: 'worker-1', schedulable: false),
+        awaitsApproval('cordon', 'worker-1'),
+      );
+    });
+
+    test('drain', () async {
+      final connection = connect({
+        '$cluster/nodes/worker-1/drain': parked('drain', 'worker-1'),
+      });
+      await expectLater(
+        connection.startDrain(clusterId: 'remote-alpha', nodeId: 'worker-1'),
+        awaitsApproval('drain', 'worker-1'),
+      );
+    });
   });
 
   test('gateway drainStatus GETs the job subpath and parses progress',
@@ -562,6 +676,107 @@ current-context: prod-admin
       'spec': {'unschedulable': true}
     });
   });
+
+  test('direct mutations keep a path-prefixed API server and escape names',
+      () async {
+    const cluster = KubeconfigResolvedCluster(
+      profile: ClusterProfile(
+        id: 'x',
+        name: 'x',
+        apiServerHost: 'rancher.example.com',
+        environmentLabel: 'x',
+        connectionMode: ConnectionMode.direct,
+      ),
+      server: 'https://rancher.example.com/k8s/clusters/c-abc12',
+      namespace: null,
+      auth: KubeconfigAuth(
+        bearerToken: null,
+        basicUsername: null,
+        basicPassword: null,
+        clientCertificateData: null,
+        clientKeyData: null,
+      ),
+      tls: KubeconfigTlsConfig(
+        insecureSkipTlsVerify: false,
+        certificateAuthorityData: null,
+      ),
+    );
+    const prefix = 'https://rancher.example.com/k8s/clusters/c-abc12';
+    final transport = _RecordingTransport();
+    final scaler = KubernetesWorkloadScaler(transport: transport);
+
+    await scaler.scaleWorkload(
+      cluster: cluster,
+      workloadId: 'deployment:platform/api',
+      replicas: 2,
+    );
+    expect(transport.lastUri.toString(),
+        '$prefix/apis/apps/v1/namespaces/platform/deployments/api/scale');
+
+    await scaler.restartWorkload(
+      cluster: cluster,
+      workloadId: 'statefulSet:platform/db?x',
+    );
+    expect(transport.lastUri.toString(),
+        '$prefix/apis/apps/v1/namespaces/platform/statefulsets/db%3Fx');
+
+    await KubernetesNodeCordoner(transport: transport).setSchedulable(
+      cluster: cluster,
+      nodeId: 'worker-1',
+      schedulable: false,
+    );
+    expect(transport.lastUri.toString(), '$prefix/api/v1/nodes/worker-1');
+  });
+
+  test('gateway connection keeps the base path and escapes cluster ids',
+      () async {
+    const base = 'https://gateway.example.internal/clusterorbit';
+    const cluster = '$base/v1/clusters/ctx%231';
+    final fake = _FakeGatewayHttpClient({
+      '$cluster/snapshot': {
+        'profile': {
+          'id': 'ctx#1',
+          'name': 'ctx#1',
+          'apiServerHost': 'gateway.example.internal',
+          'environmentLabel': 'Production',
+          'connectionMode': 'gateway',
+        },
+        'generatedAt': 1700000000000,
+      },
+      '$cluster/events?kind=node&objectName=worker-1&limit=5': <dynamic>[],
+      '$cluster/nodes/worker-1/drain/job-1': {'id': 'job-1'},
+    });
+    final connection = GatewayClusterConnection(
+      gatewayBaseUrl: base,
+      httpClient: fake,
+    );
+
+    await connection.loadSnapshot('ctx#1');
+    await connection.loadEvents(
+      clusterId: 'ctx#1',
+      kind: TopologyEntityKind.node,
+      objectName: 'worker-1',
+    );
+    await connection.drainStatus(
+      clusterId: 'ctx#1',
+      nodeId: 'worker-1',
+      jobId: 'job-1',
+    );
+    await connection.scaleWorkload(
+      clusterId: 'ctx#1',
+      workloadId: 'deployment:platform/api',
+      replicas: 2,
+    );
+
+    expect(fake.lastPostUrl.toString(),
+        '$cluster/workloads/deployment:platform%2Fapi/scale');
+    expect(fake.requested, hasLength(4));
+    for (final url in fake.requested) {
+      expect(url.hasFragment, isFalse);
+      expect(url.pathSegments.take(4),
+          ['clusterorbit', 'v1', 'clusters', 'ctx#1']);
+    }
+  });
 }
 
 Map<String, dynamic> _listResponse(List<Map<String, dynamic>> items) => {
@@ -616,16 +831,19 @@ final class _RecordingTransport implements KubernetesTransport {
 }
 
 final class _FakeGatewayHttpClient implements GatewayHttpClient {
-  _FakeGatewayHttpClient(this._responses);
+  _FakeGatewayHttpClient(this._responses, {this.postStatus = 200});
 
   final Map<String, dynamic> _responses;
+  final int postStatus;
   Map<String, String> lastHeaders = const {};
+  final List<Uri> requested = [];
   Uri? lastPostUrl;
   Map<String, dynamic>? lastPostBody;
 
   @override
   Future<dynamic> getJson(Uri url,
       {Map<String, String> headers = const {}}) async {
+    requested.add(url);
     lastHeaders = Map.of(headers);
     final key = url.toString();
     if (!_responses.containsKey(key)) {
@@ -635,14 +853,15 @@ final class _FakeGatewayHttpClient implements GatewayHttpClient {
   }
 
   @override
-  Future<dynamic> postJson(
+  Future<GatewayResponse> postJson(
     Uri url, {
     Map<String, String> headers = const {},
     required Map<String, dynamic> body,
   }) async {
+    requested.add(url);
     lastHeaders = Map.of(headers);
     lastPostUrl = url;
     lastPostBody = Map.of(body);
-    return _responses[url.toString()];
+    return (statusCode: postStatus, body: _responses[url.toString()]);
   }
 }

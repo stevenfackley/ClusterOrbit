@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:yaml/yaml.dart';
+
 import '../cluster_domain/cluster_models.dart';
 
 final class KubeconfigRepository {
@@ -282,224 +284,90 @@ final class KubeconfigDocument {
         for (final user in users) user.name: user,
       };
 
+  /// Parses kubeconfig YAML. Throws a [FormatException] (a `YamlException` for
+  /// bad syntax) when [content] is not a kubeconfig mapping.
   static KubeconfigDocument parse(String content) {
-    final lines = content.replaceAll('\r\n', '\n').split('\n');
+    final root = loadYaml(content);
+    if (root != null && root is! Map) {
+      throw const FormatException('Kubeconfig must be a YAML mapping.');
+    }
+    final doc = root as Map? ?? const {};
+
     final clusters = <KubeconfigClusterEntry>[];
+    for (final item in _entries(doc['clusters'])) {
+      final name = _string(item['name']);
+      if (name == null || name.isEmpty) continue;
+      final cluster = _map(item['cluster']);
+      clusters.add(
+        KubeconfigClusterEntry(
+          name: name,
+          server: _string(cluster['server']),
+          certificateAuthorityData:
+              _string(cluster['certificate-authority-data']),
+          certificateAuthorityPath: _string(cluster['certificate-authority']),
+          insecureSkipTlsVerify:
+              _string(cluster['insecure-skip-tls-verify'])?.toLowerCase() ==
+                  'true',
+        ),
+      );
+    }
+
     final contexts = <KubeconfigContextEntry>[];
+    for (final item in _entries(doc['contexts'])) {
+      final name = _string(item['name']);
+      final context = _map(item['context']);
+      final clusterName = _string(context['cluster']);
+      if (name == null ||
+          name.isEmpty ||
+          clusterName == null ||
+          clusterName.isEmpty) {
+        continue;
+      }
+      contexts.add(
+        KubeconfigContextEntry(
+          name: name,
+          clusterName: clusterName,
+          namespace: _string(context['namespace']),
+          userName: _string(context['user']),
+        ),
+      );
+    }
+
     final users = <KubeconfigUserEntry>[];
-    String? currentContext;
-
-    _ClusterDraft? activeCluster;
-    _ContextDraft? activeContext;
-    _UserDraft? activeUser;
-    String? section;
-
-    void flushCluster() {
-      if (activeCluster != null &&
-          activeCluster!.name != null &&
-          activeCluster!.name!.isNotEmpty) {
-        clusters.add(
-          KubeconfigClusterEntry(
-            name: activeCluster!.name!,
-            server: activeCluster!.server,
-            certificateAuthorityData: activeCluster!.certificateAuthorityData,
-            certificateAuthorityPath: activeCluster!.certificateAuthorityPath,
-            insecureSkipTlsVerify: activeCluster!.insecureSkipTlsVerify,
-          ),
-        );
-      }
-      activeCluster = null;
+    for (final item in _entries(doc['users'])) {
+      final name = _string(item['name']);
+      if (name == null || name.isEmpty) continue;
+      final user = _map(item['user']);
+      users.add(
+        KubeconfigUserEntry(
+          name: name,
+          token: _string(user['token']),
+          tokenFile: _string(user['tokenFile']),
+          username: _string(user['username']),
+          password: _string(user['password']),
+          clientCertificateData: _string(user['client-certificate-data']),
+          clientCertificatePath: _string(user['client-certificate']),
+          clientKeyData: _string(user['client-key-data']),
+          clientKeyPath: _string(user['client-key']),
+        ),
+      );
     }
-
-    void flushContext() {
-      if (activeContext != null &&
-          activeContext!.name != null &&
-          activeContext!.clusterName != null &&
-          activeContext!.name!.isNotEmpty &&
-          activeContext!.clusterName!.isNotEmpty) {
-        contexts.add(
-          KubeconfigContextEntry(
-            name: activeContext!.name!,
-            clusterName: activeContext!.clusterName!,
-            namespace: activeContext!.namespace,
-            userName: activeContext!.userName,
-          ),
-        );
-      }
-      activeContext = null;
-    }
-
-    void flushUser() {
-      if (activeUser != null &&
-          activeUser!.name != null &&
-          activeUser!.name!.isNotEmpty) {
-        users.add(
-          KubeconfigUserEntry(
-            name: activeUser!.name!,
-            token: activeUser!.token,
-            tokenFile: activeUser!.tokenFile,
-            username: activeUser!.username,
-            password: activeUser!.password,
-            clientCertificateData: activeUser!.clientCertificateData,
-            clientCertificatePath: activeUser!.clientCertificatePath,
-            clientKeyData: activeUser!.clientKeyData,
-            clientKeyPath: activeUser!.clientKeyPath,
-          ),
-        );
-      }
-      activeUser = null;
-    }
-
-    void flushAll() {
-      flushCluster();
-      flushContext();
-      flushUser();
-    }
-
-    for (final rawLine in lines) {
-      final line = rawLine.trimRight();
-      if (line.trim().isEmpty || line.trimLeft().startsWith('#')) {
-        continue;
-      }
-
-      final trimmed = line.trimLeft();
-      final indent = line.length - trimmed.length;
-
-      if (indent == 0) {
-        flushAll();
-        section = null;
-
-        if (trimmed == 'clusters:') {
-          section = 'clusters';
-          continue;
-        }
-        if (trimmed == 'contexts:') {
-          section = 'contexts';
-          continue;
-        }
-        if (trimmed == 'users:') {
-          section = 'users';
-          continue;
-        }
-        if (trimmed.startsWith('current-context:')) {
-          currentContext = _valueFor(trimmed);
-        }
-        continue;
-      }
-
-      switch (section) {
-        case 'clusters':
-          if (indent == 2 && trimmed.startsWith('- ')) {
-            flushCluster();
-            activeCluster = _ClusterDraft();
-            final remainder = trimmed.substring(2).trimLeft();
-            if (remainder.startsWith('name:')) {
-              activeCluster!.name = _valueFor(remainder);
-            }
-            continue;
-          }
-          if (activeCluster == null) {
-            continue;
-          }
-          if (indent == 4 && trimmed.startsWith('name:')) {
-            activeCluster!.name = _valueFor(trimmed);
-          } else if (indent >= 4 && trimmed.startsWith('server:')) {
-            activeCluster!.server = _valueFor(trimmed);
-          } else if (indent >= 4 &&
-              trimmed.startsWith('certificate-authority-data:')) {
-            activeCluster!.certificateAuthorityData = _valueFor(trimmed);
-          } else if (indent >= 4 &&
-              trimmed.startsWith('certificate-authority:')) {
-            activeCluster!.certificateAuthorityPath = _valueFor(trimmed);
-          } else if (indent >= 4 &&
-              trimmed.startsWith('insecure-skip-tls-verify:')) {
-            activeCluster!.insecureSkipTlsVerify =
-                _valueFor(trimmed).toLowerCase() == 'true';
-          }
-          break;
-        case 'contexts':
-          if (indent == 2 && trimmed.startsWith('- ')) {
-            flushContext();
-            activeContext = _ContextDraft();
-            final remainder = trimmed.substring(2).trimLeft();
-            if (remainder.startsWith('name:')) {
-              activeContext!.name = _valueFor(remainder);
-            }
-            continue;
-          }
-          if (activeContext == null) {
-            continue;
-          }
-          if (indent == 4 && trimmed.startsWith('name:')) {
-            activeContext!.name = _valueFor(trimmed);
-          } else if (indent >= 4 && trimmed.startsWith('cluster:')) {
-            activeContext!.clusterName = _valueFor(trimmed);
-          } else if (indent >= 4 && trimmed.startsWith('namespace:')) {
-            activeContext!.namespace = _valueFor(trimmed);
-          } else if (indent >= 4 && trimmed.startsWith('user:')) {
-            activeContext!.userName = _valueFor(trimmed);
-          }
-          break;
-        case 'users':
-          if (indent == 2 && trimmed.startsWith('- ')) {
-            flushUser();
-            activeUser = _UserDraft();
-            final remainder = trimmed.substring(2).trimLeft();
-            if (remainder.startsWith('name:')) {
-              activeUser!.name = _valueFor(remainder);
-            }
-            continue;
-          }
-          if (activeUser == null) {
-            continue;
-          }
-          if (indent == 4 && trimmed.startsWith('name:')) {
-            activeUser!.name = _valueFor(trimmed);
-          } else if (indent >= 4 && trimmed.startsWith('token:')) {
-            activeUser!.token = _valueFor(trimmed);
-          } else if (indent >= 4 && trimmed.startsWith('tokenFile:')) {
-            activeUser!.tokenFile = _valueFor(trimmed);
-          } else if (indent >= 4 && trimmed.startsWith('username:')) {
-            activeUser!.username = _valueFor(trimmed);
-          } else if (indent >= 4 && trimmed.startsWith('password:')) {
-            activeUser!.password = _valueFor(trimmed);
-          } else if (indent >= 4 &&
-              trimmed.startsWith('client-certificate-data:')) {
-            activeUser!.clientCertificateData = _valueFor(trimmed);
-          } else if (indent >= 4 && trimmed.startsWith('client-certificate:')) {
-            activeUser!.clientCertificatePath = _valueFor(trimmed);
-          } else if (indent >= 4 && trimmed.startsWith('client-key-data:')) {
-            activeUser!.clientKeyData = _valueFor(trimmed);
-          } else if (indent >= 4 && trimmed.startsWith('client-key:')) {
-            activeUser!.clientKeyPath = _valueFor(trimmed);
-          }
-          break;
-      }
-    }
-
-    flushAll();
 
     return KubeconfigDocument(
       clusters: clusters,
       contexts: contexts,
       users: users,
-      currentContext: currentContext,
+      currentContext: _string(doc['current-context']),
     );
   }
 
-  static String _valueFor(String line) {
-    final separator = line.indexOf(':');
-    if (separator < 0) {
-      return '';
-    }
+  static Iterable<Map> _entries(Object? raw) =>
+      raw is List ? raw.whereType<Map>() : const [];
 
-    final value = line.substring(separator + 1).trim();
-    if ((value.startsWith('"') && value.endsWith('"')) ||
-        (value.startsWith('\'') && value.endsWith('\''))) {
-      return value.substring(1, value.length - 1);
-    }
-    return value;
-  }
+  static Map _map(Object? raw) => raw is Map ? raw : const {};
+
+  static String? _string(Object? raw) =>
+      raw is String || raw is num || raw is bool ? '$raw' : null;
 }
 
 class KubeconfigClusterEntry {
@@ -554,31 +422,4 @@ class KubeconfigUserEntry {
   final String? clientCertificatePath;
   final String? clientKeyData;
   final String? clientKeyPath;
-}
-
-class _ClusterDraft {
-  String? name;
-  String? server;
-  String? certificateAuthorityData;
-  String? certificateAuthorityPath;
-  bool insecureSkipTlsVerify = false;
-}
-
-class _ContextDraft {
-  String? name;
-  String? clusterName;
-  String? namespace;
-  String? userName;
-}
-
-class _UserDraft {
-  String? name;
-  String? token;
-  String? tokenFile;
-  String? username;
-  String? password;
-  String? clientCertificateData;
-  String? clientCertificatePath;
-  String? clientKeyData;
-  String? clientKeyPath;
 }

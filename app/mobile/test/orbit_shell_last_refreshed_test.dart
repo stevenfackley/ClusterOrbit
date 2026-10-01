@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:clusterorbit_mobile/app/clusterorbit_app.dart';
 import 'package:clusterorbit_mobile/core/cluster_domain/cluster_models.dart';
 import 'package:clusterorbit_mobile/core/connectivity/cluster_connection.dart';
@@ -7,6 +5,8 @@ import 'package:clusterorbit_mobile/core/connectivity/sample_cluster_data.dart';
 import 'package:clusterorbit_mobile/core/sync_cache/snapshot_store.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import 'test_helpers.dart';
 
 void main() {
   testWidgets(
@@ -71,6 +71,61 @@ void main() {
       await tester.pump();
     },
   );
+
+  group('a failed live fetch over a cached snapshot', () {
+    final profiles = SampleClusterData.profilesFor(ConnectionMode.direct);
+
+    Future<RecordingClusterConnection> pumpOffline(
+      WidgetTester tester,
+      Size size,
+    ) async {
+      tester.view.devicePixelRatio = 1.0;
+      tester.view.physicalSize = size;
+      final connection = RecordingClusterConnection()
+        ..snapshotError = StateError('network unreachable');
+      await tester.pumpWidget(ClusterOrbitApp(
+        connection: connection,
+        store: _CachedStore(
+          profiles: profiles,
+          snapshot: SampleClusterData.snapshotFor(profiles.first),
+          cachedAt: DateTime.now().subtract(const Duration(minutes: 5)),
+        ),
+        autoRefreshInterval: null,
+      ));
+      await tester.pumpAndSettle();
+      return connection;
+    }
+
+    testWidgets('shows "Offline · cached Xm ago" instead of "Updated"',
+        (tester) async {
+      final connection = await pumpOffline(tester, const Size(1366, 1024));
+
+      expect(find.text('Offline · cached 5m ago'), findsOneWidget);
+      expect(find.textContaining('Updated'), findsNothing);
+      expect(tester.takeException(), isNull);
+
+      // Back online: a refresh replaces the indicator with live freshness.
+      connection.snapshotError = null;
+      await tester.tap(find.text('Offline · cached 5m ago'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Updated just now'), findsOneWidget);
+      expect(find.textContaining('Offline'), findsNothing);
+
+      await resetTestSurface(tester);
+    });
+
+    testWidgets('a phone AppBar shows it as an offline icon', (tester) async {
+      await pumpOffline(tester, const Size(390, 844));
+
+      expect(find.byIcon(Icons.cloud_off_outlined), findsOneWidget);
+      expect(find.byTooltip('Offline · cached 5m ago · tap to refresh'),
+          findsOneWidget);
+      expect(tester.takeException(), isNull);
+
+      await resetTestSurface(tester);
+    });
+  });
 }
 
 final class _CountingConnection implements ClusterConnection {
@@ -84,17 +139,19 @@ final class _CountingConnection implements ClusterConnection {
   ConnectionMode get mode => ConnectionMode.direct;
 
   @override
+  Set<ClusterOperation> get supportedOperations => const {
+        ClusterOperation.scale,
+        ClusterOperation.restart,
+        ClusterOperation.cordon,
+      };
+
+  @override
   Future<List<ClusterProfile>> listClusters() async => profiles;
 
   @override
   Future<ClusterSnapshot> loadSnapshot(String clusterId) async {
     loadSnapshotCalls++;
     return snapshot;
-  }
-
-  @override
-  Stream<ClusterSnapshot> watchSnapshot(String clusterId) async* {
-    yield await loadSnapshot(clusterId);
   }
 
   @override
@@ -152,11 +209,66 @@ final class _NoopStore implements SnapshotStore {
   Future<void> saveProfiles(List<ClusterProfile> profiles) async {}
 
   @override
-  Future<ClusterSnapshot?> loadSnapshot(
+  Future<void> deleteProfiles(Iterable<String> ids) async {}
+
+  @override
+  Future<SnapshotCacheEntry?> loadSnapshotEntry(
     String profileId, {
     Duration? maxAge,
   }) async =>
       null;
+
+  @override
+  Future<void> saveSnapshot(ClusterSnapshot snapshot) async {}
+
+  @override
+  Future<List<ClusterEvent>?> loadEvents({
+    required String profileId,
+    required TopologyEntityKind kind,
+    required String objectName,
+    String? namespace,
+    Duration? maxAge,
+  }) async =>
+      null;
+
+  @override
+  Future<void> saveEvents({
+    required String profileId,
+    required TopologyEntityKind kind,
+    required String objectName,
+    String? namespace,
+    required List<ClusterEvent> events,
+  }) async {}
+}
+
+/// Serves [snapshot] from cache as of [cachedAt]; writes are dropped.
+final class _CachedStore implements SnapshotStore {
+  _CachedStore({
+    required this.profiles,
+    required this.snapshot,
+    required this.cachedAt,
+  });
+
+  final List<ClusterProfile> profiles;
+  final ClusterSnapshot snapshot;
+  final DateTime cachedAt;
+
+  @override
+  Future<List<ClusterProfile>> loadProfiles({Duration? maxAge}) async =>
+      profiles;
+
+  @override
+  Future<void> saveProfiles(List<ClusterProfile> profiles) async {}
+
+  @override
+  Future<void> deleteProfiles(Iterable<String> ids) async {}
+
+  @override
+  Future<SnapshotCacheEntry?> loadSnapshotEntry(
+    String profileId, {
+    Duration? maxAge,
+  }) async =>
+      (snapshot: snapshot, cachedAt: cachedAt);
 
   @override
   Future<void> saveSnapshot(ClusterSnapshot snapshot) async {}
