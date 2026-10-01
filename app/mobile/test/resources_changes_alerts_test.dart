@@ -83,6 +83,9 @@ void main() {
 
       expect(find.text('API latency elevated'), findsOneWidget);
       expect(find.text('Node drain in progress'), findsOneWidget);
+      // The leading icon carries the level; no redundant trailing chip.
+      expect(find.byType(Chip), findsNothing);
+      expect(find.byIcon(Icons.error_outline), findsWidgets);
 
       tester.view.resetPhysicalSize();
       tester.view.resetDevicePixelRatio();

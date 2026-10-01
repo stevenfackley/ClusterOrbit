@@ -81,15 +81,11 @@ class AlertsScreen extends StatelessWidget {
                 leading: Icon(
                   a.level.icon,
                   color: a.level.color(palette),
+                  semanticLabel: a.level.label,
                 ),
                 title: Text(a.title),
                 subtitle: Text('${a.summary}\nScope: ${a.scope}'),
                 isThreeLine: true,
-                trailing: Chip(
-                  label: Text(a.level.name),
-                  backgroundColor:
-                      a.level.color(palette).withValues(alpha: 0.15),
-                ),
                 onTap: () => showModalBottomSheet<void>(
                   context: context,
                   isScrollControlled: true,

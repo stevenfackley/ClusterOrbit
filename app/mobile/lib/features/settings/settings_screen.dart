@@ -300,22 +300,21 @@ class _ConnectionTile extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
+                  // Wrap so the chip drops below the name at large text scales.
+                  Wrap(
+                    spacing: 8,
+                    crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
-                      Flexible(
-                        child: Text(
-                          connection.displayName,
-                          style: theme.textTheme.titleMedium,
-                          overflow: TextOverflow.ellipsis,
-                        ),
+                      Text(
+                        connection.displayName,
+                        style: theme.textTheme.titleMedium,
+                        overflow: TextOverflow.ellipsis,
                       ),
-                      if (isActive) ...[
-                        const SizedBox(width: 8),
+                      if (isActive)
                         const Chip(
                           label: Text('Active'),
                           visualDensity: VisualDensity.compact,
                         ),
-                      ],
                     ],
                   ),
                   const SizedBox(height: 2),

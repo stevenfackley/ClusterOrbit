@@ -241,4 +241,32 @@ void main() {
     await tester.pumpAndSettle();
     expect(store.saved.length, 1);
   });
+
+  testWidgets('long active connection name wraps instead of overflowing',
+      (tester) async {
+    tester.view.devicePixelRatio = 1.0;
+    tester.view.physicalSize = const Size(360, 780);
+    tester.platformDispatcher.textScaleFactorTestValue = 2.0;
+    addTearDown(tester.view.reset);
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+    final store = InMemorySavedConnectionStore()
+      ..saved.add(const SavedConnection(
+        id: 'gw-1',
+        displayName: 'Production gateway east',
+        kind: SavedConnectionKind.gateway,
+        gatewayUrl: 'https://gw.example.com',
+      ));
+    await tester.pumpWidget(_wrap(
+      SettingsScreen(
+        savedConnectionStore: store,
+        activeConnectionId: 'gw-1',
+      ),
+    ));
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+    final name = tester.getRect(find.text('Production gateway east'));
+    final chip = tester.getRect(find.text('Active'));
+    expect(name.overlaps(chip), isFalse);
+  });
 }
