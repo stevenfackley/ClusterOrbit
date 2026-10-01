@@ -283,6 +283,29 @@ void main() {
     });
   });
 
+  group('cache writes are best-effort', () {
+    test('a failing cache write keeps the live result', () async {
+      final profiles = SampleClusterData.profilesFor(ConnectionMode.direct);
+      final controller = ClusterSessionController(
+        connection: _FakeConnection(profiles: profiles),
+        store: _FailingWriteStore(),
+      );
+      addTearDown(controller.dispose);
+
+      await controller.bootstrap();
+      expect(controller.loadError, isNull);
+      expect(controller.selectedCluster, same(profiles.first));
+      expect(controller.snapshot, isNotNull);
+      expect(controller.lastRefreshedAt, isNotNull);
+
+      expect(await controller.refresh(), isNull);
+
+      await controller.cycleCluster();
+      expect(controller.loadError, isNull);
+      expect(controller.snapshot!.profile.id, profiles[1].id);
+    });
+  });
+
   group('stale responses after a cluster switch', () {
     final profiles = SampleClusterData.profilesFor(ConnectionMode.direct);
     final dev = profiles[0];
@@ -662,6 +685,16 @@ final class _EmptyStore implements SnapshotStore {
     String? namespace,
     required List<ClusterEvent> events,
   }) async {}
+}
+
+final class _FailingWriteStore extends _EmptyStore {
+  @override
+  Future<void> saveProfiles(List<ClusterProfile> profiles) async =>
+      throw StateError('disk full');
+
+  @override
+  Future<void> saveSnapshot(ClusterSnapshot snapshot) async =>
+      throw StateError('disk full');
 }
 
 final class _CachedStore implements SnapshotStore {

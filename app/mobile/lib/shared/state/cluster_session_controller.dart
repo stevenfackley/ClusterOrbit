@@ -155,23 +155,24 @@ class ClusterSessionController extends ChangeNotifier {
     _isRefreshing = true;
     notifyListeners();
 
+    final ClusterSnapshot snapshot;
     try {
-      final snapshot = await _connection.loadSnapshot(cluster.id);
-      await _store.saveSnapshot(snapshot);
-
-      if (isStale()) return null;
-      _snapshot = snapshot;
-      _loadError = null;
-      _isRefreshing = false;
-      _lastRefreshedAt = DateTime.now();
-      notifyListeners();
-      return null;
+      snapshot = await _connection.loadSnapshot(cluster.id);
     } catch (error) {
       if (isStale()) return null;
       _isRefreshing = false;
       notifyListeners();
       return 'Refresh failed: $error';
     }
+    if (isStale()) return null;
+
+    _snapshot = snapshot;
+    _loadError = null;
+    _isRefreshing = false;
+    _lastRefreshedAt = DateTime.now();
+    notifyListeners();
+    await _persist(snapshot);
+    return null;
   }
 
   /// Advance to the next cluster in the list (wrapping). Loads cache then
@@ -234,22 +235,38 @@ class ClusterSessionController extends ChangeNotifier {
     List<ClusterProfile>? clusters,
     required bool cacheShown,
   }) async {
+    final ClusterSnapshot snapshot;
     try {
-      final snapshot = await _connection.loadSnapshot(target.id);
-      if (clusters != null) await _store.saveProfiles(clusters);
-      await _store.saveSnapshot(snapshot);
-
-      if (!_isCurrent(gen)) return;
-      if (clusters != null) _clusters = clusters;
-      _selectedCluster = target;
-      _snapshot = snapshot;
-      _loadError = null;
-      _isLoading = false;
-      _isRefreshing = false;
-      _lastRefreshedAt = DateTime.now();
-      notifyListeners();
+      snapshot = await _connection.loadSnapshot(target.id);
     } catch (error) {
       _fail(gen, error, cacheShown: cacheShown);
+      return;
+    }
+    if (!_isCurrent(gen)) return;
+
+    if (clusters != null) _clusters = clusters;
+    _selectedCluster = target;
+    _snapshot = snapshot;
+    _loadError = null;
+    _isLoading = false;
+    _isRefreshing = false;
+    _lastRefreshedAt = DateTime.now();
+    notifyListeners();
+    await _persist(snapshot, clusters: clusters);
+  }
+
+  /// Caches a live result that is already on screen. Best-effort: the cache
+  /// only speeds up the next start, so a failed write must not turn a
+  /// successful fetch into an error.
+  Future<void> _persist(
+    ClusterSnapshot snapshot, {
+    List<ClusterProfile>? clusters,
+  }) async {
+    try {
+      if (clusters != null) await _store.saveProfiles(clusters);
+      await _store.saveSnapshot(snapshot);
+    } catch (error) {
+      debugPrint('ClusterOrbit: snapshot cache write failed: $error');
     }
   }
 
