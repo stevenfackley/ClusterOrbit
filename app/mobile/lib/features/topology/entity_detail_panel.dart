@@ -8,6 +8,7 @@ import '../../core/connectivity/cluster_connection.dart';
 import '../../core/sync_cache/snapshot_store.dart';
 import '../../core/theme/clusterorbit_theme.dart';
 import 'topology_orbs.dart';
+import 'topology_selection.dart';
 
 /// Side panel that shows detail + live events for the selected topology entity.
 class EntityDetailPanel extends StatefulWidget {
@@ -55,7 +56,10 @@ class _EntityDetailPanelState extends State<EntityDetailPanel> {
   @override
   void didUpdateWidget(EntityDetailPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (!identical(oldWidget.entity, widget.entity) ||
+    // A refresh hands over a new object for the same entity: show its
+    // fields, but keep the events and their polling.
+    if (topologyEntityKey(oldWidget.entity) !=
+            topologyEntityKey(widget.entity) ||
         oldWidget.connection != widget.connection ||
         oldWidget.clusterId != widget.clusterId ||
         oldWidget.store != widget.store ||

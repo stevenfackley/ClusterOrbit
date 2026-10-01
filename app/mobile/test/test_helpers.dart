@@ -216,3 +216,111 @@ final class InMemorySavedConnectionStore implements SavedConnectionStore {
     saved.insert(0, promoted);
   }
 }
+
+/// Records every events load and mutation, cluster id included, so a test
+/// can assert exactly what was asked of which cluster. Mutations succeed and
+/// change nothing; drain is unsupported, as in [TestClusterConnection].
+final class RecordingClusterConnection implements ClusterConnection {
+  RecordingClusterConnection({this.mode = ConnectionMode.direct});
+
+  @override
+  final ConnectionMode mode;
+
+  /// Every call after the snapshot loads, as `[method, clusterId, ...args]`.
+  final List<List<Object?>> calls = [];
+
+  final List<ClusterProfile> _profiles =
+      SampleClusterData.profilesFor(ConnectionMode.direct);
+
+  /// The recorded calls to [method].
+  List<List<Object?>> callsTo(String method) =>
+      calls.where((call) => call.first == method).toList();
+
+  @override
+  Future<List<ClusterProfile>> listClusters() async => _profiles;
+
+  @override
+  Future<ClusterSnapshot> loadSnapshot(String clusterId) async =>
+      SampleClusterData.snapshotFor(
+        _profiles.firstWhere(
+          (item) => item.id == clusterId,
+          orElse: () => _profiles.first,
+        ),
+      );
+
+  @override
+  Stream<ClusterSnapshot> watchSnapshot(String clusterId) async* {
+    yield await loadSnapshot(clusterId);
+  }
+
+  @override
+  Future<List<ClusterEvent>> loadEvents({
+    required String clusterId,
+    required TopologyEntityKind kind,
+    required String objectName,
+    String? namespace,
+    int limit = 5,
+  }) async {
+    calls.add(['loadEvents', clusterId, kind, objectName]);
+    return SampleClusterData.eventsFor(kind: kind, objectName: objectName)
+        .take(limit)
+        .toList();
+  }
+
+  @override
+  Future<void> scaleWorkload({
+    required String clusterId,
+    required String workloadId,
+    required int replicas,
+  }) async {
+    calls.add(['scaleWorkload', clusterId, workloadId, replicas]);
+  }
+
+  @override
+  Future<void> restartWorkload({
+    required String clusterId,
+    required String workloadId,
+  }) async {
+    calls.add(['restartWorkload', clusterId, workloadId]);
+  }
+
+  @override
+  Future<void> setNodeSchedulable({
+    required String clusterId,
+    required String nodeId,
+    required bool schedulable,
+  }) async {
+    calls.add(['setNodeSchedulable', clusterId, nodeId, schedulable]);
+  }
+
+  @override
+  Future<DrainJob> startDrain({
+    required String clusterId,
+    required String nodeId,
+  }) async =>
+      throw UnsupportedError('drain not supported');
+
+  @override
+  Future<DrainJob> drainStatus({
+    required String clusterId,
+    required String nodeId,
+    required String jobId,
+  }) async =>
+      throw UnsupportedError('drain not supported');
+}
+
+/// A fresh copy of [snapshot], new objects throughout, as a refresh delivers
+/// it: optionally with node [cordon] unschedulable or node [drop] removed.
+ClusterSnapshot refreshedSnapshot(
+  ClusterSnapshot snapshot, {
+  String? cordon,
+  String? drop,
+}) {
+  final json = snapshot.toJson();
+  final nodes = json['nodes'] as List;
+  nodes.removeWhere((node) => node['id'] == drop);
+  for (final node in nodes) {
+    if (node['id'] == cordon) node['schedulable'] = false;
+  }
+  return ClusterSnapshot.fromJson(json);
+}
