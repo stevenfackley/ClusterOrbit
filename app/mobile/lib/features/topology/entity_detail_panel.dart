@@ -45,6 +45,10 @@ class _EntityDetailPanelState extends State<EntityDetailPanel> {
   /// SnackBar that also reports it can end up under a modal sheet.
   ({String message, _MutationOutcome outcome})? _lastActionResult;
 
+  /// A mutation is in flight. The action buttons stay disabled until it
+  /// ends, so a second tap can't submit a duplicate.
+  bool _busy = false;
+
   @override
   void initState() {
     super.initState();
@@ -254,13 +258,13 @@ class _EntityDetailPanelState extends State<EntityDetailPanel> {
           _ActionButton(
             icon: n.schedulable ? Icons.block : Icons.play_circle_outline,
             label: n.schedulable ? 'Cordon' : 'Uncordon',
-            onPressed: () => _onCordonPressed(n),
+            onPressed: _busy ? null : () => _onCordonPressed(n),
           ),
         if (_supports(ClusterOperation.drain))
           _ActionButton(
             icon: Icons.cleaning_services_outlined,
             label: 'Drain',
-            onPressed: () => _onDrainPressed(n),
+            onPressed: _busy ? null : () => _onDrainPressed(n),
           ),
       ]),
     ];
@@ -338,12 +342,16 @@ class _EntityDetailPanelState extends State<EntityDetailPanel> {
   /// Runs a confirmed mutation: the one place every mutation's outcome is
   /// decided and reported, inline above the actions and as a SnackBar. A
   /// mutation the gateway parked for approval is neither done nor failed.
+  /// The panel can show another entity by the time it ends; then only the
+  /// SnackBar reports it.
   Future<void> _runMutation(
     String verb,
     Future<void> Function() op,
     String successMsg,
   ) async {
     final messenger = ScaffoldMessenger.maybeOf(context);
+    final entityKey = topologyEntityKey(widget.entity);
+    setState(() => _busy = true);
     ({String message, _MutationOutcome outcome}) result;
     try {
       await op();
@@ -361,7 +369,13 @@ class _EntityDetailPanelState extends State<EntityDetailPanel> {
       );
     }
     messenger?.showSnackBar(SnackBar(content: Text(result.message)));
-    if (mounted) setState(() => _lastActionResult = result);
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      if (topologyEntityKey(widget.entity) == entityKey) {
+        _lastActionResult = result;
+      }
+    });
   }
 
   Future<void> _onDrainPressed(ClusterNode n) async {
@@ -460,13 +474,13 @@ class _EntityDetailPanelState extends State<EntityDetailPanel> {
             _ActionButton(
               icon: Icons.tune,
               label: 'Scale',
-              onPressed: () => _onScalePressed(w),
+              onPressed: _busy ? null : () => _onScalePressed(w),
             ),
           if (isRestartable && _supports(ClusterOperation.restart))
             _ActionButton(
               icon: Icons.restart_alt,
               label: 'Restart',
-              onPressed: () => _onRestartPressed(w),
+              onPressed: _busy ? null : () => _onRestartPressed(w),
             ),
         ]),
     ];
@@ -645,7 +659,9 @@ class _ActionButton extends StatelessWidget {
 
   final IconData icon;
   final String label;
-  final VoidCallback onPressed;
+
+  /// Null disables the button.
+  final VoidCallback? onPressed;
 
   @override
   Widget build(BuildContext context) {

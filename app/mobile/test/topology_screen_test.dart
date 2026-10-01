@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:clusterorbit_mobile/core/cluster_domain/cluster_models.dart';
 import 'package:clusterorbit_mobile/core/connectivity/cluster_connection.dart';
 import 'package:clusterorbit_mobile/core/connectivity/gateway_cluster_connection.dart';
@@ -591,6 +593,42 @@ void main() {
           'Refresh to see applied state.'),
       findsOneWidget,
     );
+
+    await resetTestSurface(tester);
+  });
+
+  testWidgets(
+      'cordon: actions wait for the request, and its outcome stays off '
+      'the node selected meanwhile', (tester) async {
+    final gate = Completer<void>();
+    final connection = RecordingClusterConnection()
+      ..mutationGate = gate
+      ..mutationError = StateError('forbidden');
+    await pumpTopologyScreen(tester,
+        size: const Size(1400, 900), connection: connection);
+
+    await openAction(tester, orb('node', 'cp-1'), 'Cordon');
+    await confirm(tester, 'Cordon');
+    final cordon = find.widgetWithText(TextButton, 'Cordon');
+    expect(tester.widget<TextButton>(cordon).onPressed, isNull,
+        reason: 'no duplicate submit while the request is in flight');
+
+    final other = orb('node', 'cp-2');
+    await panUntilHitTestable(tester, other);
+    await tester.tap(other);
+    await tester.pumpAndSettle();
+    expect(inPanel('cp-2.dev-orbit'), findsOneWidget);
+
+    gate.complete();
+    await tester.pumpAndSettle();
+
+    expect(connection.callsTo('setNodeSchedulable'), [
+      ['setNodeSchedulable', 'dev-orbit', 'cp-1', false],
+    ]);
+    const outcome = 'Cordon failed: Bad state: forbidden';
+    expect(inPanel(outcome), findsNothing);
+    expect(find.text(outcome), findsOneWidget, reason: 'the SnackBar says so');
+    expect(tester.widget<TextButton>(cordon).onPressed, isNotNull);
 
     await resetTestSurface(tester);
   });

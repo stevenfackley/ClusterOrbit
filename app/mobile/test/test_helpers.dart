@@ -255,6 +255,9 @@ final class RecordingClusterConnection implements ClusterConnection {
   /// Thrown by every mutation, after it is recorded, while set.
   Object? mutationError;
 
+  /// When set, every mutation waits on it after it is recorded.
+  Completer<void>? mutationGate;
+
   /// Answers listClusters while set, instead of the sample profiles.
   Future<List<ClusterProfile>> Function()? onListClusters;
 
@@ -318,6 +321,7 @@ final class RecordingClusterConnection implements ClusterConnection {
     required int replicas,
   }) async {
     calls.add(['scaleWorkload', clusterId, workloadId, replicas]);
+    await mutationGate?.future;
     if (mutationError case final error?) throw error;
   }
 
@@ -327,6 +331,7 @@ final class RecordingClusterConnection implements ClusterConnection {
     required String workloadId,
   }) async {
     calls.add(['restartWorkload', clusterId, workloadId]);
+    await mutationGate?.future;
     if (mutationError case final error?) throw error;
   }
 
@@ -337,6 +342,7 @@ final class RecordingClusterConnection implements ClusterConnection {
     required bool schedulable,
   }) async {
     calls.add(['setNodeSchedulable', clusterId, nodeId, schedulable]);
+    await mutationGate?.future;
     if (mutationError case final error?) throw error;
   }
 
@@ -346,6 +352,7 @@ final class RecordingClusterConnection implements ClusterConnection {
     required String nodeId,
   }) async {
     calls.add(['startDrain', clusterId, nodeId]);
+    await mutationGate?.future;
     if (mutationError case final error?) throw error;
     return drainJob ?? (throw UnsupportedError('drain not supported'));
   }
