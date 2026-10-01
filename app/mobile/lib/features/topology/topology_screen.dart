@@ -1,5 +1,3 @@
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
 
 import '../../core/cluster_domain/cluster_models.dart';
@@ -10,6 +8,7 @@ import 'entity_detail_panel.dart';
 import 'topology_layout.dart';
 import 'topology_list_view.dart';
 import 'topology_panels.dart';
+import 'topology_selection.dart';
 import 'topology_workspace.dart';
 
 class TopologyScreen extends StatefulWidget {
@@ -39,10 +38,27 @@ class TopologyScreen extends StatefulWidget {
 enum _PhoneView { list, map }
 
 class _TopologyScreenState extends State<TopologyScreen> {
-  Object? _selectedEntity;
+  /// Resolved against each new snapshot in [build], so a refresh keeps the
+  /// selection and the panel shows the refreshed entity.
+  TopologyEntityKey? _selection;
   TopologyFilter _filter = const TopologyFilter();
   final TransformationController _viewport = TransformationController();
   _PhoneView _phoneView = _PhoneView.list;
+
+  @override
+  void didUpdateWidget(TopologyScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final selection = _selection;
+    if (selection == null) return;
+    final snapshot = widget.snapshot;
+    // Ids repeat across clusters, so a cluster switch always drops the
+    // selection: a mutation must never reach the new cluster's namesake.
+    if (oldWidget.clusterId != widget.clusterId ||
+        (snapshot != null &&
+            resolveTopologyEntity(snapshot, selection) == null)) {
+      _selection = null;
+    }
+  }
 
   @override
   void dispose() {
@@ -51,13 +67,12 @@ class _TopologyScreenState extends State<TopologyScreen> {
   }
 
   void _onEntityTap(Object entity) {
-    setState(() {
-      _selectedEntity = _selectedEntity == entity ? null : entity;
-    });
+    final key = topologyEntityKey(entity);
+    setState(() => _selection = _selection == key ? null : key);
   }
 
   void _clearSelection() {
-    setState(() => _selectedEntity = null);
+    setState(() => _selection = null);
   }
 
   void _setFilter(TopologyFilter next) {
@@ -102,24 +117,24 @@ class _TopologyScreenState extends State<TopologyScreen> {
       );
     }
 
+    final selection = _selection;
+    final selectedEntity = selection == null
+        ? null
+        : resolveTopologyEntity(clusterSnapshot, selection);
+
     return LayoutBuilder(
       builder: (context, constraints) {
-        final isWide = constraints.maxWidth >= 1180;
-        final isLandscape =
-            MediaQuery.orientationOf(context) == Orientation.landscape;
-        final canvasHeight = math.max(520.0, constraints.maxHeight - 40);
-        final layout = TopologyLayout.build(
-          clusterSnapshot,
-          canvasHeight: canvasHeight,
-          filter: _filter,
-        );
+        // Both measured on the map's own pane, which the shell's tablet rail
+        // has already narrowed; the window size would overstate it.
+        final isWide = constraints.maxWidth >= 900;
+        final isLandscape = constraints.maxWidth > constraints.maxHeight;
+        final layout = TopologyLayout.build(clusterSnapshot, filter: _filter);
 
         final workspace = TopologyWorkspace(
           snapshot: clusterSnapshot,
           layout: layout,
-          canvasHeight: canvasHeight,
           palette: palette,
-          selectedEntity: _selectedEntity,
+          selectedEntity: selectedEntity,
           onEntityTap: _onEntityTap,
           onDismiss: _clearSelection,
           showPortraitPanel: !isWide && !isLandscape,
@@ -147,7 +162,7 @@ class _TopologyScreenState extends State<TopologyScreen> {
                   child: TopologySidebar(
                     snapshot: clusterSnapshot,
                     palette: palette,
-                    selectedEntity: _selectedEntity,
+                    selectedEntity: selectedEntity,
                     onDismiss: _clearSelection,
                     connection: widget.connection,
                     clusterId: widget.clusterId,
@@ -158,35 +173,31 @@ class _TopologyScreenState extends State<TopologyScreen> {
             ),
           );
         } else if (isLandscape) {
+          // The detail panel floats over the map's right edge instead of
+          // taking width from an already narrow workspace.
           return Padding(
             padding: const EdgeInsets.all(20),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            child: Stack(
               children: [
-                Expanded(child: workspace),
-                AnimatedSize(
-                  duration: const Duration(milliseconds: 250),
-                  curve: Curves.easeInOut,
-                  child: _selectedEntity != null
-                      ? SizedBox(
-                          width: 260,
-                          child: Padding(
-                            padding: const EdgeInsets.only(left: 16),
-                            child: SingleChildScrollView(
-                              child: EntityDetailPanel(
-                                entity: _selectedEntity!,
-                                palette: palette,
-                                onDismiss: _clearSelection,
-                                connection: widget.connection,
-                                clusterId: widget.clusterId,
-                                store: widget.store,
-                                profileId: widget.clusterId,
-                              ),
-                            ),
-                          ),
-                        )
-                      : const SizedBox.shrink(),
-                ),
+                Positioned.fill(child: workspace),
+                if (selectedEntity != null)
+                  Positioned(
+                    top: 8,
+                    right: 8,
+                    bottom: 8,
+                    width: 260,
+                    child: SingleChildScrollView(
+                      child: EntityDetailPanel(
+                        entity: selectedEntity,
+                        palette: palette,
+                        onDismiss: _clearSelection,
+                        connection: widget.connection,
+                        clusterId: widget.clusterId,
+                        store: widget.store,
+                        profileId: widget.clusterId,
+                      ),
+                    ),
+                  ),
               ],
             ),
           );

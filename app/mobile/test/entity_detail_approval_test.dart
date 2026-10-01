@@ -29,6 +29,10 @@ void main() {
     );
   }
 
+  // The outcome is also echoed in a SnackBar; assert the panel's own line.
+  Finder inPanel(String text) => find.descendant(
+      of: find.byType(EntityDetailPanel), matching: find.text(text));
+
   testWidgets('a parked scale shows awaiting approval, not success',
       (tester) async {
     final deployment =
@@ -42,7 +46,7 @@ void main() {
     await tester.tap(find.text('Apply'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Awaiting second-operator approval (apr-scale)'),
+    expect(inPanel('Awaiting second-operator approval (apr-scale)'),
         findsOneWidget);
     expect(find.textContaining('Requested scale'), findsNothing);
   });
@@ -57,7 +61,7 @@ void main() {
     await tester.tap(find.widgetWithText(FilledButton, 'Drain'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Awaiting second-operator approval (apr-drain)'),
+    expect(inPanel('Awaiting second-operator approval (apr-drain)'),
         findsOneWidget);
     expect(find.byType(AlertDialog), findsNothing);
   });

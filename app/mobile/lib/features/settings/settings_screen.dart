@@ -3,7 +3,8 @@ import 'package:flutter/material.dart';
 import '../../core/cluster_domain/saved_connection.dart';
 import '../../core/sync_cache/snapshot_store.dart';
 import '../../shared/widgets/feature_placeholder.dart';
-import '../onboarding/onboarding_screen.dart';
+import '../connections/add_gateway_screen.dart';
+import '../connections/connection_builders.dart';
 
 /// Connection manager. Lists saved connections from [SavedConnectionStore]
 /// and lets the user add (Gateway or Sample) or remove them. When the store
@@ -33,6 +34,7 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   late Future<List<SavedConnection>> _savedFuture;
+  bool _busy = false;
 
   @override
   void initState() {
@@ -52,23 +54,38 @@ class _SettingsScreenState extends State<SettingsScreen> {
     });
   }
 
-  Future<void> _onAdd(SavedConnection connection) async {
-    await widget.savedConnectionStore!.saveConnection(connection);
+  /// Runs a store mutation, then reloads the list and tells the root gate.
+  /// Throws on store failure; the Add Gateway form reports that itself.
+  Future<void> _commit(Future<void> Function() action) async {
+    await action();
+    if (!mounted) return;
     _reload();
     widget.onConnectionsChanged?.call();
   }
 
-  Future<void> _onDelete(SavedConnection connection) async {
-    await widget.savedConnectionStore!.deleteConnection(connection.id);
-    _reload();
-    widget.onConnectionsChanged?.call();
+  /// Like [_commit], but surfaces a failure as a SnackBar instead of an
+  /// unhandled async error from a button callback.
+  Future<void> _guarded(Future<void> Function() action) async {
+    try {
+      await _commit(action);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not update connections: $e')),
+      );
+    }
   }
 
-  Future<void> _onMakeActive(SavedConnection connection) async {
-    await widget.savedConnectionStore!.setActiveConnection(connection.id);
-    _reload();
-    widget.onConnectionsChanged?.call();
-  }
+  Future<void> _onAdd(SavedConnection connection) =>
+      _commit(() => widget.savedConnectionStore!.saveConnection(connection));
+
+  Future<void> _onDelete(SavedConnection connection) => _guarded(
+        () => widget.savedConnectionStore!.deleteConnection(connection.id),
+      );
+
+  Future<void> _onMakeActive(SavedConnection connection) => _guarded(
+        () => widget.savedConnectionStore!.setActiveConnection(connection.id),
+      );
 
   void _openAddGateway() {
     Navigator.push<void>(
@@ -80,13 +97,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _addSample() async {
-    await _onAdd(
-      SavedConnection(
-        id: 'sample-${DateTime.now().millisecondsSinceEpoch}',
-        displayName: 'Sample data',
-        kind: SavedConnectionKind.sample,
-      ),
-    );
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      await _guarded(
+        () => widget.savedConnectionStore!.saveConnection(
+          newSampleConnection(),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   @override
@@ -103,6 +124,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return FutureBuilder<List<SavedConnection>>(
       future: _savedFuture,
       builder: (context, snapshot) {
+        if (snapshot.hasError) {
+          return Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'Could not load saved connections: ${snapshot.error}',
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 16),
+                  FilledButton(
+                    onPressed: _reload,
+                    child: const Text('Retry'),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }
         if (!snapshot.hasData) {
           return const Center(child: CircularProgressIndicator());
         }
@@ -110,7 +152,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           connections: snapshot.data!,
           activeId: widget.activeConnectionId,
           onAddGateway: _openAddGateway,
-          onAddSample: _addSample,
+          onAddSample: _busy ? null : _addSample,
           onDelete: _onDelete,
           onMakeActive: _onMakeActive,
         );
@@ -132,7 +174,7 @@ class _ConnectionList extends StatelessWidget {
   final List<SavedConnection> connections;
   final String? activeId;
   final VoidCallback onAddGateway;
-  final VoidCallback onAddSample;
+  final VoidCallback? onAddSample;
   final Future<void> Function(SavedConnection) onDelete;
   final Future<void> Function(SavedConnection) onMakeActive;
 
@@ -258,22 +300,21 @@ class _ConnectionTile extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
+                  // Wrap so the chip drops below the name at large text scales.
+                  Wrap(
+                    spacing: 8,
+                    crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
-                      Flexible(
-                        child: Text(
-                          connection.displayName,
-                          style: theme.textTheme.titleMedium,
-                          overflow: TextOverflow.ellipsis,
-                        ),
+                      Text(
+                        connection.displayName,
+                        style: theme.textTheme.titleMedium,
+                        overflow: TextOverflow.ellipsis,
                       ),
-                      if (isActive) ...[
-                        const SizedBox(width: 8),
+                      if (isActive)
                         const Chip(
                           label: Text('Active'),
                           visualDensity: VisualDensity.compact,
                         ),
-                      ],
                     ],
                   ),
                   const SizedBox(height: 2),

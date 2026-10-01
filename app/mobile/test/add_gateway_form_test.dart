@@ -1,7 +1,9 @@
+import 'dart:async';
+
 import 'package:clusterorbit_mobile/core/cluster_domain/saved_connection.dart';
 import 'package:clusterorbit_mobile/core/connectivity/cluster_connection_factory.dart';
 import 'package:clusterorbit_mobile/core/theme/clusterorbit_theme.dart';
-import 'package:clusterorbit_mobile/features/onboarding/onboarding_screen.dart';
+import 'package:clusterorbit_mobile/features/connections/add_gateway_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -182,5 +184,95 @@ void main() {
 
     expect(received, isNotNull);
     expect(received!.gatewayToken, isNull);
+  });
+
+  group('validateGatewayUrl', () {
+    test('accepts http and https URLs with a host', () {
+      expect(validateGatewayUrl('https://gw.example.com'), isNull);
+      expect(validateGatewayUrl(' http://10.0.0.5:8080/base '), isNull);
+    });
+
+    test('rejects what Uri.tryParse rejects or leaves hostless', () {
+      expect(validateGatewayUrl('https://gw.example.com:80a'), isNotNull);
+      expect(validateGatewayUrl('http://[::1'), isNotNull);
+      expect(validateGatewayUrl('http://'), isNotNull);
+      expect(validateGatewayUrl('ftp://foo'),
+          'Must start with http:// or https://');
+      expect(validateGatewayUrl(''), 'Required');
+      expect(validateGatewayUrl(null), 'Required');
+    });
+  });
+
+  testWidgets('unparseable URL is rejected by the form', (tester) async {
+    var callbackInvoked = false;
+    await tester.pumpWidget(_wrap(
+      AddGatewayScreen(onAddConnection: (c) async => callbackInvoked = true),
+    ));
+
+    await tester.enterText(
+        find.widgetWithText(TextFormField, 'Prod Gateway'), 'GW');
+    await tester.enterText(
+        find.widgetWithText(TextFormField, 'https://gateway.example.com'),
+        'https://gw.example.com:80a');
+    await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+    await tester.pumpAndSettle();
+
+    expect(callbackInvoked, isFalse);
+    expect(find.text('Not a valid URL'), findsOneWidget);
+  });
+
+  testWidgets('keyboard submit while saving does not save twice',
+      (tester) async {
+    final gate = Completer<void>();
+    var calls = 0;
+    await tester.pumpWidget(_wrap(
+      AddGatewayScreen(
+        onAddConnection: (c) async {
+          calls++;
+          await gate.future;
+        },
+      ),
+    ));
+
+    await tester.enterText(
+        find.widgetWithText(TextFormField, 'Prod Gateway'), 'GW');
+    await tester.enterText(
+        find.widgetWithText(TextFormField, 'https://gateway.example.com'),
+        'https://gw.example.com');
+    final token =
+        find.widgetWithText(TextFormField, 'X-ClusterOrbit-Token value');
+    await tester.enterText(token, 'tok');
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.pump();
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.pump();
+
+    expect(calls, 1);
+    gate.complete();
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('editing the URL clears a previous test outcome', (tester) async {
+    await tester.pumpWidget(_wrap(
+      AddGatewayScreen(
+        onAddConnection: (_) async {},
+        gatewayConnectionFactory: (u, t) => GatewayClusterConnection(
+          gatewayBaseUrl: u,
+          token: t,
+          httpClient: _FakeHttpClient(getError: Exception('auth denied')),
+        ),
+      ),
+    ));
+
+    final url =
+        find.widgetWithText(TextFormField, 'https://gateway.example.com');
+    await tester.enterText(url, 'https://gateway.example.com');
+    await tester.tap(find.byKey(const ValueKey('test-connection')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Failed'), findsOneWidget);
+
+    await tester.enterText(url, 'https://other.example.com');
+    await tester.pump();
+    expect(find.textContaining('Failed'), findsNothing);
   });
 }

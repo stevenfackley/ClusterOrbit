@@ -56,7 +56,7 @@ void main() {
       await tester.pumpAndSettle();
 
       // Tap the first control-plane node to open the detail panel.
-      await tester.tap(find.text(snapshot.nodes.first.name).first);
+      await tester.tap(find.byKey(ValueKey('node:${snapshot.nodes.first.id}')));
       // Pump once to let cache read resolve, but DO NOT settle (live fetch is pending).
       await tester.pump();
       await tester.pump();
@@ -133,7 +133,7 @@ void main() {
       )));
       await tester.pumpAndSettle();
 
-      await tester.tap(find.text(snapshot.nodes.first.name).first);
+      await tester.tap(find.byKey(ValueKey('node:${snapshot.nodes.first.id}')));
       await tester.pumpAndSettle();
       expect(find.text('FirstLive'), findsOneWidget);
       expect(liveCalls, 1);

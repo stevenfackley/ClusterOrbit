@@ -7,7 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'test_helpers.dart';
 
 void main() {
-  testWidgets('MaterialApp uses ClusterOrbit identity and dark mode',
+  testWidgets('MaterialApp uses ClusterOrbit identity and the dark theme',
       (tester) async {
     await tester.pumpWidget(
       ClusterOrbitApp(
@@ -20,9 +20,8 @@ void main() {
 
     expect(app.title, 'ClusterOrbit');
     expect(app.debugShowCheckedModeBanner, isFalse);
-    expect(app.themeMode, ThemeMode.dark);
-    expect(app.darkTheme, isNotNull);
     expect(app.theme, isNotNull);
+    expect(app.theme!.brightness, Brightness.dark);
   });
 
   testWidgets('dark theme exposes ClusterOrbit palette extension',

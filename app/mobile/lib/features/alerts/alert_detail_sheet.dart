@@ -1,19 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../../core/cluster_domain/cluster_models.dart';
-
-// Level helpers — duplicated from alerts_screen.dart intentionally (no public API).
-IconData _icon(ClusterHealthLevel level) => switch (level) {
-      ClusterHealthLevel.critical => Icons.error_outline,
-      ClusterHealthLevel.warning => Icons.warning_amber_outlined,
-      ClusterHealthLevel.healthy => Icons.check_circle_outline,
-    };
-
-Color _color(ClusterHealthLevel level) => switch (level) {
-      ClusterHealthLevel.critical => Colors.redAccent,
-      ClusterHealthLevel.warning => Colors.amber,
-      ClusterHealthLevel.healthy => Colors.green,
-    };
+import '../../core/theme/clusterorbit_theme.dart';
+import '../../core/theme/health_style.dart';
 
 String _nextSteps(ClusterHealthLevel level) => switch (level) {
       ClusterHealthLevel.critical =>
@@ -30,7 +19,8 @@ class AlertDetailSheet extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final levelColor = _color(alert.level);
+    final levelColor =
+        alert.level.color(theme.extension<ClusterOrbitPalette>()!);
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
@@ -41,7 +31,12 @@ class AlertDetailSheet extends StatelessWidget {
           // Header
           Row(
             children: [
-              Icon(_icon(alert.level), color: levelColor, size: 28),
+              Icon(
+                alert.level.icon,
+                color: levelColor,
+                size: 28,
+                semanticLabel: alert.level.label,
+              ),
               const SizedBox(width: 12),
               Expanded(
                 child: Text(

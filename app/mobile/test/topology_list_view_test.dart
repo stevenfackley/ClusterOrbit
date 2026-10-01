@@ -1,4 +1,5 @@
 import 'package:clusterorbit_mobile/core/cluster_domain/cluster_models.dart';
+import 'package:clusterorbit_mobile/core/connectivity/cluster_connection.dart';
 import 'package:clusterorbit_mobile/core/connectivity/sample_cluster_data.dart';
 import 'package:clusterorbit_mobile/core/theme/clusterorbit_theme.dart';
 import 'package:clusterorbit_mobile/features/topology/entity_detail_panel.dart';
@@ -95,6 +96,107 @@ void main() {
     tester.view.resetPhysicalSize();
     tester.view.resetDevicePixelRatio();
     await tester.pump();
+  });
+
+  // ── the detail sheet follows the list ───────────────────────────────────
+
+  Future<void> pumpList(
+    WidgetTester tester,
+    ClusterSnapshot snapshot, {
+    ClusterConnection? connection,
+  }) async {
+    tester.view.devicePixelRatio = 1.0;
+    tester.view.physicalSize = const Size(400, 820);
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(MaterialApp(
+      theme: ClusterOrbitTheme.dark(),
+      home: Scaffold(
+        body: TopologyListView(
+          snapshot: snapshot,
+          connection: connection ?? TestClusterConnection(),
+          clusterId: snapshot.profile.id,
+        ),
+      ),
+    ));
+    await tester.pumpAndSettle();
+  }
+
+  testWidgets('the detail sheet shows the refreshed entity', (tester) async {
+    await pumpList(tester, snapshot);
+    await tester.tap(find.text('cp-1.dev-orbit'));
+    await tester.pumpAndSettle();
+    expect(find.text('Cordon'), findsOneWidget);
+
+    await pumpList(tester, refreshedSnapshot(snapshot, cordon: 'cp-1'));
+
+    expect(find.text('Uncordon'), findsOneWidget);
+    expect(find.text('Cordon'), findsNothing);
+  });
+
+  testWidgets('a cluster switch closes the detail sheet', (tester) async {
+    await pumpList(tester, snapshot);
+    await tester.tap(find.text('cp-1.dev-orbit'));
+    await tester.pumpAndSettle();
+    expect(find.byType(EntityDetailPanel), findsOneWidget);
+
+    // Staging has a cp-1 too; the sheet must not carry over to it.
+    final staging = SampleClusterData.snapshotFor(
+        SampleClusterData.profilesFor(ConnectionMode.direct)[1]);
+    await pumpList(tester, staging);
+
+    expect(find.byType(EntityDetailPanel), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('the detail sheet closes when its entity is removed',
+      (tester) async {
+    await pumpList(tester, snapshot);
+    await tester.tap(find.text('cp-1.dev-orbit'));
+    await tester.pumpAndSettle();
+
+    await pumpList(tester, refreshedSnapshot(snapshot, drop: 'cp-1'));
+
+    expect(find.byType(EntityDetailPanel), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('a failed action is reported inside the sheet, not under it',
+      (tester) async {
+    final connection = RecordingClusterConnection()
+      ..mutationError = StateError('forbidden');
+    await pumpList(tester, snapshot, connection: connection);
+    await tester.tap(find.text('cp-1.dev-orbit'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Cordon'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Cordon'));
+    await tester.pumpAndSettle();
+
+    final failure = find.text('Cordon failed: Bad state: forbidden');
+    // Once inline in the sheet, once in the SnackBar beneath it.
+    expect(failure, findsNWidgets(2));
+    expect(
+      find
+          .descendant(of: find.byType(EntityDetailPanel), matching: failure)
+          .hitTestable(),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('the detail sheet closes with the list', (tester) async {
+    await pumpList(tester, snapshot);
+    await tester.tap(find.text('cp-1.dev-orbit'));
+    await tester.pumpAndSettle();
+
+    await tester.pumpWidget(MaterialApp(
+      theme: ClusterOrbitTheme.dark(),
+      home: const Scaffold(body: SizedBox()),
+    ));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(EntityDetailPanel), findsNothing);
+    expect(tester.takeException(), isNull);
   });
 
   // ── phone-portrait toggle in TopologyScreen ─────────────────────────────

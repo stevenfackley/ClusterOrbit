@@ -2,18 +2,12 @@ import 'package:flutter/material.dart';
 
 import '../../core/cluster_domain/cluster_models.dart';
 import '../../core/theme/clusterorbit_theme.dart';
+import '../../core/theme/health_style.dart';
+import 'topology_layout.dart';
 
 /// Tints an entity by its health level using the active palette.
-Color healthTint(ClusterHealthLevel level, ClusterOrbitPalette palette) {
-  switch (level) {
-    case ClusterHealthLevel.healthy:
-      return palette.accentTeal;
-    case ClusterHealthLevel.warning:
-      return palette.warning;
-    case ClusterHealthLevel.critical:
-      return const Color(0xFFFF6F7A);
-  }
-}
+Color healthTint(ClusterHealthLevel level, ClusterOrbitPalette palette) =>
+    level.color(palette);
 
 /// Positions an orb on the canvas at [offset] and wires tap handling.
 class CanvasNode extends StatelessWidget {
@@ -22,21 +16,27 @@ class CanvasNode extends StatelessWidget {
     required this.offset,
     required this.child,
     this.onTap,
+    this.selected = false,
   });
 
   final Offset offset;
   final Widget child;
   final VoidCallback? onTap;
+  final bool selected;
 
   @override
   Widget build(BuildContext context) {
     return Positioned(
       left: offset.dx,
       top: offset.dy,
-      child: GestureDetector(
-        onTap: onTap,
-        behavior: HitTestBehavior.opaque,
-        child: child,
+      child: Semantics(
+        button: true,
+        selected: selected,
+        child: GestureDetector(
+          onTap: onTap,
+          behavior: HitTestBehavior.opaque,
+          child: child,
+        ),
       ),
     );
   }
@@ -62,7 +62,8 @@ class NodeOrb extends StatelessWidget {
     final tint = healthTint(node.health, palette);
 
     return Container(
-      width: 132,
+      width: OrbMetrics.nodeWidth,
+      height: OrbMetrics.height,
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: tint.withValues(alpha: selected ? 0.20 : 0.12),
@@ -81,28 +82,32 @@ class NodeOrb extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(node.name, style: theme.textTheme.titleMedium),
+          _OrbLine(node.name, style: theme.textTheme.titleMedium),
           if (showLabels) ...[
             const SizedBox(height: 6),
-            Text('${node.role.label} / ${node.zone}',
+            _OrbLine('${node.role.label} / ${node.zone}',
                 style: theme.textTheme.bodyMedium),
             const SizedBox(height: 12),
-            Wrap(
-              spacing: 8,
-              runSpacing: 6,
-              crossAxisAlignment: WrapCrossAlignment.center,
+            Row(
               children: [
                 StatusDot(color: tint),
-                Text(
-                  '${node.podCount} pods',
-                  style:
-                      theme.textTheme.bodySmall?.copyWith(color: Colors.white),
-                ),
-                if (!node.schedulable)
-                  Text(
-                    'Cordoned',
-                    style: theme.textTheme.bodySmall?.copyWith(color: tint),
+                const SizedBox(width: 8),
+                Flexible(
+                  child: _OrbLine(
+                    '${node.podCount} pods',
+                    style: theme.textTheme.bodySmall
+                        ?.copyWith(color: Colors.white),
                   ),
+                ),
+                if (!node.schedulable) ...[
+                  const SizedBox(width: 8),
+                  Flexible(
+                    child: _OrbLine(
+                      'Cordoned',
+                      style: theme.textTheme.bodySmall?.copyWith(color: tint),
+                    ),
+                  ),
+                ],
               ],
             ),
           ] else ...[
@@ -135,7 +140,8 @@ class WorkloadOrb extends StatelessWidget {
     final tint = healthTint(workload.health, palette);
 
     return Container(
-      width: 132,
+      width: OrbMetrics.workloadWidth,
+      height: OrbMetrics.height,
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.white.withValues(alpha: selected ? 0.08 : 0.04),
@@ -151,24 +157,24 @@ class WorkloadOrb extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(workload.name, style: theme.textTheme.titleMedium),
+          _OrbLine(workload.name, style: theme.textTheme.titleMedium),
           if (showLabels) ...[
             const SizedBox(height: 6),
-            Text(
+            _OrbLine(
               '${workload.kind.label} / ${workload.namespace}',
               style: theme.textTheme.bodyMedium,
             ),
             const SizedBox(height: 10),
-            Wrap(
-              spacing: 8,
-              runSpacing: 6,
-              crossAxisAlignment: WrapCrossAlignment.center,
+            Row(
               children: [
                 StatusDot(color: tint),
-                Text(
-                  '${workload.readyReplicas}/${workload.desiredReplicas} ready',
-                  style:
-                      theme.textTheme.bodySmall?.copyWith(color: Colors.white),
+                const SizedBox(width: 8),
+                Flexible(
+                  child: _OrbLine(
+                    '${workload.readyReplicas}/${workload.desiredReplicas} ready',
+                    style: theme.textTheme.bodySmall
+                        ?.copyWith(color: Colors.white),
+                  ),
                 ),
               ],
             ),
@@ -202,7 +208,8 @@ class ServiceOrb extends StatelessWidget {
     final tint = healthTint(service.health, palette);
 
     return Container(
-      width: 128,
+      width: OrbMetrics.serviceWidth,
+      height: OrbMetrics.height,
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         gradient: LinearGradient(
@@ -223,15 +230,15 @@ class ServiceOrb extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(service.name, style: theme.textTheme.titleMedium),
+          _OrbLine(service.name, style: theme.textTheme.titleMedium),
           if (showLabels) ...[
             const SizedBox(height: 6),
-            Text(
+            _OrbLine(
               '${service.exposure.label} / ${service.namespace}',
               style: theme.textTheme.bodyMedium,
             ),
             const SizedBox(height: 10),
-            Text(
+            _OrbLine(
               '${service.targetWorkloadIds.length} workload targets',
               style: theme.textTheme.bodySmall?.copyWith(color: Colors.white),
             ),
@@ -241,6 +248,24 @@ class ServiceOrb extends StatelessWidget {
           ],
         ],
       ),
+    );
+  }
+}
+
+/// One ellipsized line, so a card's height never depends on its text.
+class _OrbLine extends StatelessWidget {
+  const _OrbLine(this.text, {this.style});
+
+  final String text;
+  final TextStyle? style;
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      text,
+      style: style,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
     );
   }
 }
@@ -271,7 +296,7 @@ class LegendCard extends StatelessWidget {
             const SizedBox(height: 10),
             LegendRow(label: 'Healthy', color: palette.accentTeal),
             LegendRow(label: 'Warning', color: palette.warning),
-            const LegendRow(label: 'Critical', color: Color(0xFFFF6F7A)),
+            LegendRow(label: 'Critical', color: palette.danger),
           ],
         ),
       ),
@@ -337,6 +362,8 @@ class ModeBadge extends StatelessWidget {
         child: Text(
           label,
           style: theme.textTheme.bodyMedium?.copyWith(color: Colors.white),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
         ),
       ),
     );
@@ -362,9 +389,9 @@ class SummaryChip extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label, style: theme.textTheme.bodyMedium),
+          _OrbLine(label, style: theme.textTheme.bodyMedium),
           const SizedBox(height: 8),
-          Text(value, style: theme.textTheme.headlineSmall),
+          _OrbLine(value, style: theme.textTheme.headlineSmall),
         ],
       ),
     );

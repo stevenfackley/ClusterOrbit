@@ -75,16 +75,10 @@ class ClusterOrbitTheme {
           accentTeal: _teal,
           accentCyan: _cyan,
           warning: _warning,
+          danger: _danger,
           panel: _panel,
         ),
       ],
-    );
-  }
-
-  static ThemeData light() {
-    return ThemeData(
-      useMaterial3: true,
-      colorScheme: ColorScheme.fromSeed(seedColor: _indigo),
     );
   }
 }
@@ -97,6 +91,7 @@ class ClusterOrbitPalette extends ThemeExtension<ClusterOrbitPalette> {
     required this.accentCyan,
     required this.warning,
     required this.panel,
+    this.danger = const Color(0xFFFF6F7A),
   });
 
   final Color canvasGlow;
@@ -105,6 +100,10 @@ class ClusterOrbitPalette extends ThemeExtension<ClusterOrbitPalette> {
   final Color warning;
   final Color panel;
 
+  /// Critical-health red. Defaults to the dark theme's value so palettes
+  /// built without it keep compiling.
+  final Color danger;
+
   @override
   ClusterOrbitPalette copyWith({
     Color? canvasGlow,
@@ -112,6 +111,7 @@ class ClusterOrbitPalette extends ThemeExtension<ClusterOrbitPalette> {
     Color? accentCyan,
     Color? warning,
     Color? panel,
+    Color? danger,
   }) {
     return ClusterOrbitPalette(
       canvasGlow: canvasGlow ?? this.canvasGlow,
@@ -119,6 +119,7 @@ class ClusterOrbitPalette extends ThemeExtension<ClusterOrbitPalette> {
       accentCyan: accentCyan ?? this.accentCyan,
       warning: warning ?? this.warning,
       panel: panel ?? this.panel,
+      danger: danger ?? this.danger,
     );
   }
 
@@ -135,6 +136,7 @@ class ClusterOrbitPalette extends ThemeExtension<ClusterOrbitPalette> {
       accentCyan: Color.lerp(accentCyan, other.accentCyan, t) ?? accentCyan,
       warning: Color.lerp(warning, other.warning, t) ?? warning,
       panel: Color.lerp(panel, other.panel, t) ?? panel,
+      danger: Color.lerp(danger, other.danger, t) ?? danger,
     );
   }
 }

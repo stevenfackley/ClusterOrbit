@@ -43,9 +43,7 @@ class _ClusterOrbitAppState extends State<ClusterOrbitApp> {
     return MaterialApp(
       title: 'ClusterOrbit',
       debugShowCheckedModeBanner: false,
-      theme: ClusterOrbitTheme.light(),
-      darkTheme: ClusterOrbitTheme.dark(),
-      themeMode: ThemeMode.dark,
+      theme: ClusterOrbitTheme.dark(),
       home: widget.connection != null
           ? OrbitShell(
               connection: widget.connection,
