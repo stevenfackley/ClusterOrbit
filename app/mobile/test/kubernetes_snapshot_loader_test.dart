@@ -271,6 +271,130 @@ void main() {
     expect(apiService.clusterIp, '10.96.0.100');
     expect(orphanService.clusterIp, isNull);
   });
+
+  test('snapshot loader handles selectorless services, namespaces and jobs',
+      () async {
+    const base = 'https://cluster.example.internal:6443';
+    Map<String, dynamic> pod(String name, String ns, String app, String rs) => {
+          'metadata': {
+            'name': name,
+            'namespace': ns,
+            'labels': {'app': app},
+            'ownerReferences': [
+              {'kind': 'ReplicaSet', 'name': rs},
+            ],
+          },
+          'spec': {'nodeName': 'n1'},
+          'status': {'phase': 'Running'},
+        };
+    Map<String, dynamic> deployment(String ns) => {
+          'metadata': {'name': 'web', 'namespace': ns},
+          'spec': {'replicas': 1},
+          'status': {'readyReplicas': 1},
+        };
+    Map<String, dynamic> job(String name, Map<String, dynamic> status) => {
+          'metadata': {'name': name, 'namespace': 'batch'},
+          'spec': {'completions': 1},
+          'status': status,
+        };
+    final loader = KubernetesSnapshotLoader(
+      transport: _FakeKubernetesTransport({
+        '$base/api/v1/nodes': _listResponse([]),
+        '$base/api/v1/pods': _listResponse([
+          pod('web-a-1', 'a', 'web', 'web-a'),
+          pod('web-b-1', 'b', 'web', 'web-b'),
+        ]),
+        '$base/api/v1/services': _listResponse([
+          {
+            'metadata': {'name': 'kubernetes', 'namespace': 'default'},
+            'spec': {
+              'type': 'ClusterIP',
+              'ports': [
+                {'port': 443, 'targetPort': 6443},
+              ],
+            },
+          },
+          {
+            'metadata': {'name': 'web', 'namespace': 'a'},
+            'spec': {
+              'selector': {'app': 'web'},
+            },
+          },
+        ]),
+        '$base/apis/apps/v1/deployments':
+            _listResponse([deployment('a'), deployment('b')]),
+        '$base/apis/apps/v1/daemonsets': _listResponse([]),
+        '$base/apis/apps/v1/statefulsets': _listResponse([]),
+        '$base/apis/batch/v1/jobs': _listResponse([
+          job('running', {'active': 1}),
+          job('failed', {
+            'failed': 1,
+            'conditions': [
+              {'type': 'Failed', 'status': 'True'},
+            ],
+          }),
+        ]),
+        '$base/apis/apps/v1/replicasets': _listResponse([
+          for (final ns in ['a', 'b'])
+            {
+              'metadata': {
+                'name': 'web-$ns',
+                'namespace': ns,
+                'ownerReferences': [
+                  {'kind': 'Deployment', 'name': 'web'},
+                ],
+              },
+            },
+        ]),
+      }),
+    );
+
+    final snapshot = await loader.loadSnapshot(
+      const KubeconfigResolvedCluster(
+        profile: ClusterProfile(
+          id: 'c',
+          name: 'c',
+          apiServerHost: 'cluster.example.internal',
+          environmentLabel: 'Dev',
+          connectionMode: ConnectionMode.direct,
+        ),
+        server: base,
+        namespace: 'default',
+        auth: KubeconfigAuth(
+          bearerToken: 'abc123',
+          basicUsername: null,
+          basicPassword: null,
+          clientCertificateData: null,
+          clientKeyData: null,
+        ),
+        tls: KubeconfigTlsConfig(
+          insecureSkipTlsVerify: false,
+          certificateAuthorityData: null,
+        ),
+      ),
+    );
+
+    // Selectorless default/kubernetes must not crash or raise an alert.
+    final kubernetes =
+        snapshot.services.firstWhere((s) => s.name == 'kubernetes');
+    expect(kubernetes.targetWorkloadIds, isEmpty);
+    expect(kubernetes.health, ClusterHealthLevel.healthy);
+
+    // A selector in namespace a must not match the same-labelled workload in b.
+    final web = snapshot.services.firstWhere((s) => s.name == 'web');
+    expect(web.targetWorkloadIds, ['deployment:a/web']);
+    expect(web.health, ClusterHealthLevel.healthy);
+    expect(snapshot.alerts.where((a) => a.scope == 'Service routing'), isEmpty);
+
+    // A running Job is not an alert; a failed one is.
+    final running = snapshot.workloads.firstWhere((w) => w.name == 'running');
+    expect(running.health, ClusterHealthLevel.healthy);
+    final failed = snapshot.workloads.firstWhere((w) => w.name == 'failed');
+    expect(failed.health, ClusterHealthLevel.warning);
+    final workloadAlerts =
+        snapshot.alerts.where((a) => a.scope == 'Workload health').toList();
+    expect(workloadAlerts.map((a) => a.id), ['workload-${failed.id}']);
+  });
 }
 
 Map<String, dynamic> _listResponse(List<Map<String, dynamic>> items) => {

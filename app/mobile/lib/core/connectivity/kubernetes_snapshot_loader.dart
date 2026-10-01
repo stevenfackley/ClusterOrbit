@@ -99,11 +99,13 @@ final class KubernetesSnapshotLoader {
         continue;
       }
 
-      final podKey = _resourceKey(
-        _stringAt(pod, ['metadata', 'namespace']) ?? 'default',
-        _stringAt(pod, ['metadata', 'name']) ?? workloadId,
-      );
-      podWorkloadIds[podKey] = workloadId;
+      // A workload id implies a namespace; nameless pods can't be matched
+      // to labels later, so they get no key.
+      final podNamespace = _stringAt(pod, ['metadata', 'namespace']);
+      final podName = _stringAt(pod, ['metadata', 'name']);
+      if (podNamespace != null && podName != null) {
+        podWorkloadIds[_resourceKey(podNamespace, podName)] = workloadId;
+      }
 
       if (nodeName != null) {
         workloadNodeIds.putIfAbsent(workloadId, () => <String>{}).add(nodeName);
@@ -381,10 +383,15 @@ final class KubernetesSnapshotLoader {
         ? (_intAt(item, ['status', 'active']) > 0 ? 1 : readyReplicas)
         : desiredReplicas;
 
+    // A running Job is always below its completions, so only a failure counts.
     final healthSignal = healthSignals[workloadId];
-    final health = readyReplicas < target
-        ? ClusterHealthLevel.warning
-        : (healthSignal ?? ClusterHealthLevel.healthy);
+    final health = kind == WorkloadKind.job
+        ? (_jobFailed(item, target, readyReplicas)
+            ? ClusterHealthLevel.warning
+            : (healthSignal ?? ClusterHealthLevel.healthy))
+        : readyReplicas < target
+            ? ClusterHealthLevel.warning
+            : (healthSignal ?? ClusterHealthLevel.healthy);
 
     final containers = _listAt(item, ['spec', 'template', 'spec', 'containers'])
         .cast<Map?>()
@@ -406,6 +413,17 @@ final class KubernetesSnapshotLoader {
     );
   }
 
+  bool _jobFailed(Map<String, dynamic> item, int target, int succeeded) {
+    final failedCondition = _listAt(item, ['status', 'conditions'])
+        .cast<Map?>()
+        .whereType<Map>()
+        .any((c) => c['type'] == 'Failed' && c['status'] == 'True');
+    return failedCondition ||
+        (_intAt(item, ['status', 'failed']) > 0 &&
+            _intAt(item, ['status', 'active']) == 0 &&
+            succeeded < target);
+  }
+
   ClusterService _serviceFromItem(
     Map<String, dynamic> item,
     Map<String, ClusterWorkload> workloadsById,
@@ -416,13 +434,13 @@ final class KubernetesSnapshotLoader {
     final selector = _mapAt(item, ['spec', 'selector']);
     final targetWorkloadIds = selector.isEmpty
         ? const <String>[]
-        : [
+        : ([
             for (final entry in workloadsById.entries)
-              if (_matchesSelector(
-                  selector, podLabelsByWorkload[entry.key] ?? const []))
+              if (entry.value.namespace == namespace &&
+                  _matchesSelector(
+                      selector, podLabelsByWorkload[entry.key] ?? const []))
                 entry.key,
-          ]
-      ..sort();
+          ]..sort());
 
     return ClusterService(
       id: _resourceId('service', namespace, name),
@@ -439,7 +457,8 @@ final class KubernetesSnapshotLoader {
             protocol: _stringAt(port, ['protocol']) ?? 'TCP',
           ),
       ],
-      health: targetWorkloadIds.isEmpty
+      // Selectorless services (e.g. default/kubernetes) route by other means.
+      health: selector.isNotEmpty && targetWorkloadIds.isEmpty
           ? ClusterHealthLevel.warning
           : ClusterHealthLevel.healthy,
       clusterIp: _toNullableClusterIp(_stringAt(item, ['spec', 'clusterIP'])),
@@ -480,7 +499,18 @@ final class KubernetesSnapshotLoader {
   List<ClusterAlert> _workloadAlerts(List<ClusterWorkload> workloads) {
     return [
       for (final workload in workloads)
-        if (workload.readyReplicas < workload.desiredReplicas)
+        if (workload.kind == WorkloadKind.job)
+          if (workload.health != ClusterHealthLevel.healthy)
+            ClusterAlert(
+              id: 'workload-${workload.id}',
+              title: 'Job failed',
+              summary: '${workload.name} has failed or unhealthy pods.',
+              level: workload.health,
+              scope: 'Workload health',
+            )
+          else
+            ...const <ClusterAlert>[]
+        else if (workload.readyReplicas < workload.desiredReplicas)
           ClusterAlert(
             id: 'workload-${workload.id}',
             title: 'Replica skew detected',
@@ -495,7 +525,7 @@ final class KubernetesSnapshotLoader {
   List<ClusterAlert> _serviceAlerts(List<ClusterService> services) {
     return [
       for (final service in services)
-        if (service.targetWorkloadIds.isEmpty)
+        if (service.health == ClusterHealthLevel.warning)
           ClusterAlert(
             id: 'service-${service.id}',
             title: 'Service has no backing workloads',
