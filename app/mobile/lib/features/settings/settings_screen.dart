@@ -57,10 +57,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
   /// Runs a store mutation, then reloads the list and tells the root gate.
   /// Throws on store failure; the Add Gateway form reports that itself.
   Future<void> _commit(Future<void> Function() action) async {
+    // Captured before the await: a resize across the tablet breakpoint can
+    // dispose this State mid-save, but the root gate must still hear of it.
+    final onChanged = widget.onConnectionsChanged;
     await action();
-    if (!mounted) return;
-    _reload();
-    widget.onConnectionsChanged?.call();
+    if (mounted) _reload();
+    onChanged?.call();
   }
 
   /// Like [_commit], but surfaces a failure as a SnackBar instead of an

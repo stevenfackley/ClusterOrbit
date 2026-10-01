@@ -135,6 +135,52 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
+  testWidgets('a gateway saved after a resize across 960dp still activates',
+      (tester) async {
+    tester.view.physicalSize = const Size(820, 1180);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final store = InMemorySavedConnectionStore()
+      ..saved.add(const SavedConnection(
+        id: 'old',
+        displayName: 'Old sample',
+        kind: SavedConnectionKind.sample,
+      ));
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ClusterOrbitTheme.dark(),
+        home: ClusterOrbitRootGate(
+          savedConnectionStore: store,
+          snapshotStore: const NoOpSnapshotStore(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Settings'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Add Gateway'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+        find.widgetWithText(TextFormField, 'Prod Gateway'), 'Rotated');
+    await tester.enterText(
+        find.widgetWithText(TextFormField, 'https://gateway.example.com'),
+        'https://gw.example.test');
+
+    // Crossing 960dp swaps the shell layout and disposes the Settings State
+    // that owns the form's save callback.
+    tester.view.physicalSize = const Size(1180, 820);
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+    await tester.pumpAndSettle();
+
+    expect(store.saved.first.displayName, 'Rotated');
+    expect(
+        tester.widget<OrbitShell>(find.byType(OrbitShell)).activeConnectionId,
+        store.saved.first.id);
+
+    await tester.pumpWidget(const SizedBox());
+  });
+
   testWidgets("the shell caches under the active connection's scope",
       (tester) async {
     final savedStore = InMemorySavedConnectionStore();
