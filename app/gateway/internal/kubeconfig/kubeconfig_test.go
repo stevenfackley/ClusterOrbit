@@ -1,10 +1,19 @@
 package kubeconfig
 
 import (
+	"bytes"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/base64"
+	"encoding/pem"
+	"math/big"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // caProdBase64 is base64("CA-PROD"). Precomputed so the fixture is a const.
@@ -187,5 +196,152 @@ func TestResolvePathFallsBackToKubeconfigThenHome(t *testing.T) {
 	want := filepath.Join("/home/bob", ".kube", "config")
 	if got := ResolvePath(func(k string) string { return homeOnly[k] }); got != want {
 		t.Fatalf("path = %q, want %q", got, want)
+	}
+}
+
+// selfSignedPEM returns a throwaway self-signed certificate and its key.
+func selfSignedPEM(t *testing.T) (certPEM, keyPEM []byte) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "test-client"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("create cert: %v", err)
+	}
+	keyDER, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatalf("marshal key: %v", err)
+	}
+	certPEM = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	keyPEM = pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+	return certPEM, keyPEM
+}
+
+func userKubeconfig(userYAML string) string {
+	return "apiVersion: v1\ncurrent-context: ctx\n" +
+		"clusters:\n  - name: c\n    cluster:\n      server: https://example\n" +
+		"contexts:\n  - name: ctx\n    context:\n      cluster: c\n      user: u\n" +
+		"users:\n  - name: u\n    user:\n" + userYAML
+}
+
+func TestResolveClientCertData(t *testing.T) {
+	certPEM, keyPEM := selfSignedPEM(t)
+	yaml := userKubeconfig(
+		"      client-certificate-data: " + base64.StdEncoding.EncodeToString(certPEM) + "\n" +
+			"      client-key-data: " + base64.StdEncoding.EncodeToString(keyPEM) + "\n")
+	doc, err := ParseDocument([]byte(yaml))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	resolved, err := Resolve(doc, "")
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if !bytes.Equal(resolved.ClientCertData, certPEM) || !bytes.Equal(resolved.ClientKeyData, keyPEM) {
+		t.Fatalf("client cert/key not carried through")
+	}
+}
+
+func TestResolveRelativePathsAgainstKubeconfigDir(t *testing.T) {
+	certPEM, keyPEM := selfSignedPEM(t)
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "creds")
+	if err := os.Mkdir(sub, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	files := map[string][]byte{
+		"ca.crt":     []byte("CA-FILE"),
+		"client.crt": certPEM,
+		"client.key": keyPEM,
+		"token":      []byte("rel-token\n"),
+	}
+	for name, data := range files {
+		if err := os.WriteFile(filepath.Join(sub, name), data, 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	yaml := "apiVersion: v1\ncurrent-context: ctx\n" +
+		"clusters:\n  - name: c\n    cluster:\n      server: https://example\n      certificate-authority: creds/ca.crt\n" +
+		"contexts:\n  - name: ctx\n    context:\n      cluster: c\n      user: u\n" +
+		"users:\n  - name: u\n    user:\n      client-certificate: creds/client.crt\n" +
+		"      client-key: creds/client.key\n      tokenFile: creds/token\n"
+	path := filepath.Join(dir, "config")
+	if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
+		t.Fatalf("write kubeconfig: %v", err)
+	}
+
+	doc, err := LoadFile(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	resolved, err := Resolve(doc, "")
+	if err != nil {
+		t.Fatalf("resolve (cwd is not the kubeconfig dir): %v", err)
+	}
+	if string(resolved.CAData) != "CA-FILE" || resolved.BearerToken != "rel-token" {
+		t.Fatalf("CA = %q, token = %q", resolved.CAData, resolved.BearerToken)
+	}
+	if !bytes.Equal(resolved.ClientCertData, certPEM) || !bytes.Equal(resolved.ClientKeyData, keyPEM) {
+		t.Fatalf("client cert/key files not read relative to kubeconfig dir")
+	}
+}
+
+func TestResolveRejectsUnauthenticatableUsers(t *testing.T) {
+	certPEM, _ := selfSignedPEM(t)
+	tests := []struct {
+		name string
+		yaml string
+	}{
+		{"missing user", "apiVersion: v1\ncurrent-context: ctx\n" +
+			"clusters:\n  - name: c\n    cluster:\n      server: https://example\n" +
+			"contexts:\n  - name: ctx\n    context:\n      cluster: c\n      user: ghost\n"},
+		{"exec only", userKubeconfig("      exec:\n        command: aws\n")},
+		{"auth-provider only", userKubeconfig("      auth-provider:\n        name: gcp\n")},
+		{"cert without key", userKubeconfig(
+			"      client-certificate-data: " + base64.StdEncoding.EncodeToString(certPEM) + "\n")},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			doc, err := ParseDocument([]byte(tc.yaml))
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			if _, err := Resolve(doc, ""); err == nil {
+				t.Fatalf("expected error")
+			}
+			if resolved, errs := ResolveAll(doc); len(resolved) != 0 || len(errs) != 1 {
+				t.Fatalf("ResolveAll = %v, %v; want it skipped with one error", resolved, errs)
+			}
+		})
+	}
+}
+
+func TestResolveAllSkipsEmptyContextName(t *testing.T) {
+	yaml := "apiVersion: v1\ncurrent-context: ctx\n" +
+		"clusters:\n  - name: c\n    cluster:\n      server: https://example\n" +
+		"contexts:\n  - name: ctx\n    context:\n      cluster: c\n      user: u\n" +
+		"  - context:\n      cluster: c\n      user: u\n" +
+		"users:\n  - name: u\n    user:\n      token: t\n"
+	doc, err := ParseDocument([]byte(yaml))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	resolved, errs := ResolveAll(doc)
+	if len(resolved) != 1 || resolved[0].ContextName != "ctx" {
+		t.Fatalf("resolved = %v, want only ctx", resolved)
+	}
+	if len(errs) != 1 {
+		t.Fatalf("errs = %v, want one skip error", errs)
 	}
 }

@@ -90,3 +90,34 @@ type ClusterEvent struct {
 	Count           int     `json:"count"`
 	SourceComponent *string `json:"sourceComponent"`
 }
+
+// Drain phase values. A job starts Pending, moves to Running once the worker
+// picks it up, and ends Succeeded or Failed. These strings cross the wire to
+// the mobile client, so don't rename them without updating the app.
+const (
+	DrainPhasePending   = "pending"
+	DrainPhaseRunning   = "running"
+	DrainPhaseSucceeded = "succeeded"
+	DrainPhaseFailed    = "failed"
+)
+
+// DrainJob is the observable state of an asynchronous node drain. StartDrain
+// returns one in the Pending/Running phase, either freshly minted or the
+// node's drain already in flight; the client polls DrainStatus with its ID
+// until Phase is terminal.
+//
+// Evicted and Skipped hold "namespace/name" pod identifiers. Skipped covers
+// DaemonSet-managed, mirror/static, and already-terminal pods that drain
+// intentionally leaves in place (kubectl drain semantics). Remaining is the
+// count of still-to-evict pods; it reaches 0 on success.
+type DrainJob struct {
+	ID        string   `json:"id"`
+	NodeID    string   `json:"nodeId"`
+	Phase     string   `json:"phase"`
+	Evicted   []string `json:"evicted"`
+	Skipped   []string `json:"skipped"`
+	Remaining int      `json:"remaining"`
+	Error     string   `json:"error,omitempty"`
+	StartedAt int64    `json:"startedAt"`
+	UpdatedAt int64    `json:"updatedAt"`
+}

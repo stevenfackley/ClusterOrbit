@@ -8,9 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"os/signal"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -24,41 +26,50 @@ import (
 
 const startupBanner = "ClusterOrbit gateway"
 
-// message is retained for the pre-existing smoke test; the real binary
-// starts an HTTP server. See internal/api for request handling.
-func message() string {
-	return startupBanner
-}
-
 func main() {
 	addr := envOrDefault("CLUSTERORBIT_GATEWAY_ADDR", ":8080")
 	mode := envOrDefault("CLUSTERORBIT_GATEWAY_MODE", "sample")
 
 	backend, backendLabel := buildBackend(mode)
-	tokens := collectTokens()
-	limiter := buildLimiter()
+	tokens := collectTokens(os.Getenv)
+	limiter, err := buildLimiter(os.Getenv)
+	if err != nil {
+		log.Fatalf("gateway: %v", err)
+	}
+	// Trust X-Forwarded-For only behind a reverse proxy that sets it itself.
+	trustProxy, err := envBool(os.Getenv, "CLUSTERORBIT_GATEWAY_TRUST_PROXY")
+	if err != nil {
+		log.Fatalf("gateway: %v", err)
+	}
+
+	policy, policyLabel, err := buildScalePolicy(os.Getenv)
+	if err != nil {
+		log.Fatalf("gateway: %v", err)
+	}
+	nodePolicy, nodePolicyLabel, err := buildNodePolicy(os.Getenv)
+	if err != nil {
+		log.Fatalf("gateway: %v", err)
+	}
+	approvals, approvalLabel, err := buildApprovalPolicy(os.Getenv, tokens)
+	if err != nil {
+		log.Fatalf("gateway: %v", err)
+	}
 
 	auditSink, auditLabel, auditCloser := buildAuditSink()
 	if auditCloser != nil {
 		defer auditCloser()
 	}
 
-	policy, policyLabel := buildScalePolicy()
-	nodePolicy, nodePolicyLabel := buildNodePolicy()
-	approvalPolicy, approvals, approvalLabel := buildApprovalPolicy()
-	if approvalPolicy != nil && len(tokens) < 2 {
-		log.Printf("gateway: WARNING approval policy is set but %d token(s) configured; two-person approval needs >=2 distinct tokens", len(tokens))
-	}
-
 	server := &api.Server{
-		Backend:        backend,
-		Tokens:         tokens,
-		Limiter:        limiter,
-		AuditSink:      auditSink,
-		ScalePolicy:    policy,
-		NodePolicy:     nodePolicy,
-		ApprovalPolicy: approvalPolicy,
-		Approvals:      approvals,
+		Backend:     backend,
+		Tokens:      tokens,
+		Limiter:     limiter,
+		AuditSink:   auditSink,
+		ScalePolicy: policy,
+		NodePolicy:  nodePolicy,
+		Approvals:   approvals,
+
+		TrustForwardedFor: trustProxy,
 	}
 
 	tlsCfg, tlsLabel, err := buildTLS()
@@ -76,8 +87,9 @@ func main() {
 		TLSConfig:         tlsCfg,
 	}
 
-	fmt.Printf("%s listening on %s (auth=%s backend=%s tls=%s rate=%s audit=%s policy=%s nodePolicy=%s approval=%s)\n",
-		startupBanner, addr, authLabel(tokens), backendLabel, tlsLabel, rateLabel(limiter), auditLabel, policyLabel, nodePolicyLabel, approvalLabel)
+	fmt.Printf("%s listening on %s (auth=%s backend=%s tls=%s rate=%s trustProxy=%s audit=%s policy=%s nodePolicy=%s approval=%s)\n",
+		startupBanner, addr, authLabel(tokens), backendLabel, tlsLabel, rateLabel(limiter), trustProxyLabel(trustProxy, tokens),
+		auditLabel, policyLabel, nodePolicyLabel, approvalLabel)
 
 	// Serve in a goroutine; main goroutine waits for SIGTERM/SIGINT then
 	// triggers a graceful shutdown so in-flight requests and the audit
@@ -167,20 +179,17 @@ func buildBackend(mode string) (api.ClusterBackend, string) {
 }
 
 // collectTokens reads both CLUSTERORBIT_GATEWAY_TOKEN (single) and
-// CLUSTERORBIT_GATEWAY_TOKENS (comma-separated) and merges them. The list form
-// is how token rotation works: add the new token, roll clients, remove the
-// old one. No tokens → auth disabled.
-func collectTokens() []string {
+// CLUSTERORBIT_GATEWAY_TOKENS (comma-separated) and merges them, dropping
+// duplicates so the result counts distinct tokens. The list form is how token
+// rotation works: add the new token, roll clients, remove the old one. No
+// tokens → auth disabled.
+func collectTokens(getenv func(string) string) []string {
 	var out []string
-	if v := strings.TrimSpace(os.Getenv("CLUSTERORBIT_GATEWAY_TOKEN")); v != "" {
-		out = append(out, v)
-	}
-	if v := os.Getenv("CLUSTERORBIT_GATEWAY_TOKENS"); v != "" {
-		for _, t := range strings.Split(v, ",") {
-			t = strings.TrimSpace(t)
-			if t != "" {
-				out = append(out, t)
-			}
+	candidates := append([]string{strings.TrimSpace(getenv("CLUSTERORBIT_GATEWAY_TOKEN"))},
+		splitCSV(getenv("CLUSTERORBIT_GATEWAY_TOKENS"))...)
+	for _, t := range candidates {
+		if t != "" && !slices.Contains(out, t) {
+			out = append(out, t)
 		}
 	}
 	return out
@@ -191,19 +200,14 @@ func collectTokens() []string {
 //
 //	CLUSTERORBIT_GATEWAY_POLICY_MAX_REPLICAS   int, ceiling applied to scale N
 //	CLUSTERORBIT_GATEWAY_POLICY_NAMESPACES     comma-separated allowlist
-func buildScalePolicy() (*api.ScalePolicy, string) {
-	max, _ := strconv.Atoi(strings.TrimSpace(os.Getenv("CLUSTERORBIT_GATEWAY_POLICY_MAX_REPLICAS")))
-	var namespaces []string
-	if raw := os.Getenv("CLUSTERORBIT_GATEWAY_POLICY_NAMESPACES"); raw != "" {
-		for _, ns := range strings.Split(raw, ",") {
-			ns = strings.TrimSpace(ns)
-			if ns != "" {
-				namespaces = append(namespaces, ns)
-			}
-		}
+func buildScalePolicy(getenv func(string) string) (*api.ScalePolicy, string, error) {
+	max, err := envInt(getenv, "CLUSTERORBIT_GATEWAY_POLICY_MAX_REPLICAS")
+	if err != nil {
+		return nil, "", err
 	}
-	if max <= 0 && len(namespaces) == 0 {
-		return nil, "off"
+	namespaces := splitCSV(getenv("CLUSTERORBIT_GATEWAY_POLICY_NAMESPACES"))
+	if max == 0 && len(namespaces) == 0 {
+		return nil, "off", nil
 	}
 	var parts []string
 	if max > 0 {
@@ -212,7 +216,7 @@ func buildScalePolicy() (*api.ScalePolicy, string) {
 	if len(namespaces) > 0 {
 		parts = append(parts, fmt.Sprintf("ns=%d", len(namespaces)))
 	}
-	return &api.ScalePolicy{MaxReplicas: max, AllowedNamespaces: namespaces}, strings.Join(parts, ",")
+	return &api.ScalePolicy{MaxReplicas: max, AllowedNamespaces: namespaces}, strings.Join(parts, ","), nil
 }
 
 // buildNodePolicy assembles a NodePolicy from env. Returns (nil, "off") when
@@ -220,14 +224,17 @@ func buildScalePolicy() (*api.ScalePolicy, string) {
 //
 //	CLUSTERORBIT_GATEWAY_POLICY_NODES            comma-separated node allowlist
 //	CLUSTERORBIT_GATEWAY_POLICY_PROTECTED_NODES  comma-separated node denylist
-//	CLUSTERORBIT_GATEWAY_POLICY_DISABLE_DRAIN    truthy → reject every drain
-func buildNodePolicy() (*api.NodePolicy, string) {
-	allowed := splitCSV(os.Getenv("CLUSTERORBIT_GATEWAY_POLICY_NODES"))
-	protected := splitCSV(os.Getenv("CLUSTERORBIT_GATEWAY_POLICY_PROTECTED_NODES"))
-	disableDrain := isTruthy(os.Getenv("CLUSTERORBIT_GATEWAY_POLICY_DISABLE_DRAIN"))
+//	CLUSTERORBIT_GATEWAY_POLICY_DISABLE_DRAIN    bool → reject every drain
+func buildNodePolicy(getenv func(string) string) (*api.NodePolicy, string, error) {
+	allowed := splitCSV(getenv("CLUSTERORBIT_GATEWAY_POLICY_NODES"))
+	protected := splitCSV(getenv("CLUSTERORBIT_GATEWAY_POLICY_PROTECTED_NODES"))
+	disableDrain, err := envBool(getenv, "CLUSTERORBIT_GATEWAY_POLICY_DISABLE_DRAIN")
+	if err != nil {
+		return nil, "", err
+	}
 
 	if len(allowed) == 0 && len(protected) == 0 && !disableDrain {
-		return nil, "off"
+		return nil, "off", nil
 	}
 	var parts []string
 	if len(allowed) > 0 {
@@ -243,31 +250,61 @@ func buildNodePolicy() (*api.NodePolicy, string) {
 		AllowedNodes:   allowed,
 		ProtectedNodes: protected,
 		DisableDrain:   disableDrain,
-	}, strings.Join(parts, ",")
+	}, strings.Join(parts, ","), nil
 }
 
-// buildApprovalPolicy assembles an ApprovalPolicy + store from env. Returns
-// (nil, nil, "off") when no op-classes are gated so mutation handlers take the
-// no-approval fast path.
+// buildApprovalPolicy assembles the approval gate (an ApprovalStore holding the
+// gated op-classes) from env. Returns (nil, "off") when no op-classes are gated
+// so mutation handlers take the no-approval fast path. Gating any op needs at
+// least two distinct tokens: without them no second person can ever approve.
 //
 //	CLUSTERORBIT_GATEWAY_POLICY_REQUIRE_APPROVAL  comma list of scale,restart,cordon,drain
 //	CLUSTERORBIT_GATEWAY_POLICY_APPROVAL_TTL      Go duration, default 15m
-func buildApprovalPolicy() (*api.ApprovalPolicy, *api.ApprovalStore, string) {
-	ops := splitCSV(os.Getenv("CLUSTERORBIT_GATEWAY_POLICY_REQUIRE_APPROVAL"))
-	if len(ops) == 0 {
-		return nil, nil, "off"
-	}
-	required := make(map[string]bool, len(ops))
-	for _, op := range ops {
-		required[op] = true
-	}
-	ttl := 15 * time.Minute
-	if raw := strings.TrimSpace(os.Getenv("CLUSTERORBIT_GATEWAY_POLICY_APPROVAL_TTL")); raw != "" {
-		if d, err := time.ParseDuration(raw); err == nil && d > 0 {
-			ttl = d
+func buildApprovalPolicy(getenv func(string) string, tokens []string) (*api.ApprovalStore, string, error) {
+	var required []string
+	for _, op := range splitCSV(getenv("CLUSTERORBIT_GATEWAY_POLICY_REQUIRE_APPROVAL")) {
+		switch op = strings.ToLower(op); op {
+		case api.OpScale, api.OpRestart, api.OpCordon, api.OpDrain:
+			if !slices.Contains(required, op) {
+				required = append(required, op)
+			}
+		default:
+			return nil, "", fmt.Errorf("CLUSTERORBIT_GATEWAY_POLICY_REQUIRE_APPROVAL: unknown op %q (want scale, restart, cordon or drain)", op)
 		}
 	}
-	return &api.ApprovalPolicy{RequiredOps: required}, api.NewApprovalStore(ttl), fmt.Sprintf("ops=%d ttl=%s", len(ops), ttl)
+	if len(required) == 0 {
+		return nil, "off", nil
+	}
+	if len(tokens) < 2 {
+		return nil, "", fmt.Errorf("CLUSTERORBIT_GATEWAY_POLICY_REQUIRE_APPROVAL needs >=2 distinct tokens (CLUSTERORBIT_GATEWAY_TOKEN/_TOKENS), have %d", len(tokens))
+	}
+	ttl := 15 * time.Minute
+	if raw := strings.TrimSpace(getenv("CLUSTERORBIT_GATEWAY_POLICY_APPROVAL_TTL")); raw != "" {
+		d, err := time.ParseDuration(raw)
+		if err != nil || d <= 0 {
+			return nil, "", fmt.Errorf("CLUSTERORBIT_GATEWAY_POLICY_APPROVAL_TTL=%q: want a positive Go duration", raw)
+		}
+		ttl = d
+	}
+	return api.NewApprovalStore(ttl, required...), fmt.Sprintf("ops=%d ttl=%s", len(required), ttl), nil
+}
+
+// buildLimiter reads CLUSTERORBIT_GATEWAY_RATE_LIMIT_RPS and _BURST. Both unset
+// (or 0) disables rate limiting; setting only one is an error, because the
+// limiter needs both and would otherwise be silently off.
+func buildLimiter(getenv func(string) string) (*api.RateLimiter, error) {
+	rps, err := envFloat(getenv, "CLUSTERORBIT_GATEWAY_RATE_LIMIT_RPS")
+	if err != nil {
+		return nil, err
+	}
+	burst, err := envFloat(getenv, "CLUSTERORBIT_GATEWAY_RATE_LIMIT_BURST")
+	if err != nil {
+		return nil, err
+	}
+	if (rps > 0) != (burst > 0) {
+		return nil, errors.New("CLUSTERORBIT_GATEWAY_RATE_LIMIT_RPS and _BURST must both be set to enable rate limiting")
+	}
+	return api.NewRateLimiter(rps, burst), nil
 }
 
 // splitCSV parses a comma-separated env value into a trimmed, non-empty slice.
@@ -281,20 +318,45 @@ func splitCSV(raw string) []string {
 	return out
 }
 
-// isTruthy treats the usual on/true/1/yes spellings (case-insensitive) as true.
-func isTruthy(v string) bool {
-	switch strings.ToLower(strings.TrimSpace(v)) {
-	case "1", "true", "yes", "on":
-		return true
-	default:
-		return false
+// envInt parses key as a non-negative integer; unset or blank is 0. A value
+// that is set but invalid is an error, never a silently disabled control.
+func envInt(getenv func(string) string, key string) (int, error) {
+	raw := strings.TrimSpace(getenv(key))
+	if raw == "" {
+		return 0, nil
 	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 0 {
+		return 0, fmt.Errorf("%s=%q: want a non-negative integer", key, raw)
+	}
+	return n, nil
 }
 
-func buildLimiter() *api.RateLimiter {
-	rps, _ := strconv.ParseFloat(os.Getenv("CLUSTERORBIT_GATEWAY_RATE_LIMIT_RPS"), 64)
-	burst, _ := strconv.ParseFloat(os.Getenv("CLUSTERORBIT_GATEWAY_RATE_LIMIT_BURST"), 64)
-	return api.NewRateLimiter(rps, burst)
+// envFloat parses key as a non-negative finite number; unset or blank is 0.
+func envFloat(getenv func(string) string, key string) (float64, error) {
+	raw := strings.TrimSpace(getenv(key))
+	if raw == "" {
+		return 0, nil
+	}
+	f, err := strconv.ParseFloat(raw, 64)
+	if err != nil || f < 0 || math.IsInf(f, 0) || math.IsNaN(f) {
+		return 0, fmt.Errorf("%s=%q: want a non-negative number", key, raw)
+	}
+	return f, nil
+}
+
+// envBool parses key with the usual on/off spellings (case-insensitive); unset
+// or blank is false. Anything else is an error, so a typo can't silently leave
+// a switch like DISABLE_DRAIN off.
+func envBool(getenv func(string) string, key string) (bool, error) {
+	switch raw := strings.ToLower(strings.TrimSpace(getenv(key))); raw {
+	case "1", "true", "yes", "on":
+		return true, nil
+	case "", "0", "false", "no", "off":
+		return false, nil
+	default:
+		return false, fmt.Errorf("%s=%q: want true or false", key, raw)
+	}
 }
 
 // buildTLS returns a *tls.Config if cert+key are provided. If CLIENT_CA is
@@ -384,6 +446,20 @@ func rateLabel(rl *api.RateLimiter) string {
 		return "off"
 	}
 	return "on"
+}
+
+// trustProxyLabel reports CLUSTERORBIT_GATEWAY_TRUST_PROXY. The forwarded
+// client IP only matters with auth off, where it is the caller identity; with
+// tokens the identity is the token, so the setting has no effect.
+func trustProxyLabel(trust bool, tokens []string) string {
+	switch {
+	case !trust:
+		return "off"
+	case len(tokens) > 0:
+		return "on (unused with token auth)"
+	default:
+		return "on"
+	}
 }
 
 func envOrDefault(key, fallback string) string {

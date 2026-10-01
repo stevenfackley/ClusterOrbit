@@ -1,31 +1,39 @@
 package api
 
 import (
-	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 )
 
-func TestApprovalPolicyRequires(t *testing.T) {
-	var nilPolicy *ApprovalPolicy
-	if nilPolicy.Requires(OpDrain) {
-		t.Fatal("nil policy must require nothing")
+func TestApprovalStoreRequires(t *testing.T) {
+	var nilStore *ApprovalStore
+	if nilStore.Requires(OpDrain) {
+		t.Fatal("nil store must require nothing")
 	}
-	empty := &ApprovalPolicy{}
+	empty := NewApprovalStore(time.Minute)
 	if empty.Requires(OpScale) {
-		t.Fatal("empty policy must require nothing")
+		t.Fatal("store without ops must require nothing")
 	}
-	p := &ApprovalPolicy{RequiredOps: map[string]bool{OpDrain: true}}
-	if !p.Requires(OpDrain) {
+	st := NewApprovalStore(time.Minute, OpDrain)
+	if !st.Requires(OpDrain) {
 		t.Fatal("drain should require approval")
 	}
-	if p.Requires(OpScale) {
+	if st.Requires(OpScale) {
 		t.Fatal("scale not configured, should not require approval")
+	}
+	if st.Requires(OpCordon) {
+		t.Fatal("gating drain must not gate cordon")
+	}
+	if !NewApprovalStore(time.Minute, OpCordon).Requires(OpDrain) {
+		t.Fatal("drain cordons first, so gating cordon must gate drain")
 	}
 }
 
@@ -89,6 +97,76 @@ func TestPendingRequestExpiresOnRead(t *testing.T) {
 	got, _ = st.Get(req.ID)
 	if got.Phase != ApprovalPhaseExpired {
 		t.Fatalf("phase = %q, want expired after TTL", got.Phase)
+	}
+}
+
+// requestIDs returns the sorted IDs of reqs.
+func requestIDs(reqs []PendingRequest) []string {
+	ids := make([]string, len(reqs))
+	for i, r := range reqs {
+		ids[i] = r.ID
+	}
+	slices.Sort(ids)
+	return ids
+}
+
+func TestSweepEvictsResolvedRequestsAfterRetention(t *testing.T) {
+	st := NewApprovalStore(10 * time.Minute) // retention is the 1h floor
+	clock := time.Unix(1_700_000_000, 0)
+	st.now = func() time.Time { return clock }
+
+	rejected := st.Park(OpScale, "demo", "deployment:ns/a", intPtr(1), "tok-a")
+	if _, err := st.Reject(rejected.ID, "no"); err != nil {
+		t.Fatalf("reject: %v", err)
+	}
+	inFlight := st.Park(OpDrain, "demo", "worker-1", nil, "tok-a")
+	if _, err := st.Approve(inFlight.ID, "tok-b"); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	unanswered := st.Park(OpRestart, "demo", "deployment:ns/b", nil, "tok-a")
+
+	// Inside retention nothing goes. This List also flips the overdue
+	// request to expired, which starts its own retention clock.
+	clock = clock.Add(59 * time.Minute)
+	if got := requestIDs(st.List("")); len(got) != 3 {
+		t.Fatalf("at +59m: %v, want all 3", got)
+	}
+
+	clock = clock.Add(2 * time.Minute)
+	got := requestIDs(st.List(""))
+	if want := requestIDs([]PendingRequest{inFlight, unanswered}); !slices.Equal(got, want) {
+		t.Fatalf("at +61m: %v, want %v (rejected request swept)", got, want)
+	}
+
+	// Parking sweeps too, so a store nobody lists still drains. "approved"
+	// is never swept: its mutation is in flight.
+	clock = clock.Add(time.Hour)
+	st.Park(OpScale, "demo", "deployment:ns/c", intPtr(2), "tok-a")
+	st.mu.Lock()
+	_, approvedKept := st.reqs[inFlight.ID]
+	_, expiredKept := st.reqs[unanswered.ID]
+	st.mu.Unlock()
+	if !approvedKept || expiredKept {
+		t.Fatalf("after Park at +2h01m: approved kept = %v, expired kept = %v; want true, false", approvedKept, expiredKept)
+	}
+}
+
+func TestSweepRetentionIsAtLeastTTL(t *testing.T) {
+	st := NewApprovalStore(2 * time.Hour)
+	clock := time.Unix(1_700_000_000, 0)
+	st.now = func() time.Time { return clock }
+
+	req := st.Park(OpScale, "demo", "deployment:ns/a", intPtr(1), "tok-a")
+	if _, err := st.Reject(req.ID, "no"); err != nil {
+		t.Fatalf("reject: %v", err)
+	}
+	clock = clock.Add(90 * time.Minute)
+	if len(st.List("")) != 1 {
+		t.Fatal("swept after 90m, want retention = ttl (2h)")
+	}
+	clock = clock.Add(31 * time.Minute)
+	if len(st.List("")) != 0 {
+		t.Fatal("still listed after 2h01m")
 	}
 }
 
@@ -173,47 +251,6 @@ func TestCompleteSucceededAndFailed(t *testing.T) {
 	}
 }
 
-func intPtr(n int) *int { return &n }
-
-func newApprovalServer(rb *recordingBackend, ops ...string) *Server {
-	required := map[string]bool{}
-	for _, op := range ops {
-		required[op] = true
-	}
-	return &Server{
-		Backend:        rb,
-		Tokens:         []string{"tok-a", "tok-b"},
-		ApprovalPolicy: &ApprovalPolicy{RequiredOps: required},
-		Approvals:      NewApprovalStore(15 * time.Minute),
-	}
-}
-
-func postAs(t *testing.T, url, token, body string) *http.Response {
-	t.Helper()
-	var rdr io.Reader
-	if body != "" {
-		rdr = bytes.NewBufferString(body)
-	}
-	req, _ := http.NewRequest(http.MethodPost, url, rdr)
-	req.Header.Set(AuthHeader, token)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("post %s: %v", url, err)
-	}
-	return resp
-}
-
-func decodePending(t *testing.T, resp *http.Response) PendingRequest {
-	t.Helper()
-	defer resp.Body.Close()
-	var pr PendingRequest
-	if err := json.NewDecoder(resp.Body).Decode(&pr); err != nil {
-		t.Fatalf("decode pending: %v", err)
-	}
-	return pr
-}
-
 func TestScaleParksWhenApprovalRequired(t *testing.T) {
 	rb := &recordingBackend{ClusterBackend: NewSampleBackend()}
 	s := newApprovalServer(rb, OpScale)
@@ -269,17 +306,6 @@ func TestDrainParksWhenApprovalRequired(t *testing.T) {
 	if rb.startDrainCalls != 0 {
 		t.Fatalf("StartDrain must NOT run on park, got %d", rb.startDrainCalls)
 	}
-}
-
-func getAs(t *testing.T, url, token string) *http.Response {
-	t.Helper()
-	req, _ := http.NewRequest(http.MethodGet, url, nil)
-	req.Header.Set(AuthHeader, token)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("get %s: %v", url, err)
-	}
-	return resp
 }
 
 func TestApproveExecutesAndCompletes(t *testing.T) {
@@ -390,5 +416,326 @@ func TestListAndGetApprovals(t *testing.T) {
 	missing.Body.Close()
 	if missing.StatusCode != http.StatusNotFound {
 		t.Fatalf("unknown id status = %d, want 404", missing.StatusCode)
+	}
+}
+
+// Identities were once the first 6 token chars, so tokens sharing a prefix
+// collided and neither could approve the other's request.
+func TestTokensSharingAPrefixCanApproveEachOther(t *testing.T) {
+	rb := &recordingBackend{ClusterBackend: NewSampleBackend()}
+	s := newApprovalServer(rb, OpScale)
+	s.Tokens = []string{"prod-token-alice", "prod-token-bob"}
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	park := decodePending(t, postAs(t, ts.URL+"/v1/clusters/demo/workloads/deployment:platform/api/scale", "prod-token-alice", `{"replicas":5}`))
+	done := decodePending(t, postAs(t, ts.URL+"/v1/clusters/demo/approvals/"+park.ID+"/approve", "prod-token-bob", ""))
+	if done.Phase != ApprovalPhaseSucceeded || rb.scaleCalls != 1 {
+		t.Fatalf("done = %+v scaleCalls = %d, want succeeded once", done, rb.scaleCalls)
+	}
+	if done.Requester == done.Approver {
+		t.Fatalf("requester and approver share identity %q", done.Requester)
+	}
+	for _, id := range []string{done.Requester, done.Approver} {
+		if !strings.HasPrefix(id, "tok:") || strings.Contains(id, "prod") {
+			t.Fatalf("identity %q must be a token fingerprint", id)
+		}
+	}
+}
+
+// With auth off the token header is never checked, so it can't be an identity
+// and nothing else can tell two people apart: approval must be refused.
+func TestApproveRequiresAuth(t *testing.T) {
+	rb := &recordingBackend{ClusterBackend: NewSampleBackend()}
+	s := newApprovalServer(rb, OpScale)
+	s.Tokens = nil
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	park := decodePending(t, postAs(t, ts.URL+"/v1/clusters/demo/workloads/deployment:platform/api/scale", "alice", `{"replicas":5}`))
+	if park.Requester != "127.0.0.1" {
+		t.Fatalf("requester = %q, want the client IP", park.Requester)
+	}
+	resp := postAs(t, ts.URL+"/v1/clusters/demo/approvals/"+park.ID+"/approve", "bob", "")
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", resp.StatusCode)
+	}
+	if rb.scaleCalls != 0 {
+		t.Fatalf("approval without auth must not execute, got %d", rb.scaleCalls)
+	}
+}
+
+// A parked response names the request it created, so a client can tell it
+// from an executed mutation (whose 202 body, for drain, is also id+phase).
+func TestParkedResponseLocatesApproval(t *testing.T) {
+	rb := &recordingBackend{ClusterBackend: NewSampleBackend()}
+	s := newApprovalServer(rb, OpDrain)
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	resp := postAs(t, ts.URL+"/v1/clusters/demo/nodes/worker-1/drain", "tok-a", "")
+	loc := resp.Header.Get("Location")
+	pr := decodePending(t, resp)
+	if resp.StatusCode != http.StatusAccepted || pr.Op != OpDrain {
+		t.Fatalf("status = %d pending = %+v, want 202 with op drain", resp.StatusCode, pr)
+	}
+	if want := "/v1/clusters/demo/approvals/" + pr.ID; loc != want {
+		t.Fatalf("Location = %q, want %q", loc, want)
+	}
+	if got := decodePending(t, getAs(t, ts.URL+loc, "tok-b")); got.ID != pr.ID {
+		t.Fatalf("GET Location returned %+v, want request %s", got, pr.ID)
+	}
+}
+
+// Gating only cordon must still park a drain, which cordons the node and then
+// evicts its pods.
+func TestCordonApprovalGatesDrain(t *testing.T) {
+	rb := &recordingBackend{ClusterBackend: NewSampleBackend()}
+	s := newApprovalServer(rb, OpCordon)
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	resp := postAs(t, ts.URL+"/v1/clusters/demo/nodes/worker-1/drain", "tok-a", "")
+	pr := decodePending(t, resp)
+	if resp.StatusCode != http.StatusAccepted || pr.Op != OpDrain {
+		t.Fatalf("status = %d pending = %+v, want drain parked with 202", resp.StatusCode, pr)
+	}
+	if rb.startDrainCalls != 0 || rb.cordonCalls != 0 {
+		t.Fatalf("drain ran inline: startDrainCalls = %d cordonCalls = %d", rb.startDrainCalls, rb.cordonCalls)
+	}
+}
+
+// An approved mutation that fails is audited with the status the inline path
+// would return, keeping the raw error server-side; the record every caller
+// can read carries only the client-safe message.
+// shortErr is how kubebackend reports an apiserver 400/422: the sentinel for
+// the status, with the StatusError short form as the text.
+type shortErr struct {
+	sentinel error
+	msg      string
+}
+
+func (e shortErr) Error() string { return e.msg }
+func (e shortErr) Unwrap() error { return e.sentinel }
+
+func TestApproveBackendFailure(t *testing.T) {
+	raw := errors.New(`kube api /apis/apps/v1/namespaces/platform/deployments/api/scale returned 403: User "system:serviceaccount:ops:gateway" cannot patch`)
+	// A truncated apiserver Status message is client-visible by design.
+	wrapped := shortErr{ErrBadRequest, `scale deployment platform/api: kube api returned 422 Invalid: admission webhook "quota.example.com" denied the request: replicas over quota`}
+	for _, tc := range []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantReason string
+	}{
+		{"not found", ErrNotFound, http.StatusNotFound, "not found"},
+		{"bad request", ErrBadRequest, http.StatusBadRequest, ErrBadRequest.Error()},
+		{"unsupported", ErrUnsupported, http.StatusNotImplemented, ErrUnsupported.Error()},
+		{"wrapped sentinel", wrapped, http.StatusBadRequest, wrapped.msg},
+		{"raw kube error", raw, http.StatusBadGateway, "backend error"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rb := &recordingBackend{ClusterBackend: NewSampleBackend(), returnErr: tc.err}
+
+			// Inline, the same error answers wantStatus with wantReason.
+			inline := httptest.NewServer((&Server{Backend: rb, Tokens: []string{"tok-a"}}).Handler())
+			defer inline.Close()
+			resp := postAs(t, inline.URL+"/v1/clusters/demo/workloads/deployment:platform/api/scale", "tok-a", `{"replicas":5}`)
+			var body map[string]string
+			if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+				t.Fatalf("decode inline error: %v", err)
+			}
+			resp.Body.Close()
+			if resp.StatusCode != tc.wantStatus || body["error"] != tc.wantReason {
+				t.Fatalf("inline = %d %q, want %d %q", resp.StatusCode, body["error"], tc.wantStatus, tc.wantReason)
+			}
+
+			var entries []AuditEntry
+			s := newApprovalServer(rb, OpScale)
+			s.AuditSink = func(e AuditEntry) { entries = append(entries, e) }
+			ts := httptest.NewServer(s.Handler())
+			defer ts.Close()
+
+			park := decodePending(t, postAs(t, ts.URL+"/v1/clusters/demo/workloads/deployment:platform/api/scale", "tok-a", `{"replicas":5}`))
+			resp = postAs(t, ts.URL+"/v1/clusters/demo/approvals/"+park.ID+"/approve", "tok-b", "")
+			done := decodePending(t, resp)
+			if resp.StatusCode != http.StatusOK || done.Phase != ApprovalPhaseFailed {
+				t.Fatalf("status = %d phase = %q, want 200 and failed", resp.StatusCode, done.Phase)
+			}
+			if done.Reason != tc.wantReason {
+				t.Fatalf("reason = %q, want %q", done.Reason, tc.wantReason)
+			}
+			last := entries[len(entries)-1]
+			if last.ApprovalID != park.ID || last.Status != tc.wantStatus || last.Error != tc.err.Error() {
+				t.Fatalf("audit = %+v, want status %d with the raw error", last, tc.wantStatus)
+			}
+		})
+	}
+}
+
+// vanishingBackend drops every approval record while a scale runs, so the
+// approve handler's Complete finds nothing to finalize.
+type vanishingBackend struct {
+	*recordingBackend
+	store *ApprovalStore
+}
+
+func (b vanishingBackend) ScaleWorkload(ctx context.Context, clusterID, workloadID string, replicas int) error {
+	b.store.mu.Lock()
+	clear(b.store.reqs)
+	b.store.mu.Unlock()
+	return b.recordingBackend.ScaleWorkload(ctx, clusterID, workloadID, replicas)
+}
+
+// A failed Complete used to be ignored, answering 200 with an empty record.
+func TestApproveCompleteFailureIs500(t *testing.T) {
+	rb := &recordingBackend{ClusterBackend: NewSampleBackend()}
+	s := newApprovalServer(rb, OpScale)
+	s.Backend = vanishingBackend{rb, s.Approvals}
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	park := decodePending(t, postAs(t, ts.URL+"/v1/clusters/demo/workloads/deployment:platform/api/scale", "tok-a", `{"replicas":5}`))
+	resp := postAs(t, ts.URL+"/v1/clusters/demo/approvals/"+park.ID+"/approve", "tok-b", "")
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", resp.StatusCode)
+	}
+}
+
+// A scale record without replicas must fail, not scale the workload to 0.
+func TestApprovedScaleWithoutReplicasFails(t *testing.T) {
+	rb := &recordingBackend{ClusterBackend: NewSampleBackend()}
+	s := newApprovalServer(rb, OpScale)
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	park := s.Approvals.Park(OpScale, "demo", "deployment:platform/api", nil, "tok:someone")
+	done := decodePending(t, postAs(t, ts.URL+"/v1/clusters/demo/approvals/"+park.ID+"/approve", "tok-b", ""))
+	if done.Phase != ApprovalPhaseFailed || done.Reason != ErrBadRequest.Error() {
+		t.Fatalf("done = %+v, want failed with %q", done, ErrBadRequest)
+	}
+	if rb.scaleCalls != 0 {
+		t.Fatalf("scaleCalls = %d, want 0", rb.scaleCalls)
+	}
+}
+
+// Every gated op parks without touching the backend, then runs exactly once,
+// on its original target, when a second identity approves.
+func TestApprovalFlowAllOps(t *testing.T) {
+	for _, tc := range []struct {
+		op, path, body string
+		target         string
+		calls          func(*recordingBackend) (int, string) // count, target
+		wantResultID   string
+	}{
+		{OpScale, "workloads/deployment:platform/api/scale", `{"replicas":5}`, "deployment:platform/api",
+			func(rb *recordingBackend) (int, string) { return rb.scaleCalls, rb.gotWorkload }, ""},
+		{OpRestart, "workloads/deployment:platform/api/restart", "", "deployment:platform/api",
+			func(rb *recordingBackend) (int, string) { return rb.restartCalls, rb.gotWorkload }, ""},
+		{OpCordon, "nodes/worker-1/cordon", "", "worker-1",
+			func(rb *recordingBackend) (int, string) { return rb.cordonCalls, rb.gotNode }, ""},
+		{OpDrain, "nodes/worker-1/drain", "", "worker-1",
+			func(rb *recordingBackend) (int, string) { return rb.startDrainCalls, rb.gotNode }, "job-1"},
+	} {
+		t.Run(tc.op, func(t *testing.T) {
+			rb := &recordingBackend{
+				ClusterBackend: NewSampleBackend(),
+				drainJob:       DrainJob{ID: "job-1", NodeID: "worker-1", Phase: DrainPhasePending},
+			}
+			s := newApprovalServer(rb, tc.op)
+			ts := httptest.NewServer(s.Handler())
+			defer ts.Close()
+
+			resp := postAs(t, ts.URL+"/v1/clusters/demo/"+tc.path, "tok-a", tc.body)
+			park := decodePending(t, resp)
+			if resp.StatusCode != http.StatusAccepted || park.Op != tc.op || park.TargetID != tc.target {
+				t.Fatalf("park status = %d pending = %+v", resp.StatusCode, park)
+			}
+			if n, _ := tc.calls(rb); n != 0 {
+				t.Fatalf("backend called %d times on park, want 0", n)
+			}
+
+			resp = postAs(t, ts.URL+"/v1/clusters/demo/approvals/"+park.ID+"/approve", "tok-b", "")
+			done := decodePending(t, resp)
+			if resp.StatusCode != http.StatusOK || done.Phase != ApprovalPhaseSucceeded || done.ResultID != tc.wantResultID {
+				t.Fatalf("approve status = %d done = %+v", resp.StatusCode, done)
+			}
+			if n, target := tc.calls(rb); n != 1 || target != tc.target || rb.gotCluster != "demo" {
+				t.Fatalf("backend calls = %d target = %q cluster = %q, want 1 on %q in demo", n, target, rb.gotCluster, tc.target)
+			}
+			if tc.op == OpCordon && !rb.gotUnschedulable {
+				t.Fatal("approved cordon must pass unschedulable=true")
+			}
+		})
+	}
+}
+
+// A request is reachable only under the cluster it was parked in.
+func TestApproveWrongCluster404(t *testing.T) {
+	rb := &recordingBackend{ClusterBackend: NewSampleBackend()}
+	s := newApprovalServer(rb, OpScale)
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	park := decodePending(t, postAs(t, ts.URL+"/v1/clusters/demo/workloads/deployment:platform/api/scale", "tok-a", `{"replicas":5}`))
+	for _, action := range []string{"approve", "reject"} {
+		resp := postAs(t, ts.URL+"/v1/clusters/other/approvals/"+park.ID+"/"+action, "tok-b", "")
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusNotFound {
+			t.Fatalf("%s under another cluster: status = %d, want 404", action, resp.StatusCode)
+		}
+	}
+	resp := getAs(t, ts.URL+"/v1/clusters/other/approvals/"+park.ID, "tok-b")
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("get under another cluster: status = %d, want 404", resp.StatusCode)
+	}
+	if got, _ := s.Approvals.Get(park.ID); got.Phase != ApprovalPhasePending || rb.scaleCalls != 0 {
+		t.Fatalf("phase = %q scaleCalls = %d, want untouched", got.Phase, rb.scaleCalls)
+	}
+}
+
+// Uncordon is a recovery action: gating cordon never parks it.
+func TestUncordonBypassesCordonApproval(t *testing.T) {
+	rb := &recordingBackend{ClusterBackend: NewSampleBackend()}
+	s := newApprovalServer(rb, OpCordon)
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	resp := postAs(t, ts.URL+"/v1/clusters/demo/nodes/worker-1/uncordon", "tok-a", "")
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if rb.cordonCalls != 1 || rb.gotUnschedulable {
+		t.Fatalf("cordonCalls = %d unschedulable = %v, want one uncordon", rb.cordonCalls, rb.gotUnschedulable)
+	}
+	if list := s.Approvals.List(""); len(list) != 0 {
+		t.Fatalf("uncordon parked: %+v", list)
+	}
+}
+
+func TestApproveExpired409(t *testing.T) {
+	rb := &recordingBackend{ClusterBackend: NewSampleBackend()}
+	s := newApprovalServer(rb, OpScale)
+	clock := time.Unix(1_700_000_000, 0)
+	s.Approvals.now = func() time.Time { return clock }
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	park := decodePending(t, postAs(t, ts.URL+"/v1/clusters/demo/workloads/deployment:platform/api/scale", "tok-a", `{"replicas":5}`))
+	clock = clock.Add(16 * time.Minute) // TTL is 15m
+	resp := postAs(t, ts.URL+"/v1/clusters/demo/approvals/"+park.ID+"/approve", "tok-b", "")
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", resp.StatusCode)
+	}
+	if got := decodePending(t, getAs(t, ts.URL+"/v1/clusters/demo/approvals/"+park.ID, "tok-a")); got.Phase != ApprovalPhaseExpired {
+		t.Fatalf("phase = %q, want expired", got.Phase)
+	}
+	if rb.scaleCalls != 0 {
+		t.Fatalf("expired request executed: scaleCalls = %d", rb.scaleCalls)
 	}
 }

@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// Approval op-class identifiers. These are the values an ApprovalPolicy gates
+// Approval op-class identifiers. These are the values an ApprovalStore gates
 // and the Op field of a PendingRequest. They cross the wire to clients.
 const (
 	OpScale   = "scale"
@@ -19,9 +19,10 @@ const (
 )
 
 // Approval phase values. A request starts Pending and ends in exactly one
-// terminal state. "approved" is a transient internal phase — execution is
-// synchronous, so the park/poll path never observes it. These strings cross
-// the wire; don't rename without updating clients.
+// terminal state. "approved" is transient but observable: GET /approvals
+// returns it while the approved mutation is still executing, so clients must
+// treat it as non-terminal. These strings cross the wire; don't rename
+// without updating clients.
 const (
 	ApprovalPhasePending   = "pending"
 	ApprovalPhaseApproved  = "approved"
@@ -37,22 +38,6 @@ var (
 	ErrSelfApprove      = errors.New("requester cannot approve own request")
 	ErrApprovalTerminal = errors.New("approval request already resolved")
 )
-
-// ApprovalPolicy names the op-classes that must be parked for a second-person
-// approval. Zero value (nil pointer or empty RequiredOps) requires approval for
-// nothing — consistent with ScalePolicy/NodePolicy permissive defaults.
-type ApprovalPolicy struct {
-	RequiredOps map[string]bool
-}
-
-// Requires reports whether op must be parked for approval. A nil policy or an
-// op not in the set returns false (execute inline).
-func (p *ApprovalPolicy) Requires(op string) bool {
-	if p == nil || len(p.RequiredOps) == 0 {
-		return false
-	}
-	return p.RequiredOps[op]
-}
 
 // PendingRequest is a parked mutation awaiting a second-person approval. The
 // deferred mutation is captured as typed fields (not a closure) so the record
@@ -73,25 +58,61 @@ type PendingRequest struct {
 	ExpiresAt int64  `json:"expiresAt"`
 }
 
-// ApprovalStore is an in-memory registry of pending approval requests. Like the
-// drain-job registry it is mutex-guarded and non-durable: a gateway restart
-// drops all pending requests (acceptable — they are short-lived and TTL'd).
+// ApprovalStore holds the op-classes that must be parked for a second-person
+// approval and the in-memory registry of parked requests. Like the drain-job
+// registry it is mutex-guarded and non-durable: a gateway restart drops all
+// pending requests (acceptable — they are short-lived and TTL'd). Resolved
+// requests stay listable for a retention window, then are dropped. A nil
+// store requires approval for nothing, consistent with the
+// ScalePolicy/NodePolicy permissive defaults.
 type ApprovalStore struct {
-	mu    sync.Mutex
-	reqs  map[string]*PendingRequest
-	ttl   time.Duration
-	now   func() time.Time
-	newID func() string
+	mu   sync.Mutex
+	reqs map[string]*PendingRequest
+	// ops is fixed at construction and only read afterwards, so Requires
+	// needs no lock.
+	ops map[string]bool
+	ttl time.Duration
+	// retention is how long a request stays in the store after it reaches
+	// a terminal phase (see sweepLocked).
+	retention time.Duration
+	now       func() time.Time
+	newID     func() string
 }
 
-// NewApprovalStore builds a store whose parked requests expire after ttl.
-func NewApprovalStore(ttl time.Duration) *ApprovalStore {
-	return &ApprovalStore{
-		reqs:  make(map[string]*PendingRequest),
-		ttl:   ttl,
-		now:   time.Now,
-		newID: randomApprovalID,
+// minApprovalRetention is the floor on how long resolved requests stay
+// listable, so a short TTL doesn't hide outcomes before anyone looks.
+const minApprovalRetention = time.Hour
+
+// NewApprovalStore builds a store that parks the given op-classes (OpScale,
+// OpRestart, OpCordon, OpDrain) and expires parked requests after ttl.
+// Resolved requests are kept for max(ttl, 1h).
+func NewApprovalStore(ttl time.Duration, ops ...string) *ApprovalStore {
+	required := make(map[string]bool, len(ops))
+	for _, op := range ops {
+		required[op] = true
 	}
+	return &ApprovalStore{
+		reqs:      make(map[string]*PendingRequest),
+		ops:       required,
+		ttl:       ttl,
+		retention: max(ttl, minApprovalRetention),
+		now:       time.Now,
+		newID:     randomApprovalID,
+	}
+}
+
+// Requires reports whether op must be parked for approval. A nil store or an
+// op not in the set returns false (execute inline). Gating cordon also gates
+// drain: a drain cordons the node before evicting, so it must never be less
+// guarded than cordon (the superset rule NodePolicy.EvaluateDrain follows).
+func (s *ApprovalStore) Requires(op string) bool {
+	if s == nil {
+		return false
+	}
+	if op == OpDrain && s.ops[OpCordon] {
+		return true
+	}
+	return s.ops[op]
 }
 
 func randomApprovalID() string {
@@ -100,7 +121,8 @@ func randomApprovalID() string {
 	return "apr-" + hex.EncodeToString(b[:])
 }
 
-// Park records a new pending request and returns a deep copy.
+// Park records a new pending request and returns a deep copy. It sweeps old
+// resolved requests first, so parking alone keeps the store bounded.
 func (s *ApprovalStore) Park(op, clusterID, targetID string, replicas *int, requester string) PendingRequest {
 	now := s.now().UnixMilli()
 	req := &PendingRequest{
@@ -116,8 +138,9 @@ func (s *ApprovalStore) Park(op, clusterID, targetID string, replicas *int, requ
 		ExpiresAt: s.now().Add(s.ttl).UnixMilli(),
 	}
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sweepLocked(s.now())
 	s.reqs[req.ID] = req
-	s.mu.Unlock()
 	return copyRequest(req)
 }
 
@@ -134,13 +157,14 @@ func (s *ApprovalStore) Get(id string) (PendingRequest, bool) {
 }
 
 // List returns copies of all requests for clusterID (empty == all), sorted by
-// CreatedAt then ID for deterministic output. Expires each lazily.
+// CreatedAt then ID for deterministic output. The sweep expires each lazily
+// and drops old resolved ones first.
 func (s *ApprovalStore) List(clusterID string) []PendingRequest {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.sweepLocked(s.now())
 	out := []PendingRequest{}
 	for _, r := range s.reqs {
-		s.expireLocked(r)
 		if clusterID == "" || r.ClusterID == clusterID {
 			out = append(out, copyRequest(r))
 		}
@@ -152,6 +176,23 @@ func (s *ApprovalStore) List(clusterID string) []PendingRequest {
 		return out[i].ID < out[j].ID
 	})
 	return out
+}
+
+// sweepLocked expires overdue pending requests, then deletes requests that
+// reached a terminal phase (rejected, expired, succeeded, failed) more than
+// s.retention before now. "approved" is never swept: its mutation is still
+// running and the handler's Complete must find it. Caller must hold s.mu.
+func (s *ApprovalStore) sweepLocked(now time.Time) {
+	cutoff := now.Add(-s.retention).UnixMilli()
+	for id, r := range s.reqs {
+		s.expireLocked(r)
+		switch r.Phase {
+		case ApprovalPhaseRejected, ApprovalPhaseExpired, ApprovalPhaseSucceeded, ApprovalPhaseFailed:
+			if r.UpdatedAt < cutoff {
+				delete(s.reqs, id)
+			}
+		}
+	}
 }
 
 // expireLocked flips a still-pending request to expired once its TTL elapses.

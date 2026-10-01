@@ -12,58 +12,58 @@ func TestScalePolicyEvaluate(t *testing.T) {
 	cases := []struct {
 		name     string
 		policy   *ScalePolicy
-		workload string
+		ns       string
 		replicas int
 		want     string // empty == allowed
 	}{
-		{"nil policy allows", nil, "deployment:platform/api", 99, ""},
-		{"zero value allows", &ScalePolicy{}, "deployment:platform/api", 99, ""},
+		{"nil policy allows", nil, "platform", 99, ""},
+		{"zero value allows", &ScalePolicy{}, "platform", 99, ""},
 		{
 			"max replicas exceeded",
 			&ScalePolicy{MaxReplicas: 10},
-			"deployment:platform/api",
+			"platform",
 			11,
 			"replicas 11 exceeds max 10",
 		},
 		{
 			"max replicas at limit ok",
 			&ScalePolicy{MaxReplicas: 10},
-			"deployment:platform/api",
+			"platform",
 			10,
 			"",
 		},
 		{
 			"namespace allowlist hit",
 			&ScalePolicy{AllowedNamespaces: []string{"platform", "infra"}},
-			"deployment:platform/api",
+			"platform",
 			5,
 			"",
 		},
 		{
 			"namespace not allowed",
 			&ScalePolicy{AllowedNamespaces: []string{"platform"}},
-			"deployment:payments/ledger",
+			"payments",
 			5,
 			`namespace "payments" not in allowlist`,
 		},
 		{
-			"malformed workload id fails closed",
+			"empty namespace fails closed",
 			&ScalePolicy{AllowedNamespaces: []string{"platform"}},
-			"bogus",
+			"",
 			1,
-			"workload id missing namespace",
+			"workload namespace is empty",
 		},
 		{
 			"max checked before namespace",
 			&ScalePolicy{MaxReplicas: 2, AllowedNamespaces: []string{"platform"}},
-			"deployment:platform/api",
+			"platform",
 			3,
 			"replicas 3 exceeds max 2",
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := tc.policy.Evaluate(tc.workload, tc.replicas)
+			got := tc.policy.Evaluate(tc.ns, tc.replicas)
 			if got != tc.want {
 				t.Fatalf("Evaluate = %q, want %q", got, tc.want)
 			}
