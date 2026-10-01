@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 
 import '../../core/cluster_domain/cluster_models.dart';
 import '../../core/connectivity/cluster_connection.dart';
+import '../../core/connectivity/connection_errors.dart';
 import '../../core/sync_cache/snapshot_store.dart';
 
 /// Owns the async session state for the OrbitShell: cluster list, active
@@ -150,7 +151,9 @@ class ClusterSessionController extends ChangeNotifier {
       if (_isLoading) return null;
       await retry();
       final error = _loadError;
-      return error == null || _disposed ? null : 'Refresh failed: $error';
+      return error == null || _disposed
+          ? null
+          : 'Refresh failed: ${readableError(error)}';
     }
 
     final gen = _generation;
@@ -168,7 +171,7 @@ class ClusterSessionController extends ChangeNotifier {
       if (isStale()) return null;
       _isRefreshing = false;
       notifyListeners();
-      return 'Refresh failed: $error';
+      return 'Refresh failed: ${readableError(error)}';
     }
     if (isStale()) return null;
 

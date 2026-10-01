@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 
 import '../../core/cluster_domain/cluster_models.dart';
 import '../../core/connectivity/cluster_connection.dart';
+import '../../core/connectivity/connection_errors.dart';
 import '../../core/sync_cache/snapshot_store.dart';
 import '../../core/theme/clusterorbit_theme.dart';
 import 'drain_progress_dialog.dart';
@@ -354,7 +355,10 @@ class _EntityDetailPanelState extends State<EntityDetailPanel> {
         outcome: _MutationOutcome.awaitingApproval,
       );
     } catch (e) {
-      result = (message: '$verb failed: $e', outcome: _MutationOutcome.failed);
+      result = (
+        message: '$verb failed: ${readableError(e)}',
+        outcome: _MutationOutcome.failed,
+      );
     }
     messenger?.showSnackBar(SnackBar(content: Text(result.message)));
     if (mounted) setState(() => _lastActionResult = result);

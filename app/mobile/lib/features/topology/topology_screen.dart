@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/cluster_domain/cluster_models.dart';
 import '../../core/connectivity/cluster_connection.dart';
+import '../../core/connectivity/connection_errors.dart';
 import '../../core/sync_cache/snapshot_store.dart';
 import '../../core/theme/clusterorbit_theme.dart';
 import 'entity_detail_panel.dart';
@@ -89,9 +90,13 @@ class _TopologyScreenState extends State<TopologyScreen> {
       return const Center(child: CircularProgressIndicator());
     }
 
-    if (widget.error != null || clusterSnapshot == null) {
+    final error = widget.error;
+    if (error != null || clusterSnapshot == null) {
+      // Not loading and nothing to show: the connection failed, or it works
+      // but lists no clusters. Either way Retry re-runs the session's load.
+      final onRetry = widget.onRefresh;
       return Center(
-        child: Padding(
+        child: SingleChildScrollView(
           padding: const EdgeInsets.all(24),
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 560),
@@ -105,9 +110,20 @@ class _TopologyScreenState extends State<TopologyScreen> {
                     Text('Cluster Map', style: theme.textTheme.headlineSmall),
                     const SizedBox(height: 12),
                     Text(
-                      'The topology workspace could not be loaded. Direct and gateway connections both feed this canvas once a snapshot is available.',
+                      error != null
+                          ? 'Connection failed: ${readableError(error)}'
+                          : 'No clusters visible. The connection works but '
+                              'lists no clusters; check its access, then retry.',
                       style: theme.textTheme.bodyLarge,
                     ),
+                    if (onRetry != null) ...[
+                      const SizedBox(height: 16),
+                      FilledButton.icon(
+                        onPressed: onRetry,
+                        icon: const Icon(Icons.refresh),
+                        label: const Text('Retry'),
+                      ),
+                    ],
                   ],
                 ),
               ),

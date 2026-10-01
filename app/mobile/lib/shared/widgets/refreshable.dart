@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../core/connectivity/connection_errors.dart';
+
 /// Wraps [child] in a pull-to-refresh when [onRefresh] is provided.
 class MaybeRefreshIndicator extends StatelessWidget {
   const MaybeRefreshIndicator({
@@ -41,9 +43,10 @@ class NoSnapshotView extends StatelessWidget {
     if (isLoading) {
       return const Center(child: CircularProgressIndicator());
     }
+    final error = this.error;
     final message = error == null
         ? emptyMessage
-        : 'Could not load cluster: $error.'
+        : 'Could not load cluster: ${readableError(error)}.'
             '${onRefresh == null ? '' : ' Pull to retry.'}';
     return MaybeRefreshIndicator(
       onRefresh: onRefresh,

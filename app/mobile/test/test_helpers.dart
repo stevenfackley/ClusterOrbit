@@ -255,6 +255,9 @@ final class RecordingClusterConnection implements ClusterConnection {
   /// Thrown by every mutation, after it is recorded, while set.
   Object? mutationError;
 
+  /// Answers listClusters while set, instead of the sample profiles.
+  Future<List<ClusterProfile>> Function()? onListClusters;
+
   /// Answers loadEvents while set, instead of the sample events.
   Future<List<ClusterEvent>> Function()? onLoadEvents;
 
@@ -272,7 +275,11 @@ final class RecordingClusterConnection implements ClusterConnection {
       calls.where((call) => call.first == method).toList();
 
   @override
-  Future<List<ClusterProfile>> listClusters() async => _profiles;
+  Future<List<ClusterProfile>> listClusters() async {
+    final onListClusters = this.onListClusters;
+    if (onListClusters != null) return onListClusters();
+    return _profiles;
+  }
 
   @override
   Future<ClusterSnapshot> loadSnapshot(String clusterId) async =>

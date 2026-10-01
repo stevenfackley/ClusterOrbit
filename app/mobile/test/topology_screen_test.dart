@@ -1,5 +1,6 @@
 import 'package:clusterorbit_mobile/core/cluster_domain/cluster_models.dart';
 import 'package:clusterorbit_mobile/core/connectivity/cluster_connection.dart';
+import 'package:clusterorbit_mobile/core/connectivity/gateway_cluster_connection.dart';
 import 'package:clusterorbit_mobile/core/connectivity/sample_cluster_data.dart';
 import 'package:clusterorbit_mobile/core/theme/clusterorbit_theme.dart';
 import 'package:clusterorbit_mobile/features/topology/entity_detail_panel.dart';
@@ -584,6 +585,30 @@ void main() {
       ['scaleWorkload', 'dev-orbit', 'workload-1', 5],
     ]);
     expect(inPanel('Scale failed: Bad state: quota exceeded'), findsOneWidget);
+
+    await resetTestSurface(tester);
+  });
+
+  testWidgets('restart: a gateway refusal reads as its user message',
+      (tester) async {
+    final connection = RecordingClusterConnection()
+      ..mutationError = GatewayException.fromResponse(
+        403,
+        Uri.parse('https://gw.example.test/v1/clusters/dev-orbit/restart'),
+        '{"error": "namespace not allowed"}',
+      );
+    await pumpTopologyScreen(tester,
+        size: const Size(1400, 900), connection: connection);
+
+    await openAction(tester, orb('workload', 'workload-1'), 'Restart');
+    await confirm(tester, 'Restart');
+
+    expect(
+      inPanel('Restart failed: Not allowed by the gateway: '
+          'namespace not allowed'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('gw.example.test'), findsNothing);
 
     await resetTestSurface(tester);
   });

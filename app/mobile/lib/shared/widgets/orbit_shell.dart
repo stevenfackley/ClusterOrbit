@@ -139,9 +139,13 @@ class _OrbitShellState extends State<OrbitShell> {
         final palette = Theme.of(context).extension<ClusterOrbitPalette>()!;
         final screens = _buildScreens();
         final selectedCluster = _session.selectedCluster;
-        final subtitle = selectedCluster == null
-            ? 'Preparing ${_session.connection.mode.label.toLowerCase()} connection'
-            : '${selectedCluster.apiServerHost} / ${selectedCluster.environmentLabel}';
+        final subtitle = selectedCluster != null
+            ? '${selectedCluster.apiServerHost} / ${selectedCluster.environmentLabel}'
+            : _session.loadError != null
+                ? 'Connection failed'
+                : _session.hasNoClusters
+                    ? 'No clusters visible'
+                    : 'Preparing ${_session.connection.mode.label.toLowerCase()} connection';
 
         return Scaffold(
           appBar: AppBar(
