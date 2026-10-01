@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"sync"
 	"testing"
 )
@@ -734,5 +735,56 @@ func TestServerRateLimits(t *testing.T) {
 	}
 	if last != http.StatusTooManyRequests {
 		t.Fatalf("3rd request status = %d, want 429", last)
+	}
+}
+
+func TestFailedAuthIsRateLimited(t *testing.T) {
+	s := &Server{
+		Backend: NewSampleBackend(),
+		Tokens:  []string{"valid"},
+		Limiter: NewRateLimiter(0.001, 2),
+	}
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	var got []int
+	for _, tok := range []string{"guess-1", "guess-2", "guess-3", "valid"} {
+		resp := getAs(t, ts.URL+"/v1/clusters", tok)
+		resp.Body.Close()
+		got = append(got, resp.StatusCode)
+	}
+	// Guesses share one bucket per source address; a valid token has its own.
+	want := []int{http.StatusUnauthorized, http.StatusUnauthorized, http.StatusTooManyRequests, http.StatusOK}
+	if !slices.Equal(got, want) {
+		t.Fatalf("statuses = %v, want %v", got, want)
+	}
+}
+
+func TestForwardedForTrustedOnlyWhenEnabled(t *testing.T) {
+	for _, tc := range []struct {
+		trust bool
+		want  string
+	}{
+		{false, "127.0.0.1"},
+		{true, "198.51.100.7"}, // the entry the nearest proxy appended
+	} {
+		var entries []AuditEntry
+		s := &Server{
+			Backend:           &recordingBackend{ClusterBackend: NewSampleBackend()},
+			TrustForwardedFor: tc.trust,
+			AuditSink:         func(e AuditEntry) { entries = append(entries, e) },
+		}
+		ts := httptest.NewServer(s.Handler())
+		req, _ := http.NewRequest(http.MethodPost, ts.URL+"/v1/clusters/demo/nodes/worker-1/cordon", nil)
+		req.Header.Set("X-Forwarded-For", "203.0.113.9, 198.51.100.7")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("post: %v", err)
+		}
+		resp.Body.Close()
+		ts.Close()
+		if len(entries) != 1 || entries[0].Identity != tc.want {
+			t.Fatalf("trust=%v: audit entries = %+v, want identity %q", tc.trust, entries, tc.want)
+		}
 	}
 }

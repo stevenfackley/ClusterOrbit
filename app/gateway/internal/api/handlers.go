@@ -2,9 +2,13 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"runtime/debug"
@@ -32,8 +36,9 @@ const (
 
 // Server wires a ClusterBackend into an http.Handler. Tokens (if non-empty)
 // gate every request via the AuthHeader; any token in the set is accepted so
-// rotation is "add new token → roll clients → drop old token". RateLimiter
-// (if non-nil) applies per-token, or per-IP if auth is disabled.
+// rotation is "add new token → roll clients → drop old token". Limiter (if
+// non-nil) applies per-token, or per-IP if auth is disabled; failed auth
+// attempts are limited per source address.
 type Server struct {
 	Backend ClusterBackend
 	// Tokens is the set of shared secrets clients may present in AuthHeader.
@@ -46,6 +51,11 @@ type Server struct {
 	// Limiter, if set, rate-limits each token (or client IP when auth is
 	// disabled). Requests that exceed the limit return 429.
 	Limiter *RateLimiter
+	// TrustForwardedFor makes the client IP the last X-Forwarded-For entry
+	// instead of the TCP peer address. Set it only behind a reverse proxy
+	// that appends or overwrites that header; otherwise any client can choose
+	// its own rate-limit bucket and, with auth off, its audit identity.
+	TrustForwardedFor bool
 	// AuditSink, if set, records every mutation request (success or failure).
 	// Passed as a func so callers can plug in a file, stdout, or a channel
 	// without this package depending on io.
@@ -66,7 +76,7 @@ type Server struct {
 }
 
 // AuditEntry is one row of the mutation log. Captured fields intentionally
-// avoid the token value — only a truncated identity marker is logged.
+// avoid the token value — Identity is a token fingerprint (see identity).
 type AuditEntry struct {
 	Timestamp  string `json:"timestamp"`
 	Identity   string `json:"identity"`
@@ -117,17 +127,17 @@ func (s *Server) acceptedTokens() []string {
 
 func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		identity := clientIP(r)
-		accepted := s.acceptedTokens()
-		if len(accepted) > 0 {
-			got := r.Header.Get(AuthHeader)
-			if got == "" || !tokenAccepted(got, accepted) {
-				writeError(w, http.StatusUnauthorized, "missing or invalid token")
+		if accepted := s.acceptedTokens(); len(accepted) > 0 && !tokenAccepted(r.Header.Get(AuthHeader), accepted) {
+			// Throttle failed attempts per TCP peer so tokens can't be
+			// guessed at line rate. Never keyed on a header the client sets.
+			if !s.Limiter.Allow("unauth:" + remoteHost(r)) {
+				writeError(w, http.StatusTooManyRequests, "rate limit exceeded")
 				return
 			}
-			identity = got
+			writeError(w, http.StatusUnauthorized, "missing or invalid token")
+			return
 		}
-		if !s.Limiter.Allow(identity) {
+		if !s.Limiter.Allow(s.identity(r)) {
 			writeError(w, http.StatusTooManyRequests, "rate limit exceeded")
 			return
 		}
@@ -135,35 +145,52 @@ func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// tokenAccepted does a constant-time-ish comparison against each candidate.
-// The set is typically 1–3 entries so a linear scan is fine; the compare is
-// not crypto-timing-safe because HTTP header handling isn't either — treat
-// the shared token as a password, not a session key.
+// tokenAccepted reports whether got matches any accepted token. Each compare
+// is constant-time and the loop never stops early, so timing reveals neither
+// which token matched nor how much of one did (only token lengths leak).
 func tokenAccepted(got string, accepted []string) bool {
-	for _, t := range accepted {
-		if got == t {
-			return true
-		}
+	if got == "" {
+		return false
 	}
-	return false
+	match := 0
+	for _, t := range accepted {
+		match |= subtle.ConstantTimeCompare([]byte(got), []byte(t))
+	}
+	return match == 1
 }
 
-// clientIP best-effort extracts a caller identity. RemoteAddr is host:port;
-// we drop the port. X-Forwarded-For is trusted only when set by an explicit
-// reverse proxy in front — see docs/handover for deployment guidance.
-func clientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		// First IP in the list is the original client per RFC 7239 convention.
-		if i := strings.IndexByte(xff, ','); i >= 0 {
-			return strings.TrimSpace(xff[:i])
+// identity returns the caller identity used as the rate-limit key, in audit
+// records, and as the requester/approver on pending approvals. With auth on
+// it is "tok:" plus the first 12 hex chars of the SHA-256 of the presented
+// token (authMiddleware has already checked it), so distinct tokens never
+// share an identity and no token bytes are disclosed. With auth off it is the
+// client IP; a client-supplied header is never an identity.
+func (s *Server) identity(r *http.Request) string {
+	if len(s.acceptedTokens()) == 0 {
+		return s.clientIP(r)
+	}
+	sum := sha256.Sum256([]byte(r.Header.Get(AuthHeader)))
+	return "tok:" + hex.EncodeToString(sum[:6])
+}
+
+// clientIP is the TCP peer address, or the last X-Forwarded-For entry (the
+// address the nearest proxy saw; earlier entries are client-supplied) when
+// TrustForwardedFor is set.
+func (s *Server) clientIP(r *http.Request) string {
+	if s.TrustForwardedFor {
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			return strings.TrimSpace(xff[strings.LastIndexByte(xff, ',')+1:])
 		}
-		return strings.TrimSpace(xff)
 	}
-	addr := r.RemoteAddr
-	if i := strings.LastIndexByte(addr, ':'); i >= 0 {
-		return addr[:i]
+	return remoteHost(r)
+}
+
+// remoteHost is the host part of r.RemoteAddr, the TCP peer.
+func remoteHost(r *http.Request) string {
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		return host
 	}
-	return addr
+	return r.RemoteAddr
 }
 
 // handleRoot serves GET /v1/clusters.
@@ -338,7 +365,7 @@ func (s *Server) handleStartDrain(w http.ResponseWriter, r *http.Request, cluste
 	}
 
 	if s.ApprovalPolicy.Requires(OpDrain) {
-		pr := s.Approvals.Park(OpDrain, clusterID, nodeID, nil, requestIdentity(r))
+		pr := s.Approvals.Park(OpDrain, clusterID, nodeID, nil, s.identity(r))
 		s.auditApproval(r, pr, http.StatusAccepted, "")
 		writeJSON(w, http.StatusAccepted, pr)
 		return
@@ -399,7 +426,7 @@ func (s *Server) handleCordon(w http.ResponseWriter, r *http.Request, clusterID,
 	}
 
 	if unschedulable && s.ApprovalPolicy.Requires(OpCordon) {
-		pr := s.Approvals.Park(OpCordon, clusterID, nodeID, nil, requestIdentity(r))
+		pr := s.Approvals.Park(OpCordon, clusterID, nodeID, nil, s.identity(r))
 		s.auditApproval(r, pr, http.StatusAccepted, "")
 		writeJSON(w, http.StatusAccepted, pr)
 		return
@@ -454,7 +481,7 @@ func (s *Server) handleScale(w http.ResponseWriter, r *http.Request, clusterID, 
 	}
 
 	if s.ApprovalPolicy.Requires(OpScale) {
-		pr := s.Approvals.Park(OpScale, clusterID, workloadID, body.Replicas, requestIdentity(r))
+		pr := s.Approvals.Park(OpScale, clusterID, workloadID, body.Replicas, s.identity(r))
 		s.auditApproval(r, pr, http.StatusAccepted, "")
 		writeJSON(w, http.StatusAccepted, pr)
 		return
@@ -497,7 +524,7 @@ func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request, clusterID
 	}
 
 	if s.ApprovalPolicy.Requires(OpRestart) {
-		pr := s.Approvals.Park(OpRestart, clusterID, workloadID, nil, requestIdentity(r))
+		pr := s.Approvals.Park(OpRestart, clusterID, workloadID, nil, s.identity(r))
 		s.auditApproval(r, pr, http.StatusAccepted, "")
 		writeJSON(w, http.StatusAccepted, pr)
 		return
@@ -536,10 +563,9 @@ func (s *Server) audit(r *http.Request, clusterID, workloadID string, replicas *
 	if s.AuditSink == nil {
 		return
 	}
-	identity := requestIdentity(r)
 	s.AuditSink(AuditEntry{
 		Timestamp:  timeNow().UTC().Format("2006-01-02T15:04:05Z07:00"),
-		Identity:   identity,
+		Identity:   s.identity(r),
 		Method:     r.Method,
 		Path:       r.URL.Path,
 		ClusterID:  clusterID,
@@ -548,16 +574,6 @@ func (s *Server) audit(r *http.Request, clusterID, workloadID string, replicas *
 		Status:     status,
 		Error:      errMsg,
 	})
-}
-
-// requestIdentity returns the caller identity used in audit records and as the
-// requester/approver marker on pending approvals: the truncated shared token
-// when auth is on, else the client IP.
-func requestIdentity(r *http.Request) string {
-	if got := r.Header.Get(AuthHeader); got != "" {
-		return truncateToken(got)
-	}
-	return clientIP(r)
 }
 
 // executePending runs the backend mutation captured by an approved request and
@@ -598,7 +614,7 @@ func (s *Server) auditApproval(r *http.Request, req PendingRequest, status int, 
 	}
 	s.AuditSink(AuditEntry{
 		Timestamp:  timeNow().UTC().Format("2006-01-02T15:04:05Z07:00"),
-		Identity:   requestIdentity(r),
+		Identity:   s.identity(r),
 		Method:     r.Method,
 		Path:       r.URL.Path,
 		ClusterID:  req.ClusterID,
@@ -670,12 +686,19 @@ func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request, clusterID
 		writeError(w, http.StatusNotFound, "not found")
 		return
 	}
+	// Without auth no identity is trustworthy enough to tell two people
+	// apart, so a second-person approval can't be enforced.
+	if len(s.acceptedTokens()) == 0 {
+		s.auditApproval(r, PendingRequest{ID: rid, ClusterID: clusterID}, http.StatusForbidden, "approval requires token auth")
+		writeError(w, http.StatusForbidden, "approval requires token auth")
+		return
+	}
 	// Validate cluster ownership before mutating phase.
 	if pr, ok := s.Approvals.Get(rid); !ok || pr.ClusterID != clusterID {
 		writeError(w, http.StatusNotFound, "not found")
 		return
 	}
-	approved, err := s.Approvals.Approve(rid, requestIdentity(r))
+	approved, err := s.Approvals.Approve(rid, s.identity(r))
 	if err != nil {
 		status := approvalErrStatus(err)
 		s.auditApproval(r, PendingRequest{ID: rid, ClusterID: clusterID}, status, err.Error())
@@ -703,7 +726,7 @@ func (s *Server) handleReject(w http.ResponseWriter, r *http.Request, clusterID,
 		writeError(w, http.StatusNotFound, "not found")
 		return
 	}
-	final, err := s.Approvals.Reject(rid, "rejected by "+requestIdentity(r))
+	final, err := s.Approvals.Reject(rid, "rejected by "+s.identity(r))
 	if err != nil {
 		s.auditApproval(r, PendingRequest{ID: rid, ClusterID: clusterID}, approvalErrStatus(err), err.Error())
 		writeApprovalError(w, err)
@@ -711,17 +734,6 @@ func (s *Server) handleReject(w http.ResponseWriter, r *http.Request, clusterID,
 	}
 	s.auditApproval(r, final, http.StatusOK, "")
 	writeJSON(w, http.StatusOK, final)
-}
-
-// truncateToken keeps only the first 6 chars of a shared token so audit
-// entries don't leak the secret. 6 chars = ~2^36 collision space, enough to
-// disambiguate a small token set.
-func truncateToken(t string) string {
-	const max = 6
-	if len(t) <= max {
-		return t
-	}
-	return t[:max] + "…"
 }
 
 // writeBackendError translates a ClusterBackend error into an HTTP status.

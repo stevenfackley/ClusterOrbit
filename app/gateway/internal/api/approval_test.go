@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -390,5 +391,52 @@ func TestListAndGetApprovals(t *testing.T) {
 	missing.Body.Close()
 	if missing.StatusCode != http.StatusNotFound {
 		t.Fatalf("unknown id status = %d, want 404", missing.StatusCode)
+	}
+}
+
+// Identities were once the first 6 token chars, so tokens sharing a prefix
+// collided and neither could approve the other's request.
+func TestTokensSharingAPrefixCanApproveEachOther(t *testing.T) {
+	rb := &recordingBackend{ClusterBackend: NewSampleBackend()}
+	s := newApprovalServer(rb, OpScale)
+	s.Tokens = []string{"prod-token-alice", "prod-token-bob"}
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	park := decodePending(t, postAs(t, ts.URL+"/v1/clusters/demo/workloads/deployment:platform/api/scale", "prod-token-alice", `{"replicas":5}`))
+	done := decodePending(t, postAs(t, ts.URL+"/v1/clusters/demo/approvals/"+park.ID+"/approve", "prod-token-bob", ""))
+	if done.Phase != ApprovalPhaseSucceeded || rb.scaleCalls != 1 {
+		t.Fatalf("done = %+v scaleCalls = %d, want succeeded once", done, rb.scaleCalls)
+	}
+	if done.Requester == done.Approver {
+		t.Fatalf("requester and approver share identity %q", done.Requester)
+	}
+	for _, id := range []string{done.Requester, done.Approver} {
+		if !strings.HasPrefix(id, "tok:") || strings.Contains(id, "prod") {
+			t.Fatalf("identity %q must be a token fingerprint", id)
+		}
+	}
+}
+
+// With auth off the token header is never checked, so it can't be an identity
+// and nothing else can tell two people apart: approval must be refused.
+func TestApproveRequiresAuth(t *testing.T) {
+	rb := &recordingBackend{ClusterBackend: NewSampleBackend()}
+	s := newApprovalServer(rb, OpScale)
+	s.Tokens = nil
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	park := decodePending(t, postAs(t, ts.URL+"/v1/clusters/demo/workloads/deployment:platform/api/scale", "alice", `{"replicas":5}`))
+	if park.Requester != "127.0.0.1" {
+		t.Fatalf("requester = %q, want the client IP", park.Requester)
+	}
+	resp := postAs(t, ts.URL+"/v1/clusters/demo/approvals/"+park.ID+"/approve", "bob", "")
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", resp.StatusCode)
+	}
+	if rb.scaleCalls != 0 {
+		t.Fatalf("approval without auth must not execute, got %d", rb.scaleCalls)
 	}
 }

@@ -37,6 +37,8 @@ func main() {
 	backend, backendLabel := buildBackend(mode)
 	tokens := collectTokens()
 	limiter := buildLimiter()
+	// Trust X-Forwarded-For only behind a reverse proxy that sets it itself.
+	trustProxy := isTruthy(os.Getenv("CLUSTERORBIT_GATEWAY_TRUST_PROXY"))
 
 	auditSink, auditLabel, auditCloser := buildAuditSink()
 	if auditCloser != nil {
@@ -59,6 +61,8 @@ func main() {
 		NodePolicy:     nodePolicy,
 		ApprovalPolicy: approvalPolicy,
 		Approvals:      approvals,
+
+		TrustForwardedFor: trustProxy,
 	}
 
 	tlsCfg, tlsLabel, err := buildTLS()
