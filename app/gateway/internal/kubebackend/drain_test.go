@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -387,6 +388,137 @@ func TestKubeBackendDrainEvictsPastAPDBBlockedPod(t *testing.T) {
 	if !containsAll(final.Evicted, "platform/api-1", "platform/api-2", "platform/api-3") {
 		t.Fatalf("evicted = %+v", final.Evicted)
 	}
+}
+
+// gatedDrainServer serves a cordon-and-empty-node drain. The pod list for any
+// node whose name starts with "slow" blocks until release is called; cleanup
+// releases it before closing the server so a failing test doesn't hang.
+func gatedDrainServer(t *testing.T) (ts *httptest.Server, release func()) {
+	t.Helper()
+	gate := make(chan struct{})
+	ts = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPatch:
+			_, _ = w.Write([]byte(`{"kind":"Node"}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/pods":
+			if strings.Contains(r.URL.Query().Get("fieldSelector"), "=slow") {
+				<-gate
+			}
+			_ = json.NewEncoder(w).Encode(list())
+		default:
+			http.Error(w, "not routed", http.StatusNotFound)
+		}
+	}))
+	release = sync.OnceFunc(func() { close(gate) })
+	t.Cleanup(ts.Close)
+	t.Cleanup(release) // cleanups run last-in first-out
+	return ts, release
+}
+
+// countingJobIDs makes b mint job-1, job-2, ... in order.
+func countingJobIDs(b *KubeBackend) {
+	n := 0
+	b.newJobID = func() string {
+		n++
+		return fmt.Sprintf("job-%d", n)
+	}
+}
+
+func TestKubeBackendStartDrainJoinsInFlightJob(t *testing.T) {
+	ts, release := gatedDrainServer(t)
+
+	b := newDrainBackend(t, ts.URL)
+	countingJobIDs(b)
+	ctx := context.Background()
+
+	first, err := b.StartDrain(ctx, "test", "slow-1")
+	if err != nil {
+		t.Fatalf("StartDrain: %v", err)
+	}
+	again, err := b.StartDrain(ctx, "test", "slow-1")
+	if err != nil {
+		t.Fatalf("repeat StartDrain: %v", err)
+	}
+	if again.ID != first.ID {
+		t.Fatalf("repeat drain of a busy node started job %q, want the in-flight %q", again.ID, first.ID)
+	}
+	other, err := b.StartDrain(ctx, "test", "slow-2")
+	if err != nil {
+		t.Fatalf("StartDrain other node: %v", err)
+	}
+	if other.ID == first.ID {
+		t.Fatalf("a different node must get its own job, got %q", other.ID)
+	}
+
+	release()
+	waitDrain(t, b, "slow-1", first.ID)
+	waitDrain(t, b, "slow-2", other.ID)
+
+	// A finished job no longer blocks a fresh drain of the same node.
+	next, err := b.StartDrain(ctx, "test", "slow-1")
+	if err != nil {
+		t.Fatalf("StartDrain after finish: %v", err)
+	}
+	if next.ID == first.ID {
+		t.Fatalf("drain after a finished job reused %q", next.ID)
+	}
+	waitDrain(t, b, "slow-1", next.ID)
+}
+
+func TestKubeBackendStartDrainPrunesFinishedJobs(t *testing.T) {
+	ts, release := gatedDrainServer(t)
+
+	b := newDrainBackend(t, ts.URL)
+	countingJobIDs(b)
+	var clock atomic.Int64
+	clock.Store(time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC).UnixMilli())
+	b.now = func() time.Time { return time.UnixMilli(clock.Load()) }
+	advance := func(d time.Duration) { clock.Add(d.Milliseconds()) }
+	ctx := context.Background()
+
+	start := func(node string) string {
+		t.Helper()
+		job, err := b.StartDrain(ctx, "test", node)
+		if err != nil {
+			t.Fatalf("StartDrain %s: %v", node, err)
+		}
+		return job.ID
+	}
+	known := func(node, id string) bool {
+		t.Helper()
+		_, err := b.DrainStatus(ctx, "test", node, id)
+		if err != nil && !errors.Is(err, api.ErrNotFound) {
+			t.Fatalf("DrainStatus %s: %v", id, err)
+		}
+		return err == nil
+	}
+
+	inFlight := start("slow-1") // stays Running until release
+	oldest := start("worker-1")
+	waitDrain(t, b, "worker-1", oldest)
+
+	advance(30 * time.Minute)
+	younger := start("worker-2")
+	waitDrain(t, b, "worker-2", younger)
+	if !known("worker-1", oldest) {
+		t.Fatalf("a job finished 30m ago must still be pollable")
+	}
+
+	advance(31 * time.Minute)
+	latest := start("worker-3")
+	if known("worker-1", oldest) {
+		t.Fatalf("a job finished 61m ago should be pruned on the next StartDrain")
+	}
+	if !known("worker-2", younger) {
+		t.Fatalf("a job finished 31m ago must survive pruning")
+	}
+	if !known("slow-1", inFlight) {
+		t.Fatalf("an in-flight job must never be pruned")
+	}
+
+	release()
+	waitDrain(t, b, "slow-1", inFlight)
+	waitDrain(t, b, "worker-3", latest)
 }
 
 func TestKubeBackendDrainRefusesUnmanagedPods(t *testing.T) {

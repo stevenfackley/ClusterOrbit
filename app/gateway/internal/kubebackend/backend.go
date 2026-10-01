@@ -28,7 +28,8 @@ type KubeBackend struct {
 	now     func() time.Time
 
 	// Drain job registry. Jobs are keyed by their generated ID and mutated by
-	// a background goroutine, so every access goes through drainMu.
+	// a background goroutine, so every access goes through drainMu. Finished
+	// jobs are pruned after drainJobRetention.
 	drainMu   sync.Mutex
 	drainJobs map[string]*api.DrainJob
 	// drainBackoff is the initial wait before retrying a PDB-blocked (429)

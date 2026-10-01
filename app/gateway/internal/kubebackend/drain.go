@@ -15,10 +15,15 @@ import (
 	"github.com/stevenfackley/clusterorbit/app/gateway/internal/api"
 )
 
+// drainJobRetention is how long a finished drain job stays pollable before
+// the next StartDrain prunes it.
+const drainJobRetention = time.Hour
+
 // StartDrain cordons the node and kicks off background pod eviction, returning
-// a Pending job immediately. The eviction loop runs in a detached goroutine
-// with its own deadline — it must NOT inherit the HTTP request context, which
-// is cancelled the moment this handler returns.
+// a Pending job immediately. If the node already has a Pending or Running job,
+// that job is returned instead and no second worker starts. The eviction loop
+// runs in a detached goroutine with its own deadline — it must NOT inherit the
+// HTTP request context, which is cancelled the moment this handler returns.
 func (b *KubeBackend) StartDrain(_ context.Context, clusterID, nodeID string) (api.DrainJob, error) {
 	if clusterID != "" && clusterID != b.profile.ID {
 		return api.DrainJob{}, api.ErrNotFound
@@ -27,25 +32,46 @@ func (b *KubeBackend) StartDrain(_ context.Context, clusterID, nodeID string) (a
 		return api.DrainJob{}, fmt.Errorf("%w: nodeID is required", api.ErrBadRequest)
 	}
 
-	now := b.now().UnixMilli()
+	b.drainMu.Lock()
+	defer b.drainMu.Unlock()
+	for _, job := range b.drainJobs {
+		if job.NodeID == nodeID && !drainFinished(job) {
+			return copyJob(job), nil
+		}
+	}
+
+	now := b.now()
+	b.pruneDrainJobs(now)
 	job := &api.DrainJob{
 		ID:        b.newJobID(),
 		NodeID:    nodeID,
 		Phase:     api.DrainPhasePending,
 		Evicted:   []string{},
 		Skipped:   []string{},
-		StartedAt: now,
-		UpdatedAt: now,
+		StartedAt: now.UnixMilli(),
+		UpdatedAt: now.UnixMilli(),
 	}
-
-	b.drainMu.Lock()
 	b.drainJobs[job.ID] = job
-	b.drainMu.Unlock()
 
+	// The worker blocks on drainMu until we return, so this copy is the
+	// Pending state and can't race it.
 	go b.runDrain(job.ID, nodeID)
+	return copyJob(job), nil
+}
 
-	// Return a snapshot copy so the caller can't race the worker.
-	return b.snapshotJob(job.ID)
+func drainFinished(j *api.DrainJob) bool {
+	return j.Phase == api.DrainPhaseSucceeded || j.Phase == api.DrainPhaseFailed
+}
+
+// pruneDrainJobs drops finished jobs last updated more than drainJobRetention
+// before now. Callers hold drainMu.
+func (b *KubeBackend) pruneDrainJobs(now time.Time) {
+	cutoff := now.Add(-drainJobRetention).UnixMilli()
+	for id, job := range b.drainJobs {
+		if drainFinished(job) && job.UpdatedAt < cutoff {
+			delete(b.drainJobs, id)
+		}
+	}
 }
 
 // DrainStatus returns a copy of the job's current state. ErrNotFound when the
@@ -64,18 +90,6 @@ func (b *KubeBackend) DrainStatus(_ context.Context, clusterID, nodeID, jobID st
 	out := copyJob(job)
 	b.drainMu.Unlock()
 	return out, nil
-}
-
-// snapshotJob returns a locked copy of a job by ID. Assumes the job exists
-// (StartDrain just registered it).
-func (b *KubeBackend) snapshotJob(jobID string) (api.DrainJob, error) {
-	b.drainMu.Lock()
-	defer b.drainMu.Unlock()
-	job, ok := b.drainJobs[jobID]
-	if !ok {
-		return api.DrainJob{}, api.ErrNotFound
-	}
-	return copyJob(job), nil
 }
 
 // copyJob deep-copies a job so callers never alias the slices the worker

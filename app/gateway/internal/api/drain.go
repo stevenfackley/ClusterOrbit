@@ -13,8 +13,9 @@ const (
 )
 
 // DrainJob is the observable state of an asynchronous node drain. StartDrain
-// returns one in the Pending/Running phase with a freshly minted ID; the
-// client polls DrainStatus with that ID until Phase is terminal.
+// returns one in the Pending/Running phase, either freshly minted or the
+// node's drain already in flight; the client polls DrainStatus with its ID
+// until Phase is terminal.
 //
 // Evicted and Skipped hold "namespace/name" pod identifiers. Skipped covers
 // DaemonSet-managed, mirror/static, and already-terminal pods that drain
