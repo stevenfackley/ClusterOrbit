@@ -176,43 +176,135 @@ func TestServiceTargetsAndHealth(t *testing.T) {
 	}
 }
 
-func TestJobHealthAndAlerts(t *testing.T) {
-	job := func(status map[string]any) map[string]any {
-		return map[string]any{
-			"metadata": map[string]any{"namespace": "default", "name": "j"},
-			"spec":     map[string]any{"completions": 1},
-			"status":   status,
-		}
+// jobPod is a pod in the given phase owned by Job default/j.
+func jobPod(name, phase string) any {
+	return map[string]any{
+		"metadata": map[string]any{
+			"namespace":       "default",
+			"name":            name,
+			"ownerReferences": []any{map[string]any{"kind": "Job", "name": "j", "controller": true}},
+		},
+		"spec":   map[string]any{"nodeName": "n1"},
+		"status": map[string]any{"phase": phase},
 	}
+}
+
+func TestJobHealthAndAlerts(t *testing.T) {
+	failedCondition := []any{map[string]any{"type": "Failed", "status": "True"}}
 	tests := []struct {
 		name       string
+		spec       map[string]any
 		status     map[string]any
+		pods       []any
 		wantHealth string
-		wantAlert  bool
+		// wantAlert is the one alert's summary; "" means no alert.
+		wantAlert string
 	}{
-		{"running", map[string]any{"active": 1}, healthHealthy, false},
-		{"running after a retry", map[string]any{"active": 1, "failed": 1}, healthHealthy, false},
-		{"succeeded", map[string]any{"succeeded": 1}, healthHealthy, false},
-		{"succeeded after retries", map[string]any{"succeeded": 1, "failed": 2}, healthHealthy, false},
-		{"failed pods, nothing active", map[string]any{"failed": 3}, healthWarning, true},
 		{
-			"failed condition",
-			map[string]any{"conditions": []any{map[string]any{"type": "Failed", "status": "True"}}},
-			healthWarning, true,
+			// A Pending pod is a live attempt, so it still warns; a Job
+			// never alerts on it.
+			name:       "running with a Pending pod",
+			spec:       map[string]any{"completions": 1},
+			status:     map[string]any{"active": 1},
+			pods:       []any{jobPod("j-a", "Pending")},
+			wantHealth: healthWarning,
+		},
+		{
+			name:       "running after a retry",
+			spec:       map[string]any{"completions": 1},
+			status:     map[string]any{"active": 1, "failed": 1},
+			pods:       []any{jobPod("j-a", "Failed"), jobPod("j-b", "Running")},
+			wantHealth: healthHealthy,
+		},
+		{
+			name: "complete after a retry",
+			spec: map[string]any{"completions": 1},
+			status: map[string]any{
+				"succeeded": 1, "failed": 1,
+				"conditions": []any{map[string]any{"type": "Complete", "status": "True"}},
+			},
+			pods:       []any{jobPod("j-a", "Failed"), jobPod("j-b", "Succeeded")},
+			wantHealth: healthHealthy,
+		},
+		{
+			name:       "backoff window before a retry",
+			spec:       map[string]any{"completions": 1},
+			status:     map[string]any{"active": 0, "failed": 1},
+			pods:       []any{jobPod("j-a", "Failed")},
+			wantHealth: healthHealthy,
+		},
+		{
+			name:       "failed condition",
+			spec:       map[string]any{"completions": 1},
+			status:     map[string]any{"failed": 2, "conditions": failedCondition},
+			pods:       []any{jobPod("j-a", "Failed"), jobPod("j-b", "Failed")},
+			wantHealth: healthWarning,
+			wantAlert:  "j has failed.",
+		},
+		{
+			name:       "parallelism-only Job with the failed condition",
+			spec:       map[string]any{"parallelism": 2},
+			status:     map[string]any{"failed": 2, "conditions": failedCondition},
+			pods:       []any{jobPod("j-a", "Failed"), jobPod("j-b", "Failed")},
+			wantHealth: healthWarning,
+			wantAlert:  "j has failed.",
 		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			snap := snapshotFor(nil, nil, nil, []any{job(tc.status)})
+			job := map[string]any{
+				"metadata": map[string]any{"namespace": "default", "name": "j"},
+				"spec":     tc.spec,
+				"status":   tc.status,
+			}
+			snap := snapshotFor(tc.pods, nil, nil, []any{job})
 			if len(snap.Workloads) != 1 {
 				t.Fatalf("workloads = %d, want 1", len(snap.Workloads))
 			}
 			if got := snap.Workloads[0].Health; got != tc.wantHealth {
 				t.Errorf("health = %q, want %q", got, tc.wantHealth)
 			}
-			if got := len(snap.Alerts) > 0; got != tc.wantAlert {
-				t.Errorf("alerts = %v, want alert=%v", snap.Alerts, tc.wantAlert)
+			if tc.wantAlert == "" {
+				if len(snap.Alerts) != 0 {
+					t.Errorf("alerts = %+v, want none", snap.Alerts)
+				}
+				return
+			}
+			want := []api.ClusterAlert{{
+				ID:      "workload-job:default/j",
+				Title:   "Job failed",
+				Summary: tc.wantAlert,
+				Level:   healthWarning,
+				Scope:   "Workload health",
+			}}
+			if !reflect.DeepEqual(snap.Alerts, want) {
+				t.Errorf("alerts = %+v, want %+v", snap.Alerts, want)
 			}
 		})
+	}
+}
+
+func TestJobFailedNeedsATrueFailureCondition(t *testing.T) {
+	job := func(status map[string]any) map[string]any {
+		return map[string]any{"status": status}
+	}
+	cond := func(typ, status string) map[string]any {
+		return map[string]any{"conditions": []any{map[string]any{"type": typ, "status": status}}}
+	}
+	tests := []struct {
+		name   string
+		status map[string]any
+		want   bool
+	}{
+		{"Failed True", cond("Failed", "True"), true},
+		{"FailureTarget True", cond("FailureTarget", "True"), true},
+		{"Failed False", cond("Failed", "False"), false},
+		{"Complete True", cond("Complete", "True"), false},
+		{"failed pods without a condition", map[string]any{"failed": 3, "active": 0}, false},
+	}
+	for _, tc := range tests {
+		if got := jobFailed(job(tc.status)); got != tc.want {
+			t.Errorf("%s: jobFailed = %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }

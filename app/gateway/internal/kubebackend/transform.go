@@ -181,6 +181,11 @@ func transformSnapshot(profile api.ClusterProfile, generatedAt time.Time, raw ra
 		}
 
 		phase := strings.ToLower(stringAt(pod, "status", "phase"))
+		// A Job's Failed and Succeeded pods are earlier or finished
+		// attempts; only its live pods say how it is doing now.
+		if strings.HasPrefix(wid, workloadKindJob+":") && (phase == "failed" || phase == "succeeded") {
+			continue
+		}
 		containerStatuses := listAt(pod, "status", "containerStatuses")
 		hasRestart := false
 		for _, cs := range containerStatuses {
@@ -452,14 +457,18 @@ func workloadsFromItems(
 			}
 		}
 
-		// A running Job always has succeeded < completions, so only a failed
-		// Job counts as unhealthy; other kinds warn on replica skew.
+		// A Job is below its completions until it finishes, so it warns only
+		// once failed; other kinds warn on replica skew. Otherwise the pod
+		// signals decide.
 		var health string
-		if jobFailed(item) || (kind != workloadKindJob && ready < desired) {
+		switch {
+		case kind == workloadKindJob && jobFailed(item):
 			health = healthWarning
-		} else if signal := healthSignals[wid]; signal != "" {
-			health = signal
-		} else {
+		case kind != workloadKindJob && ready < desired:
+			health = healthWarning
+		case healthSignals[wid] != "":
+			health = healthSignals[wid]
+		default:
 			health = healthHealthy
 		}
 
@@ -496,22 +505,21 @@ func workloadsFromItems(
 	return out
 }
 
-// jobFailed reports whether a Job has a Failed condition, or has failures
-// with nothing left running and fewer completions than wanted.
+// jobFailed reports whether the Job controller has declared the Job failed:
+// a Failed or FailureTarget condition with status True. Failed pods alone
+// don't count, since the controller may still retry them (between attempts
+// a Job has failed pods and none active).
 func jobFailed(item map[string]any) bool {
 	for _, c := range listAt(item, "status", "conditions") {
 		m, ok := c.(map[string]any)
-		if ok && stringAt(m, "type") == "Failed" && stringAt(m, "status") == "True" {
+		if !ok || stringAt(m, "status") != "True" {
+			continue
+		}
+		if t := stringAt(m, "type"); t == "Failed" || t == "FailureTarget" {
 			return true
 		}
 	}
-	completions := intAt(item, "spec", "completions")
-	if completions == 0 {
-		completions = 1
-	}
-	return intAt(item, "status", "failed") > 0 &&
-		intAt(item, "status", "active") == 0 &&
-		intAt(item, "status", "succeeded") < completions
+	return false
 }
 
 // failedJobIDs returns the workload IDs of failed Jobs.
@@ -689,16 +697,24 @@ func nodeAlerts(nodes []api.ClusterNode) []api.ClusterAlert {
 	return out
 }
 
-// workloadAlerts flags replica skew. Jobs are exempt while running (they are
-// always below completions); only failed Jobs alert.
+// workloadAlerts flags replica skew on controllers and failed Jobs. A Job is
+// below its completions until it finishes, so it never alerts on skew, and
+// its pods never raise an alert; only jobFailed does.
 func workloadAlerts(workloads []api.ClusterWorkload, failedJobs map[string]bool) []api.ClusterAlert {
 	var out []api.ClusterAlert
 	for _, w := range workloads {
-		skewed := w.ReadyReplicas < w.DesiredReplicas
-		if w.Kind == workloadKindJob {
-			skewed = failedJobs[w.ID]
-		}
-		if skewed {
+		switch {
+		case w.Kind == workloadKindJob:
+			if failedJobs[w.ID] {
+				out = append(out, api.ClusterAlert{
+					ID:      "workload-" + w.ID,
+					Title:   "Job failed",
+					Summary: w.Name + " has failed.",
+					Level:   healthWarning,
+					Scope:   "Workload health",
+				})
+			}
+		case w.ReadyReplicas < w.DesiredReplicas:
 			out = append(out, api.ClusterAlert{
 				ID:      "workload-" + w.ID,
 				Title:   "Replica skew detected",
