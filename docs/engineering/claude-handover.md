@@ -161,18 +161,24 @@ Android/iOS, so this is correct for mobile. Move to `dependencies` if desktop is
 
 **Gateway has a real Kubernetes backend and is multi-cluster.** `MultiClusterBackend`
 resolves every kubeconfig context on boot and routes by `cluster_id`. Rate limiting
-(token-bucket, per-identity) + optional mTLS + JSON-Lines audit log all shipped. First
-mutation endpoint — POST `/clusters/{id}/workloads/{wid}/scale` — is live and audited.
+(token-bucket, per-identity) + optional mTLS + JSON-Lines audit log all shipped. Mutations
+(scale, restart, cordon/uncordon, async drain) are live and audited. Names are validated
+at the API boundary (`internal/api/validate.go`, 400 before any policy gate); kube
+mutations map apiserver 404/400/422 to typed errors. Drain refuses nodes with unmanaged
+pods and reports success only once evicted pods are gone.
 
-**Two-person approval flow shipped on the gateway** (`internal/api/approval.go`).
-`ApprovalPolicy` (env `_POLICY_REQUIRE_APPROVAL`, comma list of scale/restart/cordon/drain)
-parks a gated mutation instead of executing it: the handler returns `202` + a pollable
-`PendingRequest`. A *second, distinct* identity calls `…/approvals/{rid}/approve`, which
-runs the mutation inline and resolves the request `succeeded`/`failed` (drain launches a
-DrainJob and carries its id in `ResultID`). Self-approve → 409; self-reject is allowed.
-Lazy TTL expiry (`_POLICY_APPROVAL_TTL`, default 15m). The hard 403 policy gate always
-runs first — approval never relaxes the ceiling. **In-memory only** (dropped on restart)
-and **no mobile UI yet** — listing/approving pending requests from the app is the follow-up.
+**Two-person approval flow shipped on the gateway** (`internal/api/approval.go`,
+handlers in `approval_http.go`). `ApprovalStore` holds the gated op set (env
+`_POLICY_REQUIRE_APPROVAL`, comma list of scale/restart/cordon/drain; gating cordon also
+gates drain) and parks a gated mutation instead of executing it: the handler returns
+`202` with the `PendingRequest` and a `Location` header. A *second, distinct* identity (token
+fingerprint `tok:<12 hex>`) calls `…/approvals/{rid}/approve`, which runs the mutation
+inline and resolves the request `succeeded`/`failed` (drain carries its job id in
+`ResultID`). Self-approve → 409; approve with auth off → 403; self-reject is allowed.
+Lazy TTL expiry (`_POLICY_APPROVAL_TTL`, default 15m); resolved requests are evicted
+max(TTL, 1h) later. The hard 403 policy gate always runs first — approval never relaxes
+the ceiling. Fewer than 2 distinct tokens with approval on is fatal at boot. **In-memory
+only** (dropped on restart) and **no mobile approve UI yet**.
 
 **Topology engine** is no longer a single file — filtering, LOD (hide labels below 0.9x),
 viewport persistence (TransformationController retained across rebuilds), and a deterministic
