@@ -42,7 +42,7 @@ class _EntityDetailPanelState extends State<EntityDetailPanel> {
 
   /// The last mutation's outcome, shown above the action buttons. The
   /// SnackBar that also reports it can end up under a modal sheet.
-  ({String message, bool isError})? _lastActionResult;
+  ({String message, _MutationOutcome outcome})? _lastActionResult;
 
   @override
   void initState() {
@@ -278,9 +278,11 @@ class _EntityDetailPanelState extends State<EntityDetailPanel> {
           child: Text(
             result.message,
             style: theme.textTheme.bodySmall?.copyWith(
-              color: result.isError
-                  ? theme.colorScheme.error
-                  : widget.palette.accentTeal,
+              color: switch (result.outcome) {
+                _MutationOutcome.done => widget.palette.accentTeal,
+                _MutationOutcome.awaitingApproval => widget.palette.warning,
+                _MutationOutcome.failed => theme.colorScheme.error,
+              },
             ),
           ),
         ),
@@ -316,24 +318,26 @@ class _EntityDetailPanelState extends State<EntityDetailPanel> {
   }
 
   /// Runs a confirmed mutation: the one place every mutation's outcome is
-  /// decided and reported, inline above the actions and as a SnackBar.
+  /// decided and reported, inline above the actions and as a SnackBar. A
+  /// mutation the gateway parked for approval is neither done nor failed.
   Future<void> _runMutation(
     String verb,
     Future<void> Function() op,
     String successMsg,
   ) async {
     final messenger = ScaffoldMessenger.maybeOf(context);
-    ({String message, bool isError}) result;
+    ({String message, _MutationOutcome outcome}) result;
     try {
       await op();
-      result = (message: successMsg, isError: false);
+      result = (message: successMsg, outcome: _MutationOutcome.done);
     } on ApprovalPendingException catch (e) {
       result = (
-        message: 'Awaiting second-operator approval (${e.pending.id})',
-        isError: false,
+        message: 'Awaiting second-operator approval '
+            '(request ${e.pending.id})',
+        outcome: _MutationOutcome.awaitingApproval,
       );
     } catch (e) {
-      result = (message: '$verb failed: $e', isError: true);
+      result = (message: '$verb failed: $e', outcome: _MutationOutcome.failed);
     }
     messenger?.showSnackBar(SnackBar(content: Text(result.message)));
     if (mounted) setState(() => _lastActionResult = result);
@@ -353,6 +357,8 @@ class _EntityDetailPanelState extends State<EntityDetailPanel> {
     );
     if (!confirmed) return;
 
+    // Stays null unless the drain really started: a parked or failed drain
+    // has no job to follow.
     DrainJob? job;
     await _runMutation(
       'Drain',
@@ -516,6 +522,8 @@ class _EntityDetailPanelState extends State<EntityDetailPanel> {
     ];
   }
 }
+
+enum _MutationOutcome { done, awaitingApproval, failed }
 
 class _DetailRow extends StatelessWidget {
   const _DetailRow({
