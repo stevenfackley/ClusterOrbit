@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -97,6 +98,76 @@ func TestPendingRequestExpiresOnRead(t *testing.T) {
 	got, _ = st.Get(req.ID)
 	if got.Phase != ApprovalPhaseExpired {
 		t.Fatalf("phase = %q, want expired after TTL", got.Phase)
+	}
+}
+
+// requestIDs returns the sorted IDs of reqs.
+func requestIDs(reqs []PendingRequest) []string {
+	ids := make([]string, len(reqs))
+	for i, r := range reqs {
+		ids[i] = r.ID
+	}
+	slices.Sort(ids)
+	return ids
+}
+
+func TestSweepEvictsResolvedRequestsAfterRetention(t *testing.T) {
+	st := NewApprovalStore(10 * time.Minute) // retention is the 1h floor
+	clock := time.Unix(1_700_000_000, 0)
+	st.now = func() time.Time { return clock }
+
+	rejected := st.Park(OpScale, "demo", "deployment:ns/a", intPtr(1), "tok-a")
+	if _, err := st.Reject(rejected.ID, "no"); err != nil {
+		t.Fatalf("reject: %v", err)
+	}
+	inFlight := st.Park(OpDrain, "demo", "worker-1", nil, "tok-a")
+	if _, err := st.Approve(inFlight.ID, "tok-b"); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	unanswered := st.Park(OpRestart, "demo", "deployment:ns/b", nil, "tok-a")
+
+	// Inside retention nothing goes. This List also flips the overdue
+	// request to expired, which starts its own retention clock.
+	clock = clock.Add(59 * time.Minute)
+	if got := requestIDs(st.List("")); len(got) != 3 {
+		t.Fatalf("at +59m: %v, want all 3", got)
+	}
+
+	clock = clock.Add(2 * time.Minute)
+	got := requestIDs(st.List(""))
+	if want := requestIDs([]PendingRequest{inFlight, unanswered}); !slices.Equal(got, want) {
+		t.Fatalf("at +61m: %v, want %v (rejected request swept)", got, want)
+	}
+
+	// Parking sweeps too, so a store nobody lists still drains. "approved"
+	// is never swept: its mutation is in flight.
+	clock = clock.Add(time.Hour)
+	st.Park(OpScale, "demo", "deployment:ns/c", intPtr(2), "tok-a")
+	st.mu.Lock()
+	_, approvedKept := st.reqs[inFlight.ID]
+	_, expiredKept := st.reqs[unanswered.ID]
+	st.mu.Unlock()
+	if !approvedKept || expiredKept {
+		t.Fatalf("after Park at +2h01m: approved kept = %v, expired kept = %v; want true, false", approvedKept, expiredKept)
+	}
+}
+
+func TestSweepRetentionIsAtLeastTTL(t *testing.T) {
+	st := NewApprovalStore(2 * time.Hour)
+	clock := time.Unix(1_700_000_000, 0)
+	st.now = func() time.Time { return clock }
+
+	req := st.Park(OpScale, "demo", "deployment:ns/a", intPtr(1), "tok-a")
+	if _, err := st.Reject(req.ID, "no"); err != nil {
+		t.Fatalf("reject: %v", err)
+	}
+	clock = clock.Add(90 * time.Minute)
+	if len(st.List("")) != 1 {
+		t.Fatal("swept after 90m, want retention = ttl (2h)")
+	}
+	clock = clock.Add(31 * time.Minute)
+	if len(st.List("")) != 0 {
+		t.Fatal("still listed after 2h01m")
 	}
 }
 
