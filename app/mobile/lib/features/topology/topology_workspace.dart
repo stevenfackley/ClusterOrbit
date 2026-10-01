@@ -99,7 +99,7 @@ class TopologyWorkspace extends StatelessWidget {
                           children: [
                             _header(theme, constraints.maxWidth),
                             const SizedBox(height: 12),
-                            _chips(),
+                            _chips(narrow: constraints.maxWidth < 600),
                           ],
                         ),
                       ),
@@ -204,6 +204,15 @@ class TopologyWorkspace extends StatelessWidget {
   }
 
   Widget _header(ThemeData theme, double width) {
+    final badge = ModeBadge(
+      label: '${snapshot.profile.connectionMode.label} mode',
+      tint: palette.accentTeal,
+    );
+    // A phone's AppBar already says Cluster Map, and every line here comes
+    // out of the canvas: just the badge.
+    if (width < 600) {
+      return Align(alignment: Alignment.centerLeft, child: badge);
+    }
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -217,16 +226,13 @@ class TopologyWorkspace extends StatelessWidget {
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
-              // Too long to be worth its height on narrow cards.
-              if (width >= 600) ...[
-                const SizedBox(height: 8),
-                Text(
-                  'Machine-first topology canvas for ${snapshot.profile.name}. Pan and zoom to inspect placement, workload fan-out, and service attachment.',
-                  style: theme.textTheme.bodyLarge,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ],
+              const SizedBox(height: 8),
+              Text(
+                'Machine-first topology canvas for ${snapshot.profile.name}. Pan and zoom to inspect placement, workload fan-out, and service attachment.',
+                style: theme.textTheme.bodyLarge,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
             ],
           ),
         ),
@@ -234,45 +240,48 @@ class TopologyWorkspace extends StatelessWidget {
         // Natural width, capped so the title keeps most of the row.
         ConstrainedBox(
           constraints: BoxConstraints(maxWidth: width * 0.4),
-          child: ModeBadge(
-            label: '${snapshot.profile.connectionMode.label} mode',
-            tint: palette.accentTeal,
-          ),
+          child: badge,
         ),
       ],
     );
   }
 
-  Widget _chips() {
+  /// The filter chips, after the summary chips. On a [narrow] card the
+  /// summary chips are dropped and the filter chips carry the counts.
+  Widget _chips({required bool narrow}) {
+    String label(String kind, int count) => narrow ? '$kind $count' : kind;
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
       child: Row(
         children: [
-          SummaryChip(label: 'Nodes', value: '${snapshot.nodes.length}'),
-          const SizedBox(width: 12),
-          SummaryChip(
-              label: 'Workloads', value: '${snapshot.workloads.length}'),
-          const SizedBox(width: 12),
-          SummaryChip(label: 'Services', value: '${snapshot.services.length}'),
-          const SizedBox(width: 12),
-          SummaryChip(label: 'Links', value: '${snapshot.links.length}'),
-          const SizedBox(width: 12),
-          SummaryChip(label: 'Alerts', value: '${snapshot.alerts.length}'),
-          const SizedBox(width: 24),
+          if (!narrow) ...[
+            SummaryChip(label: 'Nodes', value: '${snapshot.nodes.length}'),
+            const SizedBox(width: 12),
+            SummaryChip(
+                label: 'Workloads', value: '${snapshot.workloads.length}'),
+            const SizedBox(width: 12),
+            SummaryChip(
+                label: 'Services', value: '${snapshot.services.length}'),
+            const SizedBox(width: 12),
+            SummaryChip(label: 'Links', value: '${snapshot.links.length}'),
+            const SizedBox(width: 12),
+            SummaryChip(label: 'Alerts', value: '${snapshot.alerts.length}'),
+            const SizedBox(width: 24),
+          ],
           TopologyFilterChip(
-            label: 'Nodes',
+            label: label('Nodes', snapshot.nodes.length),
             selected: filter.showNodes,
             onChanged: (v) => onFilterChange(filter.copyWith(showNodes: v)),
           ),
           const SizedBox(width: 8),
           TopologyFilterChip(
-            label: 'Workloads',
+            label: label('Workloads', snapshot.workloads.length),
             selected: filter.showWorkloads,
             onChanged: (v) => onFilterChange(filter.copyWith(showWorkloads: v)),
           ),
           const SizedBox(width: 8),
           TopologyFilterChip(
-            label: 'Services',
+            label: label('Services', snapshot.services.length),
             selected: filter.showServices,
             onChanged: (v) => onFilterChange(filter.copyWith(showServices: v)),
           ),

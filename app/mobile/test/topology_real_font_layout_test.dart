@@ -3,6 +3,7 @@ import 'package:clusterorbit_mobile/core/connectivity/sample_cluster_data.dart';
 import 'package:clusterorbit_mobile/core/theme/clusterorbit_theme.dart';
 import 'package:clusterorbit_mobile/features/topology/entity_detail_panel.dart';
 import 'package:clusterorbit_mobile/features/topology/topology_orbs.dart';
+import 'package:clusterorbit_mobile/features/topology/topology_workspace.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -103,6 +104,33 @@ void main() {
       expect(canvas.contains(card.bottomRight - const Offset(1, 1)), isTrue,
           reason: '$card');
     }
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+      'phone map: the header is one badge and the filter chips, so the '
+      'canvas gets the height', (tester) async {
+    setSurface(tester, const Size(390, 844));
+    await pumpClusterOrbitApp(tester);
+    await showPhoneMap(tester);
+
+    final workspace = find.byType(TopologyWorkspace);
+    expect(find.descendant(of: workspace, matching: find.text('Cluster Map')),
+        findsNothing,
+        reason: 'the AppBar already says it');
+    expect(find.byType(SummaryChip), findsNothing);
+    expect(find.byType(ModeBadge), findsOneWidget);
+    for (final (label, count) in [
+      ('Nodes', snapshot.nodes.length),
+      ('Workloads', snapshot.workloads.length),
+      ('Services', snapshot.services.length),
+    ]) {
+      expect(find.widgetWithText(FilterChip, '$label $count'), findsOneWidget);
+    }
+
+    // 406 tall under the title row and the five summary chips.
+    expect(tester.getSize(find.byType(InteractiveViewer)).height,
+        greaterThan(430));
     expect(tester.takeException(), isNull);
   });
 }
