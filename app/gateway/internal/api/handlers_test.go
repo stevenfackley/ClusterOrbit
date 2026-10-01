@@ -692,12 +692,18 @@ func TestFailedAuthIsRateLimited(t *testing.T) {
 }
 
 func TestForwardedForTrustedOnlyWhenEnabled(t *testing.T) {
+	oneLine := []string{"203.0.113.9, 198.51.100.7"}
 	for _, tc := range []struct {
 		trust bool
+		xff   []string
 		want  string
 	}{
-		{false, "127.0.0.1"},
-		{true, "198.51.100.7"}, // the entry the nearest proxy appended
+		{false, oneLine, "127.0.0.1"},
+		{true, oneLine, "198.51.100.7"}, // the entry the nearest proxy appended
+		// A proxy may add its own header line; repeated lines are one list.
+		{true, []string{"6.6.6.6", "198.51.100.7"}, "198.51.100.7"},
+		// An empty last entry names nobody, so fall back to the TCP peer.
+		{true, []string{"198.51.100.7,"}, "127.0.0.1"},
 	} {
 		var entries []AuditEntry
 		s := &Server{
@@ -707,7 +713,9 @@ func TestForwardedForTrustedOnlyWhenEnabled(t *testing.T) {
 		}
 		ts := httptest.NewServer(s.Handler())
 		req, _ := http.NewRequest(http.MethodPost, ts.URL+"/v1/clusters/demo/nodes/worker-1/cordon", nil)
-		req.Header.Set("X-Forwarded-For", "203.0.113.9, 198.51.100.7")
+		for _, line := range tc.xff {
+			req.Header.Add("X-Forwarded-For", line)
+		}
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			t.Fatalf("post: %v", err)
@@ -715,7 +723,7 @@ func TestForwardedForTrustedOnlyWhenEnabled(t *testing.T) {
 		resp.Body.Close()
 		ts.Close()
 		if len(entries) != 1 || entries[0].Identity != tc.want {
-			t.Fatalf("trust=%v: audit entries = %+v, want identity %q", tc.trust, entries, tc.want)
+			t.Fatalf("trust=%v xff=%q: audit entries = %+v, want identity %q", tc.trust, tc.xff, entries, tc.want)
 		}
 	}
 }

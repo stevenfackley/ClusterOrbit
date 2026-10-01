@@ -87,8 +87,9 @@ func main() {
 		TLSConfig:         tlsCfg,
 	}
 
-	fmt.Printf("%s listening on %s (auth=%s backend=%s tls=%s rate=%s audit=%s policy=%s nodePolicy=%s approval=%s)\n",
-		startupBanner, addr, authLabel(tokens), backendLabel, tlsLabel, rateLabel(limiter), auditLabel, policyLabel, nodePolicyLabel, approvalLabel)
+	fmt.Printf("%s listening on %s (auth=%s backend=%s tls=%s rate=%s trustProxy=%s audit=%s policy=%s nodePolicy=%s approval=%s)\n",
+		startupBanner, addr, authLabel(tokens), backendLabel, tlsLabel, rateLabel(limiter), trustProxyLabel(trustProxy, tokens),
+		auditLabel, policyLabel, nodePolicyLabel, approvalLabel)
 
 	// Serve in a goroutine; main goroutine waits for SIGTERM/SIGINT then
 	// triggers a graceful shutdown so in-flight requests and the audit
@@ -445,6 +446,20 @@ func rateLabel(rl *api.RateLimiter) string {
 		return "off"
 	}
 	return "on"
+}
+
+// trustProxyLabel reports CLUSTERORBIT_GATEWAY_TRUST_PROXY. The forwarded
+// client IP only matters with auth off, where it is the caller identity; with
+// tokens the identity is the token, so the setting has no effect.
+func trustProxyLabel(trust bool, tokens []string) string {
+	switch {
+	case !trust:
+		return "off"
+	case len(tokens) > 0:
+		return "on (unused with token auth)"
+	default:
+		return "on"
+	}
 }
 
 func envOrDefault(key, fallback string) string {

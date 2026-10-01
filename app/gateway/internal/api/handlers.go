@@ -51,9 +51,10 @@ type Server struct {
 	// disabled). Requests that exceed the limit return 429.
 	Limiter *RateLimiter
 	// TrustForwardedFor makes the client IP the last X-Forwarded-For entry
-	// instead of the TCP peer address. Set it only behind a reverse proxy
-	// that appends or overwrites that header; otherwise any client can choose
-	// its own rate-limit bucket and, with auth off, its audit identity.
+	// instead of the TCP peer address. The client IP is used only with auth
+	// off, as the identity (rate-limit bucket and audit identity). Set it
+	// only behind a reverse proxy that appends to that header or adds its own
+	// line; otherwise any client can choose its own identity.
 	TrustForwardedFor bool
 	// AuditSink, if set, records every mutation request (success or failure).
 	// Passed as a func so callers can plug in a file, stdout, or a channel
@@ -172,11 +173,14 @@ func (s *Server) identity(r *http.Request) string {
 
 // clientIP is the TCP peer address, or the last X-Forwarded-For entry (the
 // address the nearest proxy saw; earlier entries are client-supplied) when
-// TrustForwardedFor is set.
+// TrustForwardedFor is set. Repeated header lines form one list, since a
+// proxy may add its own line rather than append to the client's. An empty
+// last entry falls back to the peer address.
 func (s *Server) clientIP(r *http.Request) string {
 	if s.TrustForwardedFor {
-		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-			return strings.TrimSpace(xff[strings.LastIndexByte(xff, ',')+1:])
+		xff := strings.Join(r.Header.Values("X-Forwarded-For"), ",")
+		if ip := strings.TrimSpace(xff[strings.LastIndexByte(xff, ',')+1:]); ip != "" {
+			return ip
 		}
 	}
 	return remoteHost(r)

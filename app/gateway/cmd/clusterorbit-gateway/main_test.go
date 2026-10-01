@@ -230,3 +230,20 @@ func TestBuildLimiter(t *testing.T) {
 		})
 	}
 }
+
+func TestTrustProxyLabel(t *testing.T) {
+	cases := []struct {
+		trust  bool
+		tokens []string
+		want   string
+	}{
+		{false, nil, "off"},
+		{true, nil, "on"},
+		{true, []string{"tok"}, "on (unused with token auth)"},
+	}
+	for _, tc := range cases {
+		if got := trustProxyLabel(tc.trust, tc.tokens); got != tc.want {
+			t.Errorf("trustProxyLabel(%v, %d tokens) = %q, want %q", tc.trust, len(tc.tokens), got, tc.want)
+		}
+	}
+}
