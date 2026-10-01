@@ -122,7 +122,7 @@ func sampleSnapshot(profile ClusterProfile, now time.Time) ClusterSnapshot {
 	}
 	workloads := []ClusterWorkload{
 		{
-			ID: "wl-api", Namespace: platformNS, Name: "api",
+			ID: "deployment:platform/api", Namespace: platformNS, Name: "api",
 			Kind: "deployment", DesiredReplicas: 3, ReadyReplicas: 3,
 			NodeIDs: []string{"node-worker-1"}, Health: "healthy",
 			Images: []string{"ghcr.io/example/api:1.2.3"},
@@ -131,7 +131,7 @@ func sampleSnapshot(profile ClusterProfile, now time.Time) ClusterSnapshot {
 	services := []ClusterService{
 		{
 			ID: "svc-api", Namespace: platformNS, Name: "api",
-			Exposure: "clusterIp", TargetWorkloadIDs: []string{"wl-api"},
+			Exposure: "clusterIp", TargetWorkloadIDs: []string{"deployment:platform/api"},
 			Ports:  []ServicePort{{Port: 80, TargetPort: 8080, Protocol: "TCP"}},
 			Health: "healthy", ClusterIP: &clusterIP,
 		},
@@ -144,8 +144,8 @@ func sampleSnapshot(profile ClusterProfile, now time.Time) ClusterSnapshot {
 		},
 	}
 	links := []TopologyLink{
-		{SourceID: "wl-api", TargetID: "node-worker-1", Kind: "workload"},
-		{SourceID: "svc-api", TargetID: "wl-api", Kind: "service"},
+		{SourceID: "deployment:platform/api", TargetID: "node-worker-1", Kind: "workload"},
+		{SourceID: "svc-api", TargetID: "deployment:platform/api", Kind: "service"},
 	}
 	return ClusterSnapshot{
 		Profile:     profile,

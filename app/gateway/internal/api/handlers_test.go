@@ -338,6 +338,31 @@ func TestScaleWorkloadUnsupportedBackend(t *testing.T) {
 	}
 }
 
+// The sample snapshot's own workload IDs must pass the handlers' ID checks, so
+// sample mode answers 501, not a 400 that blames the client.
+func TestSampleWorkloadMutationsAreUnsupported(t *testing.T) {
+	sb := NewSampleBackend()
+	snap, err := sb.LoadSnapshot(context.Background(), "")
+	if err != nil || len(snap.Workloads) == 0 {
+		t.Fatalf("sample snapshot: %d workloads, err %v", len(snap.Workloads), err)
+	}
+	ts := httptest.NewServer((&Server{Backend: sb}).Handler())
+	defer ts.Close()
+
+	base := ts.URL + "/v1/clusters/" + url.PathEscape(snap.Profile.ID) + "/workloads/" + url.PathEscape(snap.Workloads[0].ID)
+	for verb, body := range map[string]string{"scale": `{"replicas":2}`, "restart": ""} {
+		resp, err := http.Post(base+"/"+verb, "application/json", bytes.NewBufferString(body))
+		if err != nil {
+			t.Fatalf("post %s: %v", verb, err)
+		}
+		msg, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusNotImplemented {
+			t.Fatalf("%s %s = %d %s, want 501", verb, snap.Workloads[0].ID, resp.StatusCode, msg)
+		}
+	}
+}
+
 func TestScaleWorkloadPathValidation(t *testing.T) {
 	s := &Server{Backend: NewSampleBackend()}
 	ts := httptest.NewServer(s.Handler())
