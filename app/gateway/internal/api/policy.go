@@ -1,9 +1,6 @@
 package api
 
-import (
-	"fmt"
-	"strings"
-)
+import "fmt"
 
 // ScalePolicy gates scale mutations before they reach the backend. Zero value
 // is "no policy" — every request allowed. Each field can be set independently:
@@ -20,51 +17,34 @@ type ScalePolicy struct {
 	AllowedNamespaces []string
 }
 
-// Evaluate returns a non-empty reason when the request violates policy. The
-// reason is surfaced both in the HTTP error and the audit record so an
-// operator sees exactly which rule fired.
-func (p *ScalePolicy) Evaluate(workloadID string, replicas int) string {
+// Evaluate returns a non-empty reason when scaling a workload in namespace to
+// replicas violates policy. The reason is surfaced both in the HTTP error and
+// the audit record so an operator sees exactly which rule fired.
+func (p *ScalePolicy) Evaluate(namespace string, replicas int) string {
 	if p == nil {
 		return ""
 	}
 	if p.MaxReplicas > 0 && replicas > p.MaxReplicas {
 		return fmt.Sprintf("replicas %d exceeds max %d", replicas, p.MaxReplicas)
 	}
-	return p.EvaluateNamespace(workloadID)
+	return p.EvaluateNamespace(namespace)
 }
 
 // EvaluateNamespace runs only the namespace-allowlist portion of the policy.
-// Mutations without a replica dimension (restart, future cordon/drain) call
-// this so they share the same allowlist gate as scale without the ceiling.
-func (p *ScalePolicy) EvaluateNamespace(workloadID string) string {
+// Restart has no replica dimension, so it calls this to share scale's
+// allowlist gate without the ceiling. namespace is the one ParseWorkloadID
+// validated; an empty one fails closed.
+func (p *ScalePolicy) EvaluateNamespace(namespace string) string {
 	if p == nil || len(p.AllowedNamespaces) == 0 {
 		return ""
 	}
-	ns := workloadNamespace(workloadID)
-	if ns == "" {
-		return "workload id missing namespace"
+	if namespace == "" {
+		return "workload namespace is empty"
 	}
-	if !containsString(p.AllowedNamespaces, ns) {
-		return fmt.Sprintf("namespace %q not in allowlist", ns)
+	if !containsString(p.AllowedNamespaces, namespace) {
+		return fmt.Sprintf("namespace %q not in allowlist", namespace)
 	}
 	return ""
-}
-
-// workloadNamespace extracts the namespace from a "{kind}:{namespace}/{name}"
-// workload id. Returns "" when the id has neither a colon nor a slash in the
-// expected positions — callers treat that as a policy failure, not a parse
-// error, so the gate defaults to closed.
-func workloadNamespace(id string) string {
-	colon := strings.IndexByte(id, ':')
-	if colon < 0 || colon == len(id)-1 {
-		return ""
-	}
-	rest := id[colon+1:]
-	slash := strings.IndexByte(rest, '/')
-	if slash <= 0 {
-		return ""
-	}
-	return rest[:slash]
 }
 
 // NodePolicy gates node-level mutations (cordon, drain) before they reach the
@@ -112,18 +92,13 @@ func (p *NodePolicy) EvaluateDrain(nodeID string) string {
 
 // evaluateNode runs the shared allow/deny check for node mutations. Returns ""
 // when nodeID may be mutated, otherwise a human-readable reason surfaced in
-// both the HTTP 403 and the audit record.
-//
-// TODO(you): implement the decision. The failing tests in policy_test.go
-// (TestNodePolicyEvaluateCordon / TestNodePolicyEvaluateDrain) are the spec.
-// Evaluate in this order so the most restrictive rule wins:
+// both the HTTP 403 and the audit record. Rules apply in this order, so the
+// most restrictive one wins:
 //
 //  1. empty nodeID                                  → "node id is empty"
 //  2. nodeID in p.ProtectedNodes                    → `node %q is protected`
 //  3. p.AllowedNodes non-empty AND nodeID not in it → `node %q not in allowlist`
 //  4. otherwise                                     → "" (allowed)
-//
-// containsString(haystack, needle) is defined just below this function.
 func (p *NodePolicy) evaluateNode(nodeID string) string {
 	if nodeID == "" {
 		return "node id is empty"

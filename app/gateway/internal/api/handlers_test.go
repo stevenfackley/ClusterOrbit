@@ -8,7 +8,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"sync"
+	"net/url"
+	"slices"
 	"testing"
 )
 
@@ -96,6 +97,62 @@ func TestSnapshotUnknownCluster(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
+// anyClusterBackend is a recordingBackend that serves a snapshot for any
+// cluster ID.
+type anyClusterBackend struct{ *recordingBackend }
+
+func (b anyClusterBackend) LoadSnapshot(_ context.Context, clusterID string) (ClusterSnapshot, error) {
+	return ClusterSnapshot{Profile: ClusterProfile{ID: clusterID}}, nil
+}
+
+// EKS kubeconfigs name contexts after the cluster ARN, which contains "/".
+// Clients send it as one %2F-escaped segment.
+func TestClusterIDWithSlashRoutes(t *testing.T) {
+	const arn = "arn:aws:eks:us-east-1:111122223333:cluster/prod"
+	rb := &recordingBackend{ClusterBackend: NewSampleBackend()}
+	s := newApprovalServer(rb, OpRestart)
+	s.Backend = anyClusterBackend{rb}
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+	base := ts.URL + "/v1/clusters/" + url.PathEscape(arn)
+	workload := url.PathEscape("deployment:platform/api")
+
+	resp := getAs(t, base+"/snapshot", "tok-a")
+	var snap ClusterSnapshot
+	err := json.NewDecoder(resp.Body).Decode(&snap)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || err != nil || snap.Profile.ID != arn {
+		t.Fatalf("snapshot status = %d err = %v profile = %q", resp.StatusCode, err, snap.Profile.ID)
+	}
+
+	resp = postAs(t, base+"/workloads/"+workload+"/scale", "tok-a", `{"replicas":3}`)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || rb.gotCluster != arn || rb.gotWorkload != "deployment:platform/api" {
+		t.Fatalf("scale status = %d cluster = %q workload = %q", resp.StatusCode, rb.gotCluster, rb.gotWorkload)
+	}
+
+	resp = postAs(t, base+"/workloads/"+workload+"/restart", "tok-a", "")
+	loc := resp.Header.Get("Location")
+	park := decodePending(t, resp)
+	if park.ClusterID != arn {
+		t.Fatalf("parked clusterId = %q, want %q", park.ClusterID, arn)
+	}
+	if want := "/v1/clusters/" + url.PathEscape(arn) + "/approvals/" + park.ID; loc != want {
+		t.Fatalf("Location = %q, want %q", loc, want)
+	}
+	resp = getAs(t, base+"/approvals", "tok-b")
+	var list []PendingRequest
+	err = json.NewDecoder(resp.Body).Decode(&list)
+	resp.Body.Close()
+	if err != nil || len(list) != 1 || list[0].ID != park.ID {
+		t.Fatalf("approvals list = %+v err = %v", list, err)
+	}
+	done := decodePending(t, postAs(t, base+"/approvals/"+park.ID+"/approve", "tok-b", ""))
+	if done.Phase != ApprovalPhaseSucceeded || rb.restartCalls != 1 || rb.gotCluster != arn {
+		t.Fatalf("approve = %+v restartCalls = %d cluster = %q", done, rb.restartCalls, rb.gotCluster)
 	}
 }
 
@@ -194,79 +251,6 @@ func TestServerRejectsUnknownToken(t *testing.T) {
 	}
 }
 
-type recordingBackend struct {
-	ClusterBackend
-	mu               sync.Mutex
-	scaleCalls       int
-	restartCalls     int
-	cordonCalls      int
-	startDrainCalls  int
-	drainStatusCalls int
-	gotCluster       string
-	gotWorkload      string
-	gotNode          string
-	gotJobID         string
-	gotReplicas      int
-	gotUnschedulable bool
-	drainJob         DrainJob
-	statusJob        DrainJob
-	returnErr        error
-}
-
-func (r *recordingBackend) ScaleWorkload(_ context.Context, clusterID, workloadID string, replicas int) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.scaleCalls++
-	r.gotCluster = clusterID
-	r.gotWorkload = workloadID
-	r.gotReplicas = replicas
-	return r.returnErr
-}
-
-func (r *recordingBackend) RestartWorkload(_ context.Context, clusterID, workloadID string) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.restartCalls++
-	r.gotCluster = clusterID
-	r.gotWorkload = workloadID
-	return r.returnErr
-}
-
-func (r *recordingBackend) CordonNode(_ context.Context, clusterID, nodeID string, unschedulable bool) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.cordonCalls++
-	r.gotCluster = clusterID
-	r.gotNode = nodeID
-	r.gotUnschedulable = unschedulable
-	return r.returnErr
-}
-
-func (r *recordingBackend) StartDrain(_ context.Context, clusterID, nodeID string) (DrainJob, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.startDrainCalls++
-	r.gotCluster = clusterID
-	r.gotNode = nodeID
-	if r.returnErr != nil {
-		return DrainJob{}, r.returnErr
-	}
-	return r.drainJob, nil
-}
-
-func (r *recordingBackend) DrainStatus(_ context.Context, clusterID, nodeID, jobID string) (DrainJob, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.drainStatusCalls++
-	r.gotCluster = clusterID
-	r.gotNode = nodeID
-	r.gotJobID = jobID
-	if r.returnErr != nil {
-		return DrainJob{}, r.returnErr
-	}
-	return r.statusJob, nil
-}
-
 func TestScaleWorkloadSuccessAndAudit(t *testing.T) {
 	sample := NewSampleBackend()
 	rb := &recordingBackend{ClusterBackend: sample}
@@ -351,6 +335,31 @@ func TestScaleWorkloadUnsupportedBackend(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusNotImplemented {
 		t.Fatalf("status = %d, want 501", resp.StatusCode)
+	}
+}
+
+// The sample snapshot's own workload IDs must pass the handlers' ID checks, so
+// sample mode answers 501, not a 400 that blames the client.
+func TestSampleWorkloadMutationsAreUnsupported(t *testing.T) {
+	sb := NewSampleBackend()
+	snap, err := sb.LoadSnapshot(context.Background(), "")
+	if err != nil || len(snap.Workloads) == 0 {
+		t.Fatalf("sample snapshot: %d workloads, err %v", len(snap.Workloads), err)
+	}
+	ts := httptest.NewServer((&Server{Backend: sb}).Handler())
+	defer ts.Close()
+
+	base := ts.URL + "/v1/clusters/" + url.PathEscape(snap.Profile.ID) + "/workloads/" + url.PathEscape(snap.Workloads[0].ID)
+	for verb, body := range map[string]string{"scale": `{"replicas":2}`, "restart": ""} {
+		resp, err := http.Post(base+"/"+verb, "application/json", bytes.NewBufferString(body))
+		if err != nil {
+			t.Fatalf("post %s: %v", verb, err)
+		}
+		msg, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusNotImplemented {
+			t.Fatalf("%s %s = %d %s, want 501", verb, snap.Workloads[0].ID, resp.StatusCode, msg)
+		}
 	}
 }
 
@@ -682,5 +691,64 @@ func TestServerRateLimits(t *testing.T) {
 	}
 	if last != http.StatusTooManyRequests {
 		t.Fatalf("3rd request status = %d, want 429", last)
+	}
+}
+
+func TestFailedAuthIsRateLimited(t *testing.T) {
+	s := &Server{
+		Backend: NewSampleBackend(),
+		Tokens:  []string{"valid"},
+		Limiter: NewRateLimiter(0.001, 2),
+	}
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	var got []int
+	for _, tok := range []string{"guess-1", "guess-2", "guess-3", "valid"} {
+		resp := getAs(t, ts.URL+"/v1/clusters", tok)
+		resp.Body.Close()
+		got = append(got, resp.StatusCode)
+	}
+	// Guesses share one bucket per source address; a valid token has its own.
+	want := []int{http.StatusUnauthorized, http.StatusUnauthorized, http.StatusTooManyRequests, http.StatusOK}
+	if !slices.Equal(got, want) {
+		t.Fatalf("statuses = %v, want %v", got, want)
+	}
+}
+
+func TestForwardedForTrustedOnlyWhenEnabled(t *testing.T) {
+	oneLine := []string{"203.0.113.9, 198.51.100.7"}
+	for _, tc := range []struct {
+		trust bool
+		xff   []string
+		want  string
+	}{
+		{false, oneLine, "127.0.0.1"},
+		{true, oneLine, "198.51.100.7"}, // the entry the nearest proxy appended
+		// A proxy may add its own header line; repeated lines are one list.
+		{true, []string{"6.6.6.6", "198.51.100.7"}, "198.51.100.7"},
+		// An empty last entry names nobody, so fall back to the TCP peer.
+		{true, []string{"198.51.100.7,"}, "127.0.0.1"},
+	} {
+		var entries []AuditEntry
+		s := &Server{
+			Backend:           &recordingBackend{ClusterBackend: NewSampleBackend()},
+			TrustForwardedFor: tc.trust,
+			AuditSink:         func(e AuditEntry) { entries = append(entries, e) },
+		}
+		ts := httptest.NewServer(s.Handler())
+		req, _ := http.NewRequest(http.MethodPost, ts.URL+"/v1/clusters/demo/nodes/worker-1/cordon", nil)
+		for _, line := range tc.xff {
+			req.Header.Add("X-Forwarded-For", line)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("post: %v", err)
+		}
+		resp.Body.Close()
+		ts.Close()
+		if len(entries) != 1 || entries[0].Identity != tc.want {
+			t.Fatalf("trust=%v xff=%q: audit entries = %+v, want identity %q", tc.trust, tc.xff, entries, tc.want)
+		}
 	}
 }

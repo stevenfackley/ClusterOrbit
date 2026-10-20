@@ -22,6 +22,21 @@ const (
 	workloadKindJob         = "job"
 )
 
+// Wire enum values mirror the Dart TopologyLinkKind, NodeRole and
+// ServiceExposure enums.
+const (
+	linkKindWorkload = "workload"
+	linkKindService  = "service"
+
+	nodeRoleWorker       = "worker"
+	nodeRoleControlPlane = "controlPlane"
+
+	exposureClusterIP    = "clusterIp"
+	exposureNodePort     = "nodePort"
+	exposureLoadBalancer = "loadBalancer"
+	exposureIngress      = "ingress"
+)
+
 // health levels mirror the Dart ClusterHealthLevel enum (lowercase name()).
 const (
 	healthHealthy  = "healthy"
@@ -83,7 +98,8 @@ func mapAt(src map[string]any, path ...string) map[string]string {
 	}
 	out := make(map[string]string, len(m))
 	for k, val := range m {
-		out[k] = toString(val)
+		str, _ := val.(string)
+		out[k] = str
 	}
 	return out
 }
@@ -108,17 +124,6 @@ func valueAt(src map[string]any, path []string) any {
 	return cur
 }
 
-func toString(v any) string {
-	switch x := v.(type) {
-	case string:
-		return x
-	case nil:
-		return ""
-	default:
-		return ""
-	}
-}
-
 func resourceKey(namespace, name string) string {
 	return namespace + "/" + name
 }
@@ -127,27 +132,24 @@ func resourceID(prefix, namespace, name string) string {
 	return prefix + ":" + namespace + "/" + name
 }
 
-func workloadID(kind, namespace, name string) string {
-	return resourceID(kind, namespace, name)
+// rawLists holds the raw Kubernetes list responses a snapshot is built from.
+type rawLists struct {
+	nodes, pods, services, deployments, daemonSets, statefulSets, jobs, replicaSets map[string]any
 }
 
 // transformSnapshot builds a ClusterSnapshot from raw Kubernetes API list
 // responses. Mirrors the Dart transformation 1:1 for the entities supported
 // here (nodes, pods, services, deployments, daemonsets, statefulsets, jobs,
 // replicasets).
-func transformSnapshot(
-	profile api.ClusterProfile,
-	generatedAt time.Time,
-	nodes, pods, services, deployments, daemonSets, statefulSets, jobs, replicaSets map[string]any,
-) api.ClusterSnapshot {
-	nodeItems := listItems(nodes)
-	podItems := listItems(pods)
-	serviceItems := listItems(services)
-	deploymentItems := listItems(deployments)
-	daemonSetItems := listItems(daemonSets)
-	statefulSetItems := listItems(statefulSets)
-	jobItems := listItems(jobs)
-	replicaSetItems := listItems(replicaSets)
+func transformSnapshot(profile api.ClusterProfile, generatedAt time.Time, raw rawLists) api.ClusterSnapshot {
+	nodeItems := listItems(raw.nodes)
+	podItems := listItems(raw.pods)
+	serviceItems := listItems(raw.services)
+	deploymentItems := listItems(raw.deployments)
+	daemonSetItems := listItems(raw.daemonSets)
+	statefulSetItems := listItems(raw.statefulSets)
+	jobItems := listItems(raw.jobs)
+	replicaSetItems := listItems(raw.replicaSets)
 
 	nodePodCounts := map[string]int{}
 	replicaSetOwners := replicaSetOwnerMap(replicaSetItems)
@@ -156,7 +158,8 @@ func transformSnapshot(
 	workloadHealthSignals := map[string]string{}
 
 	for _, pod := range podItems {
-		if nodeName := stringAt(pod, "spec", "nodeName"); nodeName != "" {
+		nodeName := stringAt(pod, "spec", "nodeName")
+		if nodeName != "" {
 			nodePodCounts[nodeName]++
 		}
 
@@ -165,17 +168,12 @@ func transformSnapshot(
 			continue
 		}
 
+		// workloadIDForPod returned non-empty, so the namespace is set.
 		namespace := stringAt(pod, "metadata", "namespace")
-		if namespace == "" {
-			namespace = "default"
-		}
 		name := stringAt(pod, "metadata", "name")
-		if name == "" {
-			name = wid
-		}
 		podWorkloadIDs[resourceKey(namespace, name)] = wid
 
-		if nodeName := stringAt(pod, "spec", "nodeName"); nodeName != "" {
+		if nodeName != "" {
 			if _, ok := workloadNodeIDs[wid]; !ok {
 				workloadNodeIDs[wid] = map[string]struct{}{}
 			}
@@ -183,6 +181,11 @@ func transformSnapshot(
 		}
 
 		phase := strings.ToLower(stringAt(pod, "status", "phase"))
+		// A Job's Failed and Succeeded pods are earlier or finished
+		// attempts; only its live pods say how it is doing now.
+		if strings.HasPrefix(wid, workloadKindJob+":") && (phase == "failed" || phase == "succeeded") {
+			continue
+		}
 		containerStatuses := listAt(pod, "status", "containerStatuses")
 		hasRestart := false
 		for _, cs := range containerStatuses {
@@ -219,7 +222,7 @@ func transformSnapshot(
 		nodesOut = append(nodesOut, nodeFromItem(item, nodePodCounts))
 	}
 
-	var workloads []api.ClusterWorkload
+	workloads := make([]api.ClusterWorkload, 0, len(deploymentItems)+len(daemonSetItems)+len(statefulSetItems)+len(jobItems))
 	workloads = append(workloads, workloadsFromItems(deploymentItems, workloadKindDeployment, workloadNodeIDs, workloadHealthSignals)...)
 	workloads = append(workloads, workloadsFromItems(daemonSetItems, workloadKindDaemonSet, workloadNodeIDs, workloadHealthSignals)...)
 	workloads = append(workloads, workloadsFromItems(statefulSetItems, workloadKindStatefulSet, workloadNodeIDs, workloadHealthSignals)...)
@@ -238,7 +241,7 @@ func transformSnapshot(
 
 	alerts := []api.ClusterAlert{}
 	alerts = append(alerts, nodeAlerts(nodesOut)...)
-	alerts = append(alerts, workloadAlerts(workloads)...)
+	alerts = append(alerts, workloadAlerts(workloads, failedJobIDs(jobItems))...)
 	alerts = append(alerts, serviceAlerts(servicesOut)...)
 
 	links := []api.TopologyLink{}
@@ -247,7 +250,7 @@ func transformSnapshot(
 			links = append(links, api.TopologyLink{
 				SourceID: nodeID,
 				TargetID: w.ID,
-				Kind:     "workload",
+				Kind:     linkKindWorkload,
 			})
 		}
 	}
@@ -256,7 +259,7 @@ func transformSnapshot(
 			links = append(links, api.TopologyLink{
 				SourceID: s.ID,
 				TargetID: wid,
-				Kind:     "service",
+				Kind:     linkKindService,
 				Label:    serviceExposureLabel(s.Exposure),
 			})
 		}
@@ -293,7 +296,7 @@ func replicaSetOwnerMap(items []map[string]any) map[string]string {
 			if depName == "" {
 				continue
 			}
-			owners[resourceKey(namespace, name)] = workloadID(workloadKindDeployment, namespace, depName)
+			owners[resourceKey(namespace, name)] = resourceID(workloadKindDeployment, namespace, depName)
 			break
 		}
 	}
@@ -319,11 +322,11 @@ func workloadIDForPod(pod map[string]any, replicaSetOwners map[string]string) st
 		case "ReplicaSet":
 			return replicaSetOwners[resourceKey(namespace, name)]
 		case "DaemonSet":
-			return workloadID(workloadKindDaemonSet, namespace, name)
+			return resourceID(workloadKindDaemonSet, namespace, name)
 		case "StatefulSet":
-			return workloadID(workloadKindStatefulSet, namespace, name)
+			return resourceID(workloadKindStatefulSet, namespace, name)
 		case "Job":
-			return workloadID(workloadKindJob, namespace, name)
+			return resourceID(workloadKindJob, namespace, name)
 		}
 	}
 	return ""
@@ -386,11 +389,11 @@ func nodeFromItem(item map[string]any, podCounts map[string]int) api.ClusterNode
 		health = healthHealthy
 	}
 
-	role := "worker"
+	role := nodeRoleWorker
 	if _, ok := labels["node-role.kubernetes.io/control-plane"]; ok {
-		role = "controlPlane"
+		role = nodeRoleControlPlane
 	} else if _, ok := labels["node-role.kubernetes.io/master"]; ok {
-		role = "controlPlane"
+		role = nodeRoleControlPlane
 	}
 
 	zone := labels["topology.kubernetes.io/zone"]
@@ -431,15 +434,8 @@ func workloadsFromItems(
 ) []api.ClusterWorkload {
 	out := make([]api.ClusterWorkload, 0, len(items))
 	for _, item := range items {
-		namespace := stringAt(item, "metadata", "namespace")
-		if namespace == "" {
-			namespace = "default"
-		}
-		name := stringAt(item, "metadata", "name")
-		if name == "" {
-			name = "unknown"
-		}
-		wid := workloadID(kind, namespace, name)
+		namespace, name := namespaceAndName(item)
+		wid := resourceID(kind, namespace, name)
 
 		var desired, ready int
 		switch kind {
@@ -461,12 +457,18 @@ func workloadsFromItems(
 			}
 		}
 
+		// A Job is below its completions until it finishes, so it warns only
+		// once failed; other kinds warn on replica skew. Otherwise the pod
+		// signals decide.
 		var health string
-		if ready < desired {
+		switch {
+		case kind == workloadKindJob && jobFailed(item):
 			health = healthWarning
-		} else if signal := healthSignals[wid]; signal != "" {
-			health = signal
-		} else {
+		case kind != workloadKindJob && ready < desired:
+			health = healthWarning
+		case healthSignals[wid] != "":
+			health = healthSignals[wid]
+		default:
 			health = healthHealthy
 		}
 
@@ -503,6 +505,40 @@ func workloadsFromItems(
 	return out
 }
 
+// jobFailed reports whether the Job controller has declared the Job failed:
+// a Failed or FailureTarget condition with status True. Failed pods alone
+// don't count, since the controller may still retry them (between attempts
+// a Job has failed pods and none active).
+func jobFailed(item map[string]any) bool {
+	for _, c := range listAt(item, "status", "conditions") {
+		m, ok := c.(map[string]any)
+		if !ok || stringAt(m, "status") != "True" {
+			continue
+		}
+		if t := stringAt(m, "type"); t == "Failed" || t == "FailureTarget" {
+			return true
+		}
+	}
+	return false
+}
+
+// failedJobIDs returns the workload IDs of failed Jobs.
+func failedJobIDs(items []map[string]any) map[string]bool {
+	out := map[string]bool{}
+	for _, item := range items {
+		if jobFailed(item) {
+			namespace, name := namespaceAndName(item)
+			out[resourceID(workloadKindJob, namespace, name)] = true
+		}
+	}
+	return out
+}
+
+func namespaceAndName(item map[string]any) (namespace, name string) {
+	return orDefault(stringAt(item, "metadata", "namespace"), "default"),
+		orDefault(stringAt(item, "metadata", "name"), "unknown")
+}
+
 func serviceFromItem(
 	item map[string]any,
 	workloadsByID map[string]api.ClusterWorkload,
@@ -518,10 +554,12 @@ func serviceFromItem(
 	}
 	selector := mapAt(item, "spec", "selector")
 
-	var targets []string
+	// Non-nil so selectorless services marshal as [] not null.
+	targets := []string{}
 	if len(selector) > 0 {
-		for wid := range workloadsByID {
-			if matchesSelector(selector, podLabelsByWorkload[wid]) {
+		for wid, w := range workloadsByID {
+			// Selectors only match pods in the service's own namespace.
+			if w.Namespace == namespace && matchesSelector(selector, podLabelsByWorkload[wid]) {
 				targets = append(targets, wid)
 			}
 		}
@@ -537,14 +575,16 @@ func serviceFromItem(
 		ports = append(ports, api.ServicePort{
 			Name:       stringPtr(stringAt(m, "name")),
 			Port:       intAt(m, "port"),
-			TargetPort: targetPort(m["targetPort"]),
+			TargetPort: intAt(m, "targetPort"),
 			Protocol:   orDefault(stringAt(m, "protocol"), "TCP"),
 		})
 	}
 
 	exposure := serviceExposure(item)
 	health := healthHealthy
-	if len(targets) == 0 {
+	// Selectorless services (default/kubernetes, ExternalName) have no
+	// targets by design; only a selector that matches nothing is a problem.
+	if len(selector) > 0 && len(targets) == 0 {
 		health = healthWarning
 	}
 
@@ -563,20 +603,6 @@ func serviceFromItem(
 		Health:            health,
 		ClusterIP:         clusterIP,
 	}
-}
-
-func targetPort(v any) int {
-	switch x := v.(type) {
-	case float64:
-		return int(x)
-	case int:
-		return x
-	case string:
-		if n, err := strconv.Atoi(x); err == nil {
-			return n
-		}
-	}
-	return 0
 }
 
 func matchesSelector(selector map[string]string, podLabels []map[string]string) bool {
@@ -598,26 +624,26 @@ func matchesSelector(selector map[string]string, podLabels []map[string]string) 
 func serviceExposure(item map[string]any) string {
 	switch stringAt(item, "spec", "type") {
 	case "NodePort":
-		return "nodePort"
+		return exposureNodePort
 	case "LoadBalancer":
-		return "loadBalancer"
+		return exposureLoadBalancer
 	case "ExternalName":
-		return "ingress"
+		return exposureIngress
 	default:
-		return "clusterIp"
+		return exposureClusterIP
 	}
 }
 
 func serviceExposureLabel(exposure string) *string {
 	var label string
 	switch exposure {
-	case "clusterIp":
+	case exposureClusterIP:
 		label = "ClusterIP"
-	case "nodePort":
+	case exposureNodePort:
 		label = "NodePort"
-	case "loadBalancer":
+	case exposureLoadBalancer:
 		label = "LoadBalancer"
-	case "ingress":
+	case exposureIngress:
 		label = "Ingress"
 	default:
 		return nil
@@ -671,14 +697,28 @@ func nodeAlerts(nodes []api.ClusterNode) []api.ClusterAlert {
 	return out
 }
 
-func workloadAlerts(workloads []api.ClusterWorkload) []api.ClusterAlert {
+// workloadAlerts flags replica skew on controllers and failed Jobs. A Job is
+// below its completions until it finishes, so it never alerts on skew, and
+// its pods never raise an alert; only jobFailed does.
+func workloadAlerts(workloads []api.ClusterWorkload, failedJobs map[string]bool) []api.ClusterAlert {
 	var out []api.ClusterAlert
 	for _, w := range workloads {
-		if w.ReadyReplicas < w.DesiredReplicas {
+		switch {
+		case w.Kind == workloadKindJob:
+			if failedJobs[w.ID] {
+				out = append(out, api.ClusterAlert{
+					ID:      "workload-" + w.ID,
+					Title:   "Job failed",
+					Summary: w.Name + " has failed.",
+					Level:   healthWarning,
+					Scope:   "Workload health",
+				})
+			}
+		case w.ReadyReplicas < w.DesiredReplicas:
 			out = append(out, api.ClusterAlert{
 				ID:      "workload-" + w.ID,
 				Title:   "Replica skew detected",
-				Summary: w.Name + " is at " + itoa(w.ReadyReplicas) + "/" + itoa(w.DesiredReplicas) + " ready replicas.",
+				Summary: w.Name + " is at " + strconv.Itoa(w.ReadyReplicas) + "/" + strconv.Itoa(w.DesiredReplicas) + " ready replicas.",
 				Level:   healthWarning,
 				Scope:   "Workload health",
 			})
@@ -690,7 +730,7 @@ func workloadAlerts(workloads []api.ClusterWorkload) []api.ClusterAlert {
 func serviceAlerts(services []api.ClusterService) []api.ClusterAlert {
 	var out []api.ClusterAlert
 	for _, s := range services {
-		if len(s.TargetWorkloadIDs) == 0 {
+		if s.Health == healthWarning {
 			out = append(out, api.ClusterAlert{
 				ID:      "service-" + s.ID,
 				Title:   "Service has no backing workloads",
@@ -702,8 +742,6 @@ func serviceAlerts(services []api.ClusterService) []api.ClusterAlert {
 	}
 	return out
 }
-
-func itoa(n int) string { return strconv.Itoa(n) }
 
 func stringPtr(s string) *string {
 	if s == "" {

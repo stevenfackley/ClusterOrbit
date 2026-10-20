@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strings"
 	"sync"
@@ -27,15 +28,18 @@ type KubeBackend struct {
 	now     func() time.Time
 
 	// Drain job registry. Jobs are keyed by their generated ID and mutated by
-	// a background goroutine, so every access goes through drainMu.
+	// a background goroutine, so every access goes through drainMu. Finished
+	// jobs are pruned after drainJobRetention.
 	drainMu   sync.Mutex
 	drainJobs map[string]*api.DrainJob
 	// drainBackoff is the initial wait before retrying a PDB-blocked (429)
-	// eviction; it doubles up to drainMaxBackoff. drainTimeout caps the whole
-	// drain. Overridable in tests to keep them fast.
-	drainBackoff    time.Duration
-	drainMaxBackoff time.Duration
-	drainTimeout    time.Duration
+	// eviction; it doubles up to drainMaxBackoff. drainPollInterval spaces the
+	// checks for an evicted pod to be gone. drainTimeout caps the whole drain.
+	// Overridable in tests to keep them fast.
+	drainBackoff      time.Duration
+	drainMaxBackoff   time.Duration
+	drainPollInterval time.Duration
+	drainTimeout      time.Duration
 	// newJobID mints unique job identifiers; overridable in tests for
 	// deterministic IDs.
 	newJobID func() string
@@ -53,15 +57,16 @@ func NewKubeBackend(cluster *kubeconfig.ResolvedCluster) (*KubeBackend, error) {
 		return nil, err
 	}
 	return &KubeBackend{
-		client:          client,
-		cluster:         cluster,
-		profile:         profileFromCluster(cluster),
-		now:             time.Now,
-		drainJobs:       map[string]*api.DrainJob{},
-		drainBackoff:    1 * time.Second,
-		drainMaxBackoff: 15 * time.Second,
-		drainTimeout:    5 * time.Minute,
-		newJobID:        randomJobID,
+		client:            client,
+		cluster:           cluster,
+		profile:           profileFromCluster(cluster),
+		now:               time.Now,
+		drainJobs:         map[string]*api.DrainJob{},
+		drainBackoff:      1 * time.Second,
+		drainMaxBackoff:   15 * time.Second,
+		drainPollInterval: 1 * time.Second,
+		drainTimeout:      5 * time.Minute,
+		newJobID:          randomJobID,
 	}, nil
 }
 
@@ -95,29 +100,34 @@ func (b *KubeBackend) LoadSnapshot(ctx context.Context, clusterID string) (api.C
 		return api.ClusterSnapshot{}, api.ErrNotFound
 	}
 
+	// resourceVersion=0 lets the apiserver answer these cluster-wide LISTs
+	// from its watch cache instead of a quorum read.
+	cached := url.Values{"resourceVersion": []string{"0"}}
+	var raw rawLists
 	fetches := []struct {
-		name  string
-		path  string
-		query url.Values
-		dst   *map[string]any
+		name string
+		path string
+		dst  *map[string]any
 	}{
-		{"nodes", "/api/v1/nodes", nil, new(map[string]any)},
-		{"pods", "/api/v1/pods", nil, new(map[string]any)},
-		{"services", "/api/v1/services", nil, new(map[string]any)},
-		{"deployments", "/apis/apps/v1/deployments", nil, new(map[string]any)},
-		{"daemonsets", "/apis/apps/v1/daemonsets", nil, new(map[string]any)},
-		{"statefulsets", "/apis/apps/v1/statefulsets", nil, new(map[string]any)},
-		{"jobs", "/apis/batch/v1/jobs", nil, new(map[string]any)},
-		{"replicasets", "/apis/apps/v1/replicasets", nil, new(map[string]any)},
+		{"nodes", "/api/v1/nodes", &raw.nodes},
+		{"pods", "/api/v1/pods", &raw.pods},
+		{"services", "/api/v1/services", &raw.services},
+		{"deployments", "/apis/apps/v1/deployments", &raw.deployments},
+		{"daemonsets", "/apis/apps/v1/daemonsets", &raw.daemonSets},
+		{"statefulsets", "/apis/apps/v1/statefulsets", &raw.statefulSets},
+		{"jobs", "/apis/batch/v1/jobs", &raw.jobs},
+		{"replicasets", "/apis/apps/v1/replicasets", &raw.replicaSets},
 	}
 
+	// Each goroutine writes only its own raw field, and wg.Wait orders those
+	// writes before the transform reads them.
 	var wg sync.WaitGroup
 	errCh := make(chan error, len(fetches))
 	for i := range fetches {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			body, err := b.client.GetJSON(ctx, fetches[i].path, fetches[i].query)
+			body, err := b.client.GetJSON(ctx, fetches[i].path, cached)
 			if err != nil {
 				errCh <- fmt.Errorf("%s: %w", fetches[i].name, err)
 				return
@@ -133,18 +143,7 @@ func (b *KubeBackend) LoadSnapshot(ctx context.Context, clusterID string) (api.C
 		}
 	}
 
-	return transformSnapshot(
-		b.profile,
-		b.now(),
-		*fetches[0].dst,
-		*fetches[1].dst,
-		*fetches[2].dst,
-		*fetches[3].dst,
-		*fetches[4].dst,
-		*fetches[5].dst,
-		*fetches[6].dst,
-		*fetches[7].dst,
-	), nil
+	return transformSnapshot(b.profile, b.now(), raw), nil
 }
 
 // LoadEvents fetches recent events for the given object. Kubernetes returns
@@ -161,19 +160,19 @@ func (b *KubeBackend) LoadEvents(
 	if limit <= 0 {
 		limit = 5
 	}
-	if objectName == "" {
-		return nil, errors.New("objectName is required")
+	if err := api.ValidateEventQuery(kind, objectName, namespace); err != nil {
+		return nil, err
 	}
 
 	path := "/api/v1/events"
 	if namespace != "" {
-		path = "/api/v1/namespaces/" + namespace + "/events"
+		path = "/api/v1/namespaces/" + url.PathEscape(namespace) + "/events"
 	}
 
 	query := url.Values{}
 	selectors := []string{"involvedObject.name=" + objectName}
-	if kind != "" {
-		selectors = append(selectors, "involvedObject.kind="+kubernetesKind(kind))
+	if apiKind, _ := api.InvolvedObjectKind(kind); apiKind != "" {
+		selectors = append(selectors, "involvedObject.kind="+apiKind)
 	}
 	query.Set("fieldSelector", strings.Join(selectors, ","))
 
@@ -251,7 +250,7 @@ func (b *KubeBackend) ScaleWorkload(
 	if replicas < 0 {
 		return fmt.Errorf("%w: replicas must be >=0", api.ErrBadRequest)
 	}
-	kind, namespace, name, err := parseWorkloadID(workloadID)
+	kind, namespace, name, err := api.ParseWorkloadID(workloadID)
 	if err != nil {
 		return err
 	}
@@ -260,11 +259,11 @@ func (b *KubeBackend) ScaleWorkload(
 		return fmt.Errorf("%w: kind %q cannot be scaled", api.ErrBadRequest, kind)
 	}
 
-	path := fmt.Sprintf("/apis/apps/v1/namespaces/%s/%s/%s/scale", namespace, resource, name)
+	path := fmt.Sprintf("/apis/apps/v1/namespaces/%s/%s/%s/scale", url.PathEscape(namespace), resource, url.PathEscape(name))
 	body := []byte(fmt.Sprintf(`{"spec":{"replicas":%d}}`, replicas))
 	_, err = b.client.Patch(ctx, path, "application/merge-patch+json", body)
 	if err != nil {
-		return fmt.Errorf("scale %s %s/%s: %w", kind, namespace, name, err)
+		return fmt.Errorf("scale %s %s/%s: %w", kind, namespace, name, mutationErr(err))
 	}
 	return nil
 }
@@ -287,7 +286,7 @@ func (b *KubeBackend) RestartWorkload(ctx context.Context, clusterID, workloadID
 	if clusterID != "" && clusterID != b.profile.ID {
 		return api.ErrNotFound
 	}
-	kind, namespace, name, err := parseWorkloadID(workloadID)
+	kind, namespace, name, err := api.ParseWorkloadID(workloadID)
 	if err != nil {
 		return err
 	}
@@ -296,7 +295,7 @@ func (b *KubeBackend) RestartWorkload(ctx context.Context, clusterID, workloadID
 		return fmt.Errorf("%w: kind %q cannot be restarted", api.ErrBadRequest, kind)
 	}
 
-	path := fmt.Sprintf("/apis/apps/v1/namespaces/%s/%s/%s", namespace, resource, name)
+	path := fmt.Sprintf("/apis/apps/v1/namespaces/%s/%s/%s", url.PathEscape(namespace), resource, url.PathEscape(name))
 	ts := time.Now().UTC().Format(time.RFC3339)
 	body := []byte(fmt.Sprintf(
 		`{"spec":{"template":{"metadata":{"annotations":{"kubectl.kubernetes.io/restartedAt":%q}}}}}`,
@@ -304,7 +303,7 @@ func (b *KubeBackend) RestartWorkload(ctx context.Context, clusterID, workloadID
 	))
 	_, err = b.client.Patch(ctx, path, "application/strategic-merge-patch+json", body)
 	if err != nil {
-		return fmt.Errorf("restart %s %s/%s: %w", kind, namespace, name, err)
+		return fmt.Errorf("restart %s %s/%s: %w", kind, namespace, name, mutationErr(err))
 	}
 	return nil
 }
@@ -315,14 +314,14 @@ func (b *KubeBackend) CordonNode(ctx context.Context, clusterID, nodeID string, 
 	if clusterID != "" && clusterID != b.profile.ID {
 		return api.ErrNotFound
 	}
-	if nodeID == "" {
-		return fmt.Errorf("%w: nodeID is required", api.ErrBadRequest)
+	if err := api.ValidateNodeID(nodeID); err != nil {
+		return err
 	}
-	path := fmt.Sprintf("/api/v1/nodes/%s", nodeID)
+	path := "/api/v1/nodes/" + url.PathEscape(nodeID)
 	body := []byte(fmt.Sprintf(`{"spec":{"unschedulable":%t}}`, unschedulable))
 	_, err := b.client.Patch(ctx, path, "application/merge-patch+json", body)
 	if err != nil {
-		return fmt.Errorf("cordon node %s: %w", nodeID, err)
+		return fmt.Errorf("cordon node %s: %w", nodeID, mutationErr(err))
 	}
 	return nil
 }
@@ -340,37 +339,33 @@ func restartResourceFor(kind string) (string, bool) {
 	}
 }
 
-// parseWorkloadID splits "{kind}:{namespace}/{name}" back into its parts.
-// Returns api.ErrBadRequest for any malformation so handlers map to 400.
-func parseWorkloadID(id string) (kind, namespace, name string, err error) {
-	colon := strings.IndexByte(id, ':')
-	slash := strings.IndexByte(id, '/')
-	if colon <= 0 || slash <= colon+1 || slash == len(id)-1 {
-		return "", "", "", fmt.Errorf("%w: workloadID %q must be kind:namespace/name", api.ErrBadRequest, id)
-	}
-	return id[:colon], id[colon+1 : slash], id[slash+1:], nil
+// sentinelError tags a backend error with an api sentinel so handlers map it
+// to the right HTTP status. Error() is the wrapped error's own text: for an
+// apiserver reply, the StatusError short form with the Status message capped
+// at maxStatusMessage bytes, never the raw body. Handlers show that text to
+// clients (the 400 body, PendingRequest.Reason) by design, as DrainJob.Error
+// does: an admission denial's message is what the operator needs to act.
+type sentinelError struct {
+	sentinel error
+	err      error
 }
 
-// kubernetesKind maps the mobile-side workload kind strings back to the
-// Kubernetes API kind value used in fieldSelector (involvedObject.kind).
-func kubernetesKind(kind string) string {
-	switch kind {
-	case workloadKindDeployment:
-		return "Deployment"
-	case workloadKindDaemonSet:
-		return "DaemonSet"
-	case workloadKindStatefulSet:
-		return "StatefulSet"
-	case workloadKindJob:
-		return "Job"
-	case "node":
-		return "Node"
-	case "service":
-		return "Service"
-	case "pod":
-		return "Pod"
-	default:
-		// Preserve PascalCase inputs (e.g. "Deployment") untouched.
-		return kind
+func (e *sentinelError) Error() string   { return e.err.Error() }
+func (e *sentinelError) Unwrap() []error { return []error{e.sentinel, e.err} }
+
+// mutationErr maps an apiserver 404 to api.ErrNotFound and 400/422 to
+// api.ErrBadRequest for the mutation methods; anything else passes through
+// (and surfaces as a 502).
+func mutationErr(err error) error {
+	var se *StatusError
+	if !errors.As(err, &se) {
+		return err
 	}
+	switch se.Code {
+	case http.StatusNotFound:
+		return &sentinelError{api.ErrNotFound, err}
+	case http.StatusBadRequest, http.StatusUnprocessableEntity:
+		return &sentinelError{api.ErrBadRequest, err}
+	}
+	return err
 }

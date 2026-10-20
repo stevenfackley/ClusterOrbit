@@ -60,3 +60,18 @@ func TestMultiClusterBackendSkipsBadClusters(t *testing.T) {
 		t.Fatalf("expected 1 init error, got %v", errs)
 	}
 }
+
+func TestMultiClusterBackendSkipsDuplicateIDs(t *testing.T) {
+	clusters := []*kubeconfig.ResolvedCluster{
+		{ContextName: "prod", Server: "https://a.example.com"},
+		{ContextName: "prod", Server: "https://b.example.com"},
+	}
+	mb, errs := NewMultiClusterBackend(clusters)
+	if mb.Len() != 1 || len(errs) != 1 {
+		t.Fatalf("Len = %d, errs = %v; want 1 backend and 1 duplicate error", mb.Len(), errs)
+	}
+	profiles, _ := mb.ListClusters(context.Background())
+	if len(profiles) != 1 || profiles[0].APIServerHost != "a.example.com" {
+		t.Fatalf("profiles = %+v, want only the first prod", profiles)
+	}
+}
