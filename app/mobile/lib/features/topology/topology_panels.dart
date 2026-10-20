@@ -7,8 +7,9 @@ import '../../core/theme/clusterorbit_theme.dart';
 import 'entity_detail_panel.dart';
 import 'topology_orbs.dart';
 
-/// Tablet/wide-layout right rail: flight-deck metrics, alerts, and an
-/// optional inline entity detail panel. Owns layout, not data.
+/// Tablet/wide-layout right rail: flight-deck metrics over either the
+/// alerts or, while an entity is selected, its detail panel. Owns layout,
+/// not data.
 class TopologySidebar extends StatelessWidget {
   const TopologySidebar({
     super.key,
@@ -32,41 +33,35 @@ class TopologySidebar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final alerts = snapshot.alerts.take(4).toList();
-    return Column(
-      children: [
-        _InsightPanel(snapshot: snapshot),
-        const SizedBox(height: 16),
-        Expanded(
-          child: Column(
-            children: [
-              Expanded(child: _AlertPanel(alerts: alerts)),
-              AnimatedSize(
-                duration: const Duration(milliseconds: 250),
-                curve: Curves.easeInOut,
-                child: selectedEntity != null
-                    ? Padding(
-                        padding: const EdgeInsets.only(top: 16),
-                        child: ConstrainedBox(
-                          constraints: const BoxConstraints(maxHeight: 320),
-                          child: SingleChildScrollView(
-                            child: EntityDetailPanel(
-                              entity: selectedEntity!,
-                              palette: palette,
-                              onDismiss: onDismiss,
-                              connection: connection,
-                              clusterId: clusterId,
-                              store: store,
-                              profileId: clusterId,
-                            ),
-                          ),
-                        ),
-                      )
-                    : const SizedBox.shrink(),
-              ),
-            ],
+    return LayoutBuilder(
+      builder: (context, constraints) => Column(
+        children: [
+          // Natural height up to half the rail; scrolls past that.
+          ConstrainedBox(
+            constraints: BoxConstraints(maxHeight: constraints.maxHeight / 2),
+            child: SingleChildScrollView(
+              primary: false,
+              child: _InsightPanel(snapshot: snapshot),
+            ),
           ),
-        ),
-      ],
+          const SizedBox(height: 16),
+          Expanded(
+            child: selectedEntity == null
+                ? _AlertPanel(alerts: alerts)
+                : SingleChildScrollView(
+                    child: EntityDetailPanel(
+                      entity: selectedEntity!,
+                      palette: palette,
+                      onDismiss: onDismiss,
+                      connection: connection,
+                      clusterId: clusterId,
+                      store: store,
+                      profileId: clusterId,
+                    ),
+                  ),
+          ),
+        ],
+      ),
     );
   }
 }

@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 import '../../core/cluster_domain/cluster_models.dart';
@@ -17,7 +19,6 @@ class TopologyWorkspace extends StatelessWidget {
     super.key,
     required this.snapshot,
     required this.layout,
-    required this.canvasHeight,
     required this.palette,
     required this.selectedEntity,
     required this.onEntityTap,
@@ -33,7 +34,6 @@ class TopologyWorkspace extends StatelessWidget {
 
   final ClusterSnapshot snapshot;
   final TopologyLayout layout;
-  final double canvasHeight;
   final ClusterOrbitPalette palette;
   final Object? selectedEntity;
   final void Function(Object) onEntityTap;
@@ -54,7 +54,6 @@ class TopologyWorkspace extends StatelessWidget {
       clipBehavior: Clip.antiAlias,
       child: LayoutBuilder(builder: (context, constraints) {
         final compact = constraints.maxHeight < 300;
-        final canvasTop = compact ? 0.0 : 188.0;
         return Stack(
           children: [
             Positioned.fill(
@@ -81,222 +80,382 @@ class TopologyWorkspace extends StatelessWidget {
                 ),
               ),
             ),
-            if (!compact)
-              Positioned(
-                top: 22,
-                left: 24,
-                right: 24,
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('Cluster Map',
-                              style: theme.textTheme.headlineMedium),
-                          const SizedBox(height: 8),
-                          Text(
-                            'Machine-first topology canvas for ${snapshot.profile.name}. Pan and zoom to inspect placement, workload fan-out, and service attachment.',
-                            style: theme.textTheme.bodyLarge,
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 16),
-                    ModeBadge(
-                      label: '${snapshot.profile.connectionMode.label} mode',
-                      tint: palette.accentTeal,
-                    ),
-                  ],
-                ),
-              ),
-            if (!compact)
-              Positioned(
-                top: 96,
-                left: 24,
-                right: 24,
-                child: SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(
-                    children: [
-                      SummaryChip(
-                          label: 'Nodes', value: '${snapshot.nodes.length}'),
-                      const SizedBox(width: 12),
-                      SummaryChip(
-                          label: 'Workloads',
-                          value: '${snapshot.workloads.length}'),
-                      const SizedBox(width: 12),
-                      SummaryChip(
-                          label: 'Services',
-                          value: '${snapshot.services.length}'),
-                      const SizedBox(width: 12),
-                      SummaryChip(
-                          label: 'Links', value: '${snapshot.links.length}'),
-                      const SizedBox(width: 12),
-                      SummaryChip(
-                          label: 'Alerts', value: '${snapshot.alerts.length}'),
-                      const SizedBox(width: 24),
-                      TopologyFilterChip(
-                        label: 'Nodes',
-                        selected: filter.showNodes,
-                        onChanged: (v) =>
-                            onFilterChange(filter.copyWith(showNodes: v)),
-                      ),
-                      const SizedBox(width: 8),
-                      TopologyFilterChip(
-                        label: 'Workloads',
-                        selected: filter.showWorkloads,
-                        onChanged: (v) =>
-                            onFilterChange(filter.copyWith(showWorkloads: v)),
-                      ),
-                      const SizedBox(width: 8),
-                      TopologyFilterChip(
-                        label: 'Services',
-                        selected: filter.showServices,
-                        onChanged: (v) =>
-                            onFilterChange(filter.copyWith(showServices: v)),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
             Positioned.fill(
-              top: canvasTop,
-              left: 16,
-              right: 16,
-              bottom: 16,
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(28),
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    color: Colors.black.withValues(alpha: 0.14),
-                    border:
-                        Border.all(color: Colors.white.withValues(alpha: 0.06)),
-                  ),
-                  child: Stack(
-                    children: [
-                      Positioned.fill(
-                        child: CustomPaint(
-                          painter: TopologyGridPainter(
-                            gridColor: Colors.white.withValues(alpha: 0.03),
-                          ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (!compact)
+                    // Header and chips take what they need, up to half the
+                    // card; past that (huge text) they scroll, not overflow.
+                    ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxHeight: constraints.maxHeight / 2,
+                      ),
+                      child: SingleChildScrollView(
+                        primary: false,
+                        padding: const EdgeInsets.fromLTRB(24, 22, 24, 12),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            _header(theme, constraints.maxWidth),
+                            const SizedBox(height: 12),
+                            _chips(narrow: constraints.maxWidth < 600),
+                          ],
                         ),
                       ),
-                      Positioned.fill(
-                        child: InteractiveViewer(
-                          transformationController: viewport,
-                          constrained: true,
-                          minScale: 0.8,
-                          maxScale: 1.8,
-                          boundaryMargin: const EdgeInsets.all(24),
-                          child: SizedBox(
-                            width: layout.canvasWidth,
-                            height: layout.canvasHeight,
-                            child: ListenableBuilder(
-                              listenable: viewport,
-                              builder: (context, _) {
-                                final scale =
-                                    viewport.value.getMaxScaleOnAxis();
-                                final showLabels = scale >= 0.9;
-                                return Stack(
-                                  children: [
-                                    Positioned.fill(
-                                      child: CustomPaint(
-                                        painter: TopologyLinkPainter(
-                                          layout: layout,
-                                          accent: palette.accentCyan,
+                    ),
+                  Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(28),
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.14),
+                            border: Border.all(
+                                color: Colors.white.withValues(alpha: 0.06)),
+                          ),
+                          child: Stack(
+                            children: [
+                              Positioned.fill(
+                                child: CustomPaint(
+                                  painter: TopologyGridPainter(
+                                    gridColor:
+                                        Colors.white.withValues(alpha: 0.03),
+                                  ),
+                                ),
+                              ),
+                              Positioned.fill(
+                                child: _TopologyCanvas(
+                                  snapshot: snapshot,
+                                  layout: layout,
+                                  palette: palette,
+                                  selectedEntity: selectedEntity,
+                                  onEntityTap: onEntityTap,
+                                  viewport: viewport,
+                                ),
+                              ),
+                              // A portrait phone's canvas has no room for
+                              // them beside the orbs; its chips and the list
+                              // carry the same facts. In one row, the status
+                              // card gets what the legend leaves.
+                              if (constraints.maxWidth - 32 >= 420)
+                                Positioned(
+                                  left: 16,
+                                  right: 16,
+                                  bottom: 16,
+                                  child: IgnorePointer(
+                                    child: Row(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.end,
+                                      children: [
+                                        LegendCard(palette: palette),
+                                        const SizedBox(width: 16),
+                                        Expanded(
+                                          child: Align(
+                                            alignment: Alignment.bottomRight,
+                                            child: MiniStatusCard(
+                                                snapshot: snapshot),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              if (showPortraitPanel && selectedEntity != null)
+                                // Up to 60% of the canvas, on its bottom edge.
+                                Positioned.fill(
+                                  child: Column(
+                                    mainAxisAlignment: MainAxisAlignment.end,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.stretch,
+                                    children: [
+                                      const Spacer(flex: 2),
+                                      Flexible(
+                                        flex: 3,
+                                        child: SingleChildScrollView(
+                                          child: EntityDetailPanel(
+                                            entity: selectedEntity!,
+                                            palette: palette,
+                                            onDismiss: onDismiss,
+                                            connection: connection,
+                                            clusterId: clusterId,
+                                            store: store,
+                                            profileId: clusterId,
+                                          ),
                                         ),
                                       ),
-                                    ),
-                                    for (final node in snapshot.nodes)
-                                      if (layout.visibleNodeIds
-                                          .contains(node.id))
-                                        CanvasNode(
-                                          offset: layout.positions[node.id]!,
-                                          onTap: () => onEntityTap(node),
-                                          child: NodeOrb(
-                                            node: node,
-                                            palette: palette,
-                                            selected: selectedEntity == node,
-                                            showLabels: showLabels,
-                                          ),
-                                        ),
-                                    for (final workload in snapshot.workloads)
-                                      if (layout.visibleWorkloadIds
-                                          .contains(workload.id))
-                                        CanvasNode(
-                                          offset:
-                                              layout.positions[workload.id]!,
-                                          onTap: () => onEntityTap(workload),
-                                          child: WorkloadOrb(
-                                            workload: workload,
-                                            palette: palette,
-                                            selected:
-                                                selectedEntity == workload,
-                                            showLabels: showLabels,
-                                          ),
-                                        ),
-                                    for (final service in snapshot.services)
-                                      if (layout.visibleServiceIds
-                                          .contains(service.id))
-                                        CanvasNode(
-                                          offset: layout.positions[service.id]!,
-                                          onTap: () => onEntityTap(service),
-                                          child: ServiceOrb(
-                                            service: service,
-                                            palette: palette,
-                                            selected: selectedEntity == service,
-                                            showLabels: showLabels,
-                                          ),
-                                        ),
-                                  ],
-                                );
-                              },
-                            ),
+                                    ],
+                                  ),
+                                ),
+                            ],
                           ),
                         ),
                       ),
-                      Positioned(
-                          left: 16,
-                          bottom: 16,
-                          child: IgnorePointer(
-                              child: LegendCard(palette: palette))),
-                      Positioned(
-                          right: 16,
-                          bottom: 16,
-                          child: IgnorePointer(
-                              child: MiniStatusCard(snapshot: snapshot))),
-                      if (showPortraitPanel && selectedEntity != null)
-                        Positioned(
-                          bottom: 0,
-                          left: 0,
-                          right: 0,
-                          child: ConstrainedBox(
-                            constraints: BoxConstraints(
-                              maxHeight: constraints.maxHeight * 0.6,
-                            ),
-                            child: SingleChildScrollView(
-                              child: EntityDetailPanel(
-                                entity: selectedEntity!,
-                                palette: palette,
-                                onDismiss: onDismiss,
-                                connection: connection,
-                                clusterId: clusterId,
-                                store: store,
-                                profileId: clusterId,
-                              ),
-                            ),
-                          ),
-                        ),
-                    ],
+                    ),
                   ),
-                ),
+                ],
               ),
             ),
           ],
         );
       }),
     );
+  }
+
+  Widget _header(ThemeData theme, double width) {
+    final badge = ModeBadge(
+      label: '${snapshot.profile.connectionMode.label} mode',
+      tint: palette.accentTeal,
+    );
+    // A phone's AppBar already says Cluster Map, and every line here comes
+    // out of the canvas: just the badge.
+    if (width < 600) {
+      return Align(alignment: Alignment.centerLeft, child: badge);
+    }
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Cluster Map',
+                style: theme.textTheme.headlineMedium,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Machine-first topology canvas for ${snapshot.profile.name}. Pan and zoom to inspect placement, workload fan-out, and service attachment.',
+                style: theme.textTheme.bodyLarge,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 16),
+        // Natural width, capped so the title keeps most of the row.
+        ConstrainedBox(
+          constraints: BoxConstraints(maxWidth: width * 0.4),
+          child: badge,
+        ),
+      ],
+    );
+  }
+
+  /// The filter chips, after the summary chips. On a [narrow] card the
+  /// summary chips are dropped and the filter chips carry the counts.
+  Widget _chips({required bool narrow}) {
+    String label(String kind, int count) => narrow ? '$kind $count' : kind;
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        children: [
+          if (!narrow) ...[
+            SummaryChip(label: 'Nodes', value: '${snapshot.nodes.length}'),
+            const SizedBox(width: 12),
+            SummaryChip(
+                label: 'Workloads', value: '${snapshot.workloads.length}'),
+            const SizedBox(width: 12),
+            SummaryChip(
+                label: 'Services', value: '${snapshot.services.length}'),
+            const SizedBox(width: 12),
+            SummaryChip(label: 'Links', value: '${snapshot.links.length}'),
+            const SizedBox(width: 12),
+            SummaryChip(label: 'Alerts', value: '${snapshot.alerts.length}'),
+            const SizedBox(width: 24),
+          ],
+          TopologyFilterChip(
+            label: label('Nodes', snapshot.nodes.length),
+            selected: filter.showNodes,
+            onChanged: (v) => onFilterChange(filter.copyWith(showNodes: v)),
+          ),
+          const SizedBox(width: 8),
+          TopologyFilterChip(
+            label: label('Workloads', snapshot.workloads.length),
+            selected: filter.showWorkloads,
+            onChanged: (v) => onFilterChange(filter.copyWith(showWorkloads: v)),
+          ),
+          const SizedBox(width: 8),
+          TopologyFilterChip(
+            label: label('Services', snapshot.services.length),
+            selected: filter.showServices,
+            onChanged: (v) => onFilterChange(filter.copyWith(showServices: v)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The pan/zoom viewer over the full-size canvas of links and orbs.
+class _TopologyCanvas extends StatefulWidget {
+  const _TopologyCanvas({
+    required this.snapshot,
+    required this.layout,
+    required this.palette,
+    required this.selectedEntity,
+    required this.onEntityTap,
+    required this.viewport,
+  });
+
+  final ClusterSnapshot snapshot;
+  final TopologyLayout layout;
+  final ClusterOrbitPalette palette;
+  final Object? selectedEntity;
+  final void Function(Object) onEntityTap;
+  final TransformationController viewport;
+
+  @override
+  State<_TopologyCanvas> createState() => _TopologyCanvasState();
+}
+
+class _TopologyCanvasState extends State<_TopologyCanvas> {
+  /// Labels show from 0.9x up. Only a flip rebuilds the orbs; every other
+  /// pan/zoom frame leaves them alone (ValueNotifier skips equal values).
+  late final ValueNotifier<bool> _showLabels;
+
+  bool _labelsVisible() => widget.viewport.value.getMaxScaleOnAxis() >= 0.9;
+
+  void _onViewportChanged() => _showLabels.value = _labelsVisible();
+
+  @override
+  void initState() {
+    super.initState();
+    _showLabels = ValueNotifier(_labelsVisible());
+    widget.viewport.addListener(_onViewportChanged);
+  }
+
+  @override
+  void didUpdateWidget(_TopologyCanvas oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.viewport != widget.viewport) {
+      oldWidget.viewport.removeListener(_onViewportChanged);
+      widget.viewport.addListener(_onViewportChanged);
+      _onViewportChanged();
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.viewport.removeListener(_onViewportChanged);
+    _showLabels.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final layout = widget.layout;
+    final snapshot = widget.snapshot;
+    final palette = widget.palette;
+    final selectedEntity = widget.selectedEntity;
+    final onEntityTap = widget.onEntityTap;
+    return LayoutBuilder(builder: (context, box) {
+      if (box.biggest.isEmpty) return const SizedBox.shrink();
+      // Allow zooming out until the whole canvas fits, but open at 1:1: on a
+      // phone the fit scale is far below the label threshold.
+      final fitScale = math.min(
+        box.maxWidth / layout.canvasWidth,
+        box.maxHeight / layout.canvasHeight,
+      );
+      final minScale = math.min(0.8, fitScale);
+      // InteractiveViewer stops zooming out once the boundary no longer
+      // covers the viewport, so pad the boundary enough to reach minScale.
+      final boundaryMargin = EdgeInsets.symmetric(
+        horizontal:
+            math.max(24.0, (box.maxWidth / minScale - layout.canvasWidth) / 2),
+        vertical: math.max(
+            24.0, (box.maxHeight / minScale - layout.canvasHeight) / 2),
+      );
+
+      return InteractiveViewer(
+        transformationController: widget.viewport,
+        // The canvas keeps its own size; the viewport pans over it.
+        constrained: false,
+        minScale: minScale,
+        maxScale: 1.8,
+        boundaryMargin: boundaryMargin,
+        child: SizedBox(
+          width: layout.canvasWidth,
+          height: layout.canvasHeight,
+          // Orbs have a fixed height; cap text so it fits (see
+          // OrbMetrics.maxTextScale).
+          child: MediaQuery.withClampedTextScaling(
+            maxScaleFactor: OrbMetrics.maxTextScale,
+            child: Stack(
+              children: [
+                Positioned.fill(
+                  // Its own layer: pan/zoom frames reuse the recorded links.
+                  child: RepaintBoundary(
+                    child: CustomPaint(
+                      painter: TopologyLinkPainter(
+                        layout: layout,
+                        accent: palette.accentCyan,
+                      ),
+                    ),
+                  ),
+                ),
+                Positioned.fill(
+                  child: ValueListenableBuilder<bool>(
+                    valueListenable: _showLabels,
+                    // Orbs are keyed by kind and id: ids are unique per
+                    // kind only.
+                    builder: (context, showLabels, _) => Stack(
+                      children: [
+                        for (final node in snapshot.nodes)
+                          if (layout.visibleNodeIds.contains(node.id))
+                            CanvasNode(
+                              key: ValueKey('node:${node.id}'),
+                              offset: layout.positions[node.id]!,
+                              onTap: () => onEntityTap(node),
+                              selected: selectedEntity == node,
+                              child: NodeOrb(
+                                node: node,
+                                palette: palette,
+                                selected: selectedEntity == node,
+                                showLabels: showLabels,
+                              ),
+                            ),
+                        for (final workload in snapshot.workloads)
+                          if (layout.visibleWorkloadIds.contains(workload.id))
+                            CanvasNode(
+                              key: ValueKey('workload:${workload.id}'),
+                              offset: layout.positions[workload.id]!,
+                              onTap: () => onEntityTap(workload),
+                              selected: selectedEntity == workload,
+                              child: WorkloadOrb(
+                                workload: workload,
+                                palette: palette,
+                                selected: selectedEntity == workload,
+                                showLabels: showLabels,
+                              ),
+                            ),
+                        for (final service in snapshot.services)
+                          if (layout.visibleServiceIds.contains(service.id))
+                            CanvasNode(
+                              key: ValueKey('service:${service.id}'),
+                              offset: layout.positions[service.id]!,
+                              onTap: () => onEntityTap(service),
+                              selected: selectedEntity == service,
+                              child: ServiceOrb(
+                                service: service,
+                                palette: palette,
+                                selected: selectedEntity == service,
+                                showLabels: showLabels,
+                              ),
+                            ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    });
   }
 }

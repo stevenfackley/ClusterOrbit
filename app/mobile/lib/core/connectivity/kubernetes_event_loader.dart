@@ -1,6 +1,6 @@
 import '../cluster_domain/cluster_models.dart';
+import 'kube_transport.dart';
 import 'kubeconfig_repository.dart';
-import 'kubernetes_snapshot_loader.dart';
 
 /// Fetches Kubernetes events for a single involved object.
 ///
@@ -20,11 +20,11 @@ final class KubernetesEventLoader {
     String? namespace,
     int limit = 5,
   }) async {
-    final base = Uri.parse(cluster.server);
-    final path = namespace == null || namespace.isEmpty
-        ? '/api/v1/events'
-        : '/api/v1/namespaces/$namespace/events';
-    final uri = base.resolve(path).replace(
+    final uri = kubeApiUri(
+      cluster.server,
+      namespace == null || namespace.isEmpty
+          ? ['api', 'v1', 'events']
+          : ['api', 'v1', 'namespaces', namespace, 'events'],
       queryParameters: {
         'fieldSelector': 'involvedObject.name=$objectName',
       },

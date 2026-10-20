@@ -105,16 +105,19 @@ class _OrbitShellState extends State<OrbitShell> {
       ResourcesScreen(
         snapshot: _session.snapshot,
         isLoading: _session.isLoading,
+        error: _session.loadError,
         onRefresh: _onRefresh,
       ),
       ChangesScreen(
         snapshot: _session.snapshot,
         isLoading: _session.isLoading,
+        error: _session.loadError,
         onRefresh: _onRefresh,
       ),
       AlertsScreen(
         snapshot: _session.snapshot,
         isLoading: _session.isLoading,
+        error: _session.loadError,
         onRefresh: _onRefresh,
       ),
       SettingsScreen(
@@ -136,9 +139,16 @@ class _OrbitShellState extends State<OrbitShell> {
         final palette = Theme.of(context).extension<ClusterOrbitPalette>()!;
         final screens = _buildScreens();
         final selectedCluster = _session.selectedCluster;
-        final subtitle = selectedCluster == null
-            ? 'Preparing ${_session.connection.mode.label.toLowerCase()} connection'
-            : '${selectedCluster.apiServerHost} / ${selectedCluster.environmentLabel}';
+        final canSwitchCluster = _session.clusters.length >= 2 &&
+            !_session.isLoading &&
+            selectedCluster != null;
+        final subtitle = selectedCluster != null
+            ? '${selectedCluster.environmentLabel} · ${selectedCluster.apiServerHost}'
+            : _session.loadError != null
+                ? 'Connection failed'
+                : _session.hasNoClusters
+                    ? 'No clusters visible'
+                    : 'Preparing ${_session.connection.mode.label.toLowerCase()} connection';
 
         return Scaffold(
           appBar: AppBar(
@@ -159,20 +169,19 @@ class _OrbitShellState extends State<OrbitShell> {
               if (_session.lastRefreshedAt != null && !_session.isRefreshing)
                 _LastRefreshedIndicator(
                   refreshedAt: _session.lastRefreshedAt!,
+                  offline: _session.staleError != null,
                   onRefresh: selectedCluster == null ? null : _onRefresh,
                   compact: isCompact,
                 ),
               if (isCompact)
                 IconButton(
                   tooltip: 'Switch cluster',
-                  onPressed:
-                      _session.clusters.isEmpty ? null : _session.cycleCluster,
+                  onPressed: canSwitchCluster ? _session.cycleCluster : null,
                   icon: const Icon(Icons.hub_outlined),
                 )
               else
                 TextButton.icon(
-                  onPressed:
-                      _session.clusters.isEmpty ? null : _session.cycleCluster,
+                  onPressed: canSwitchCluster ? _session.cycleCluster : null,
                   icon: const Icon(Icons.hub_outlined),
                   label: const Text('Switch Cluster'),
                 ),
@@ -220,18 +229,14 @@ class _OrbitShellState extends State<OrbitShell> {
             titles: _titles,
             clusterCount: _session.clusters.length,
             nodeCount: _session.snapshot?.nodes.length ?? 0,
+            controlPlaneCount: _session.snapshot?.controlPlaneCount ?? 0,
+            workerCount: _session.snapshot?.workerCount ?? 0,
+            unschedulableCount: _session.snapshot?.unschedulableNodeCount ?? 0,
             alertCount: _session.snapshot?.alerts.length ?? 0,
             onChanged: (value) => setState(() => _index = value),
           ),
         ),
         Expanded(child: screens[_index]),
-        SizedBox(
-          width: 360,
-          child: _InspectorPanel(
-            snapshot: _session.snapshot,
-            isLoading: _session.isLoading,
-          ),
-        ),
       ],
     );
   }
@@ -270,42 +275,51 @@ class _RefreshingBadge extends StatelessWidget {
   }
 }
 
+/// How fresh the data on screen is: "Updated Xm ago", or, when [offline]
+/// (the live fetch behind a cached snapshot failed), "Offline · cached Xm
+/// ago" so cached data never passes for live.
 class _LastRefreshedIndicator extends StatelessWidget {
   const _LastRefreshedIndicator({
     required this.refreshedAt,
     required this.onRefresh,
+    this.offline = false,
     this.compact = false,
   });
 
   final DateTime refreshedAt;
   final VoidCallback? onRefresh;
+  final bool offline;
   final bool compact;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final relative = _formatRelative(refreshedAt);
-    final tooltip = 'Updated $relative · tap to refresh';
+    final label = offline ? 'Offline · cached $relative' : 'Updated $relative';
+    final tooltip = '$label · tap to refresh';
+    final color = offline
+        ? theme.extension<ClusterOrbitPalette>()!.warning
+        : Colors.white.withValues(alpha: 0.82);
+    final icon = offline ? Icons.cloud_off_outlined : Icons.refresh;
     if (compact) {
       return IconButton(
         tooltip: tooltip,
         onPressed: onRefresh,
-        icon: const Icon(Icons.refresh, size: 18),
+        color: offline ? color : null,
+        icon: Icon(icon, size: 18),
       );
     }
     return Tooltip(
       message: tooltip,
       child: TextButton.icon(
         onPressed: onRefresh,
-        icon: const Icon(Icons.refresh, size: 16),
+        icon: Icon(icon, size: 16),
         label: Text(
-          'Updated $relative',
-          style: theme.textTheme.bodySmall?.copyWith(
-            color: Colors.white.withValues(alpha: 0.82),
-          ),
+          label,
+          style: theme.textTheme.bodySmall?.copyWith(color: color),
         ),
         style: TextButton.styleFrom(
-          foregroundColor: Colors.white.withValues(alpha: 0.82),
+          foregroundColor: color,
           visualDensity: VisualDensity.compact,
         ),
       ),
@@ -328,6 +342,9 @@ class _SideRail extends StatelessWidget {
     required this.titles,
     required this.clusterCount,
     required this.nodeCount,
+    required this.controlPlaneCount,
+    required this.workerCount,
+    required this.unschedulableCount,
     required this.alertCount,
     required this.onChanged,
   });
@@ -336,6 +353,9 @@ class _SideRail extends StatelessWidget {
   final List<String> titles;
   final int clusterCount;
   final int nodeCount;
+  final int controlPlaneCount;
+  final int workerCount;
+  final int unschedulableCount;
   final int alertCount;
   final ValueChanged<int> onChanged;
 
@@ -347,124 +367,63 @@ class _SideRail extends StatelessWidget {
       child: Card(
         child: Padding(
           padding: const EdgeInsets.all(20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('ClusterOrbit', style: theme.textTheme.titleLarge),
-              const SizedBox(height: 8),
-              Text(
-                'Machine-first cluster visibility with guarded operations.',
-                style: theme.textTheme.bodyMedium,
-              ),
-              const SizedBox(height: 20),
-              for (var i = 0; i < titles.length; i++)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 10),
-                  child: FilledButton.tonal(
-                    onPressed: () => onChanged(i),
-                    style: FilledButton.styleFrom(
-                      minimumSize: const Size.fromHeight(52),
-                      alignment: Alignment.centerLeft,
-                      backgroundColor: i == selectedIndex
-                          ? theme.colorScheme.primary.withValues(alpha: 0.16)
-                          : Colors.white.withValues(alpha: 0.04),
-                    ),
-                    child: Text(titles[i]),
+          // Scrolls when the rail is taller than the pane (short tablets,
+          // keyboard up, large text); otherwise the chips stay pinned low.
+          child: LayoutBuilder(
+            builder: (context, box) => SingleChildScrollView(
+              child: ConstrainedBox(
+                constraints: BoxConstraints(minHeight: box.maxHeight),
+                child: IntrinsicHeight(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('ClusterOrbit', style: theme.textTheme.titleLarge),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Machine-first cluster visibility with guarded operations.',
+                        style: theme.textTheme.bodyMedium,
+                      ),
+                      const SizedBox(height: 20),
+                      for (var i = 0; i < titles.length; i++)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 10),
+                          child: FilledButton.tonal(
+                            onPressed: () => onChanged(i),
+                            style: FilledButton.styleFrom(
+                              minimumSize: const Size.fromHeight(52),
+                              alignment: Alignment.centerLeft,
+                              backgroundColor: i == selectedIndex
+                                  ? theme.colorScheme.primary
+                                      .withValues(alpha: 0.16)
+                                  : Colors.white.withValues(alpha: 0.04),
+                            ),
+                            child: Text(titles[i]),
+                          ),
+                        ),
+                      const Spacer(),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          Chip(label: Text('$clusterCount clusters')),
+                          Chip(label: Text('$nodeCount nodes')),
+                          Chip(
+                            label: Text('$controlPlaneCount control planes'),
+                          ),
+                          Chip(label: Text('$workerCount workers')),
+                          Chip(
+                            label: Text('$unschedulableCount unschedulable'),
+                          ),
+                          Chip(label: Text('$alertCount alerts')),
+                        ],
+                      ),
+                    ],
                   ),
                 ),
-              const Spacer(),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  Chip(label: Text('$clusterCount clusters')),
-                  Chip(label: Text('$nodeCount nodes')),
-                  Chip(label: Text('$alertCount alerts')),
-                ],
               ),
-            ],
+            ),
           ),
         ),
-      ),
-    );
-  }
-}
-
-class _InspectorPanel extends StatelessWidget {
-  const _InspectorPanel({
-    required this.snapshot,
-    required this.isLoading,
-  });
-
-  final ClusterSnapshot? snapshot;
-  final bool isLoading;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final controlPlanes = snapshot?.controlPlaneCount ?? 0;
-    final workers = snapshot?.workerCount ?? 0;
-    final unschedulable = snapshot?.unschedulableNodeCount ?? 0;
-
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(0, 20, 20, 20),
-      child: Card(
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('Inspector', style: theme.textTheme.titleLarge),
-              const SizedBox(height: 12),
-              Text(
-                isLoading
-                    ? 'Loading snapshot details for the selected cluster.'
-                    : 'This panel is reserved for node details, config diffs, logs, and guarded actions on tablet layouts.',
-                style: theme.textTheme.bodyMedium,
-              ),
-              const SizedBox(height: 20),
-              _MetricTile(label: 'Control planes', value: '$controlPlanes'),
-              _MetricTile(label: 'Workers', value: '$workers'),
-              _MetricTile(label: 'Unschedulable', value: '$unschedulable'),
-              const Spacer(),
-              FilledButton.icon(
-                onPressed: () {},
-                icon: const Icon(Icons.playlist_add_check_circle_outlined),
-                label: const Text('Open change preview'),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _MetricTile extends StatelessWidget {
-  const _MetricTile({
-    required this.label,
-    required this.value,
-  });
-
-  final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.04),
-        borderRadius: BorderRadius.circular(18),
-      ),
-      child: Row(
-        children: [
-          Text(label, style: theme.textTheme.bodyLarge),
-          const Spacer(),
-          Text(value, style: theme.textTheme.titleLarge),
-        ],
       ),
     );
   }

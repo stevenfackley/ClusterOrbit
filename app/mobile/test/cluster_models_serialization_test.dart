@@ -451,4 +451,53 @@ void main() {
       );
     });
   });
+
+  group('gateway JSON with null arrays', () {
+    // Go encodes nil slices as null; a kube-mode gateway snapshot has them.
+    test('ClusterSnapshot decodes null and missing lists as empty', () {
+      final snapshot = ClusterSnapshot.fromJson({
+        'profile': {
+          'id': 'p1',
+          'name': 'c',
+          'apiServerHost': 'h',
+          'environmentLabel': 'Dev',
+          'connectionMode': 'gateway',
+        },
+        'generatedAt': 0,
+        'nodes': null,
+        'workloads': [
+          {
+            'id': 'w1',
+            'namespace': 'default',
+            'name': 'web',
+            'kind': 'deployment',
+            'desiredReplicas': 1,
+            'readyReplicas': 1,
+            'nodeIds': null,
+            'health': 'healthy',
+            'images': null,
+          },
+        ],
+        'services': [
+          {
+            'id': 'default/kubernetes',
+            'namespace': 'default',
+            'name': 'kubernetes',
+            'exposure': 'clusterIp',
+            'targetWorkloadIds': null,
+            'ports': null,
+            'health': 'warning',
+          },
+        ],
+        'alerts': null,
+      });
+      expect(snapshot.nodes, isEmpty);
+      expect(snapshot.alerts, isEmpty);
+      expect(snapshot.links, isEmpty);
+      expect(snapshot.workloads.single.nodeIds, isEmpty);
+      expect(snapshot.workloads.single.images, isEmpty);
+      expect(snapshot.services.single.targetWorkloadIds, isEmpty);
+      expect(snapshot.services.single.ports, isEmpty);
+    });
+  });
 }

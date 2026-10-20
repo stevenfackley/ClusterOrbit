@@ -1,3 +1,15 @@
+// Go encodes nil slices as JSON null, so list fields must tolerate null.
+List<String> _stringList(Object? raw) =>
+    raw is List ? raw.map((e) => e.toString()).toList() : const [];
+
+List<T> _objectList<T>(
+  Object? raw,
+  T Function(Map<String, dynamic>) fromJson,
+) =>
+    raw is List
+        ? raw.map((e) => fromJson(e as Map<String, dynamic>)).toList()
+        : const [];
+
 enum ConnectionMode {
   direct,
   gateway,
@@ -202,13 +214,6 @@ class DrainJob {
         remaining: (json['remaining'] as num?)?.toInt() ?? 0,
         error: json['error'] as String?,
       );
-
-  static List<String> _stringList(Object? raw) {
-    if (raw is List) {
-      return raw.map((e) => e.toString()).toList();
-    }
-    return const [];
-  }
 }
 
 class ClusterProfile {
@@ -343,9 +348,9 @@ class ClusterWorkload {
         kind: WorkloadKind.values.byName(json['kind'] as String),
         desiredReplicas: json['desiredReplicas'] as int,
         readyReplicas: json['readyReplicas'] as int,
-        nodeIds: List<String>.from(json['nodeIds'] as List),
+        nodeIds: _stringList(json['nodeIds']),
         health: ClusterHealthLevel.values.byName(json['health'] as String),
-        images: List<String>.from(json['images'] as List),
+        images: _stringList(json['images']),
       );
 }
 
@@ -414,10 +419,8 @@ class ClusterService {
         namespace: json['namespace'] as String,
         name: json['name'] as String,
         exposure: ServiceExposure.values.byName(json['exposure'] as String),
-        targetWorkloadIds: List<String>.from(json['targetWorkloadIds'] as List),
-        ports: (json['ports'] as List)
-            .map((p) => ServicePort.fromJson(p as Map<String, dynamic>))
-            .toList(),
+        targetWorkloadIds: _stringList(json['targetWorkloadIds']),
+        ports: _objectList(json['ports'], ServicePort.fromJson),
         health: ClusterHealthLevel.values.byName(json['health'] as String),
         clusterIp: json['clusterIp'] as String?,
       );
@@ -520,21 +523,11 @@ class ClusterSnapshot {
           json['generatedAt'] as int,
           isUtc: true,
         ),
-        nodes: (json['nodes'] as List)
-            .map((n) => ClusterNode.fromJson(n as Map<String, dynamic>))
-            .toList(),
-        workloads: (json['workloads'] as List)
-            .map((w) => ClusterWorkload.fromJson(w as Map<String, dynamic>))
-            .toList(),
-        services: (json['services'] as List)
-            .map((s) => ClusterService.fromJson(s as Map<String, dynamic>))
-            .toList(),
-        alerts: (json['alerts'] as List)
-            .map((a) => ClusterAlert.fromJson(a as Map<String, dynamic>))
-            .toList(),
-        links: (json['links'] as List)
-            .map((l) => TopologyLink.fromJson(l as Map<String, dynamic>))
-            .toList(),
+        nodes: _objectList(json['nodes'], ClusterNode.fromJson),
+        workloads: _objectList(json['workloads'], ClusterWorkload.fromJson),
+        services: _objectList(json['services'], ClusterService.fromJson),
+        alerts: _objectList(json['alerts'], ClusterAlert.fromJson),
+        links: _objectList(json['links'], TopologyLink.fromJson),
       );
 
   int get controlPlaneCount =>

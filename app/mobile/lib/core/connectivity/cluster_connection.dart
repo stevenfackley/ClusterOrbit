@@ -1,13 +1,18 @@
 import '../cluster_domain/cluster_models.dart';
 
+/// Cluster mutations a connection may support.
+enum ClusterOperation { scale, restart, cordon, drain }
+
 abstract interface class ClusterConnection {
   ConnectionMode get mode;
+
+  /// Mutations this connection can perform; the rest throw when called. UI
+  /// should offer actions from this set rather than infer them from [mode].
+  Set<ClusterOperation> get supportedOperations;
 
   Future<List<ClusterProfile>> listClusters();
 
   Future<ClusterSnapshot> loadSnapshot(String clusterId);
-
-  Stream<ClusterSnapshot> watchSnapshot(String clusterId);
 
   /// Fetch the most recent events for a single entity.
   ///
@@ -89,4 +94,48 @@ class UnsupportedWorkloadKindException implements Exception {
 
   @override
   String toString() => 'UnsupportedWorkloadKindException: $kind';
+}
+
+/// A mutation the gateway parked for a second operator's approval instead of
+/// executing it (the gateway's `PendingRequest`).
+class PendingApproval {
+  const PendingApproval({
+    required this.id,
+    required this.op,
+    required this.targetId,
+    this.expiresAt,
+  });
+
+  factory PendingApproval.fromJson(Map<String, dynamic> json) {
+    final expiresAt = json['expiresAt'];
+    return PendingApproval(
+      id: json['id'] as String? ?? '',
+      op: json['op'] as String? ?? '',
+      targetId: json['targetId'] as String? ?? '',
+      expiresAt: expiresAt is num && expiresAt > 0
+          ? DateTime.fromMillisecondsSinceEpoch(expiresAt.toInt(), isUtc: true)
+          : null,
+    );
+  }
+
+  /// Approval request id (`apr-…`), not a drain job id.
+  final String id;
+
+  /// `scale`, `restart`, `cordon` or `drain`.
+  final String op;
+  final String targetId;
+  final DateTime? expiresAt;
+}
+
+/// Thrown by a mutation the backend accepted but did not execute: it waits
+/// for a second operator to approve [pending]. Not a failure, and not a
+/// success either; callers should say so rather than report the change done.
+class ApprovalPendingException implements Exception {
+  const ApprovalPendingException(this.pending);
+  final PendingApproval pending;
+
+  @override
+  String toString() =>
+      'ApprovalPendingException: ${pending.op} of ${pending.targetId} '
+      'awaits approval (${pending.id})';
 }

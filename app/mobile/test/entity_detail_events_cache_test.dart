@@ -56,7 +56,7 @@ void main() {
       await tester.pumpAndSettle();
 
       // Tap the first control-plane node to open the detail panel.
-      await tester.tap(find.text(snapshot.nodes.first.name).first);
+      await tester.tap(find.byKey(ValueKey('node:${snapshot.nodes.first.id}')));
       // Pump once to let cache read resolve, but DO NOT settle (live fetch is pending).
       await tester.pump();
       await tester.pump();
@@ -133,7 +133,7 @@ void main() {
       )));
       await tester.pumpAndSettle();
 
-      await tester.tap(find.text(snapshot.nodes.first.name).first);
+      await tester.tap(find.byKey(ValueKey('node:${snapshot.nodes.first.id}')));
       await tester.pumpAndSettle();
       expect(find.text('FirstLive'), findsOneWidget);
       expect(liveCalls, 1);
@@ -190,16 +190,18 @@ final class _RecordingConnection implements ClusterConnection {
   ConnectionMode get mode => ConnectionMode.direct;
 
   @override
+  Set<ClusterOperation> get supportedOperations => const {
+        ClusterOperation.scale,
+        ClusterOperation.restart,
+        ClusterOperation.cordon,
+      };
+
+  @override
   Future<List<ClusterProfile>> listClusters() async => _profiles;
 
   @override
   Future<ClusterSnapshot> loadSnapshot(String clusterId) async =>
       SampleClusterData.snapshotFor(_profiles.first);
-
-  @override
-  Stream<ClusterSnapshot> watchSnapshot(String clusterId) async* {
-    yield await loadSnapshot(clusterId);
-  }
 
   @override
   Future<List<ClusterEvent>> loadEvents({
@@ -264,7 +266,10 @@ final class _MemoryStore implements SnapshotStore {
   Future<void> saveProfiles(List<ClusterProfile> profiles) async {}
 
   @override
-  Future<ClusterSnapshot?> loadSnapshot(
+  Future<void> deleteProfiles(Iterable<String> ids) async {}
+
+  @override
+  Future<SnapshotCacheEntry?> loadSnapshotEntry(
     String profileId, {
     Duration? maxAge,
   }) async =>
