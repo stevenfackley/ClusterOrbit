@@ -97,6 +97,9 @@ Key env vars: `CLUSTERORBIT_GATEWAY_ADDR`, `_MODE` (`sample`|`kube`), `_TOKEN` /
 
 ## CI workflows (`.github/workflows/`)
 
-- **ci.yml** — mobile (format → analyze → test --coverage) + gateway (mod tidy → gofmt → vet → test -cover)
+- **ci.yml** — `mobile` (format → analyze → test --coverage), `android` (`flutter build apk --debug`, exercises Gradle/AGP bumps), `gateway` (reusable `stevenfackley/gh-actions` `ci-go.yml@v1`, `go-version: stable`, includes govulncheck)
 - **docs-check.yml** — markdownlint on all `*.md`
-- **release-draft.yml** — placeholder for tag-triggered releases
+- **dependabot-auto-merge.yml** — auto-merges Dependabot patch PRs (`pull_request_target`)
+- **ios-release.yml** — iOS TestFlight on `v*` tags / manual, self-hosted `clusterorbit-mac` runner
+- **macos-release.yml** — macOS TestFlight on `mac-v*` tags / manual, self-hosted `clusterorbit-mac` runner
+- **release-draft.yml** — placeholder for tag-triggered releases (echo only, fires on `v*` tags)

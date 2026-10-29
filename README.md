@@ -21,12 +21,13 @@ Most existing Kubernetes tools are desktop-first, list-heavy, or weak at showing
 - Workload scale mutation (sample + direct + gateway backed).
 - Two connection modes:
   - **Direct** — kubeconfig parsed on-device; snapshot fetched straight from the API server.
-  - **Gateway** — HTTP-backed, falls back to sample when URL is empty so the UI stays usable.
+  - **Gateway** — HTTP-backed; a missing or invalid URL is an error (no sample fallback).
 - SQLite snapshot cache with schema migrations.
 
 **Go gateway (`app/gateway/`):**
 
-- Endpoints: `GET /v1/clusters`, `GET /{id}/snapshot`, `GET /{id}/events`, `POST /{id}/workloads/{wid}/scale`.
+- Endpoints (all under `/v1/clusters`): `GET /`, `GET /{id}/snapshot`, `GET /{id}/events`; `POST /{id}/workloads/{wid}/scale|restart`; `POST /{id}/nodes/{node}/cordon|uncordon|drain`, `GET /{id}/nodes/{node}/drain/{job}` (async drain jobs); approvals: `GET /{id}/approvals`, `GET /{id}/approvals/{rid}`, `POST /{id}/approvals/{rid}/approve|reject`.
+- `ScalePolicy` / `NodePolicy` gates and an optional two-person approval flow (gated mutations park as `202`; a distinct identity approves). Pending approvals are in-memory only.
 - Shared-token auth via `X-ClusterOrbit-Token`, per-identity token-bucket rate limiting.
 - TLS + optional mTLS, JSON-Lines audit log of every mutation, graceful shutdown.
 - Sample or multi-context kubeconfig-backed data source.
@@ -34,9 +35,9 @@ Most existing Kubernetes tools are desktop-first, list-heavy, or weak at showing
 ## What's Not Built Yet
 
 - Config viewing / editing / diffs / guarded apply.
-- Node lifecycle actions (cordon, drain, label, taint, join).
-- Approval or policy flows on the gateway (token + rate limit only).
-- Real-time snapshot watch (currently polled on manual refresh).
+- Node lifecycle actions beyond cordon/uncordon/drain (label, taint, join).
+- An in-app UI for listing and approving pending gateway approvals (the app only reports a parked mutation); approvals are not persisted across gateway restarts.
+- Real-time snapshot watch (currently polled on a 30s timer plus manual refresh).
 - Retained-scene topology engine (filtering + LOD + force-directed layout); current topology is a view, not an engine.
 
 ## Architecture Snapshot
