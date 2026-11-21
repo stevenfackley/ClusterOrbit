@@ -218,7 +218,12 @@ func eventFromItem(item map[string]any) (api.ClusterEvent, bool) {
 	if count == 0 {
 		count = 1
 	}
-	etype := strings.ToLower(orDefault(stringAt(item, "type"), "Normal"))
+	// The app's event type enum is normal|warning and its decode throws on
+	// anything else, so a nonstandard type goes out as normal.
+	etype := "normal"
+	if strings.EqualFold(stringAt(item, "type"), "Warning") {
+		etype = "warning"
+	}
 	var source *string
 	if s := stringAt(item, "source", "component"); s != "" {
 		source = &s

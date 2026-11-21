@@ -267,6 +267,35 @@ func TestKubeBackendLoadEventsWorkloadKindFiltersByNameOnly(t *testing.T) {
 	}
 }
 
+// The app decodes type with ClusterEventType.values.byName, which knows only
+// normal and warning, so any other type must go out as normal (direct mode's
+// fromK8sType rule), or one odd event fails the whole events load.
+func TestKubeBackendLoadEventsNonstandardTypeIsNormal(t *testing.T) {
+	ts := newFakeKubeServer(t, kubeRoutes{
+		"/api/v1/namespaces/platform/events": list(
+			map[string]any{"type": "Error", "reason": "Odd", "message": "odd", "lastTimestamp": "2026-04-16T10:00:00Z"},
+			map[string]any{"type": "Warning", "reason": "BackOff", "message": "backoff", "lastTimestamp": "2026-04-16T10:00:05Z"},
+		),
+	})
+	defer ts.Close()
+
+	backend, err := NewKubeBackend(&kubeconfig.ResolvedCluster{Server: ts.URL, ContextName: "test"})
+	if err != nil {
+		t.Fatalf("new backend: %v", err)
+	}
+	events, err := backend.LoadEvents(context.Background(), "test", "workload", "api", "platform", 5)
+	if err != nil {
+		t.Fatalf("LoadEvents: %v", err)
+	}
+	got := map[string]string{}
+	for _, e := range events {
+		got[e.Reason] = e.Type
+	}
+	if got["Odd"] != "normal" || got["BackOff"] != "warning" {
+		t.Fatalf("types = %v, want Odd=normal BackOff=warning", got)
+	}
+}
+
 // The timestamp fallbacks match direct mode (kubernetes_event_loader.dart): an
 // event with only firstTimestamp uses it, and one with no time at all is
 // dropped rather than shown at the zero time.
