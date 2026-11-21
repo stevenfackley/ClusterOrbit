@@ -445,7 +445,10 @@ func (s *Server) handleScale(w http.ResponseWriter, r *http.Request, clusterID, 
 		writeError(w, http.StatusNotFound, "not found")
 		return
 	}
-	_, namespace, _, err := ParseWorkloadID(workloadID)
+	kind, namespace, _, err := ParseWorkloadID(workloadID)
+	if err == nil {
+		err = checkKindSupports(OpScale, kind)
+	}
 	if err != nil {
 		s.audit(r, AuditEntry{ClusterID: clusterID, WorkloadID: workloadID, Status: http.StatusBadRequest, Error: err.Error()})
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -501,7 +504,10 @@ func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request, clusterID
 		writeError(w, http.StatusNotFound, "not found")
 		return
 	}
-	_, namespace, _, err := ParseWorkloadID(workloadID)
+	kind, namespace, _, err := ParseWorkloadID(workloadID)
+	if err == nil {
+		err = checkKindSupports(OpRestart, kind)
+	}
 	if err != nil {
 		s.audit(r, AuditEntry{ClusterID: clusterID, WorkloadID: workloadID, Status: http.StatusBadRequest, Error: err.Error()})
 		writeError(w, http.StatusBadRequest, err.Error())
