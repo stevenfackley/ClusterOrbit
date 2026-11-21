@@ -184,7 +184,9 @@ func (b *KubeBackend) LoadEvents(
 	items := listItems(body)
 	events := make([]api.ClusterEvent, 0, len(items))
 	for _, item := range items {
-		events = append(events, eventFromItem(item))
+		if event, ok := eventFromItem(item); ok {
+			events = append(events, event)
+		}
 	}
 
 	// Sort newest first by lastTimestamp, then truncate.
@@ -195,13 +197,22 @@ func (b *KubeBackend) LoadEvents(
 	return events, nil
 }
 
-func eventFromItem(item map[string]any) api.ClusterEvent {
+// eventFromItem mirrors the direct-mode reducer in kubernetes_event_loader.dart.
+// It reports false for an event with no usable time, which would otherwise
+// show at the zero time.
+func eventFromItem(item map[string]any) (api.ClusterEvent, bool) {
 	last := parseTimestamp(item["lastTimestamp"])
 	if last.IsZero() {
 		last = parseTimestamp(item["eventTime"])
 	}
 	if last.IsZero() {
+		last = parseTimestamp(item["firstTimestamp"])
+	}
+	if last.IsZero() {
 		last = parseTimestamp(valueAt(item, []string{"metadata", "creationTimestamp"}))
+	}
+	if last.IsZero() {
+		return api.ClusterEvent{}, false
 	}
 	count := intAt(item, "count")
 	if count == 0 {
@@ -221,7 +232,7 @@ func eventFromItem(item map[string]any) api.ClusterEvent {
 		LastTimestamp:   last.UnixMilli(),
 		Count:           count,
 		SourceComponent: source,
-	}
+	}, true
 }
 
 func sortEventsDesc(events []api.ClusterEvent) {

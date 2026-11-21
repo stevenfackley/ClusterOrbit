@@ -123,6 +123,33 @@ void main() {
     expect(events.map((e) => e.reason).toList(), ['Keep']);
   });
 
+  // The same defaults as the gateway's eventFromItem.
+  test('counts a zero count as 1 and falls back to reportingComponent',
+      () async {
+    final transport = _FakeKubernetesTransport({
+      'https://cluster.example.internal:6443/api/v1/namespaces/apps/events'
+          '?fieldSelector=involvedObject.name%3Dapi': _listResponse([
+        {
+          'type': 'Normal',
+          'reason': 'Scheduled',
+          'message': 'Successfully assigned apps/api-1 to worker-1',
+          'lastTimestamp': '2026-04-16T20:00:00Z',
+          'count': 0,
+          'reportingComponent': 'default-scheduler',
+        },
+      ]),
+    });
+
+    final events = await KubernetesEventLoader(transport: transport).loadEvents(
+      cluster: _cluster(),
+      namespace: 'apps',
+      objectName: 'api',
+    );
+
+    expect(events.single.count, 1);
+    expect(events.single.sourceComponent, 'default-scheduler');
+  });
+
   test('returns empty list when response has no items', () async {
     final transport = _FakeKubernetesTransport({
       'https://cluster.example.internal:6443/api/v1/namespaces/apps/events'
