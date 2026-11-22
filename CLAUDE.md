@@ -46,7 +46,7 @@ In the app, the active connection comes from saved connections (onboarding / Set
 | `core/connectivity/kube_transport.dart` | K8s HTTP transport: URL builder keeps the server's path prefix and escapes segments, TLS context, timeouts, `KubernetesApiException` |
 | `core/connectivity/connection_errors.dart` | `readableError` — every on-screen connection error goes through it |
 | `core/connectivity/kubeconfig_repository.dart` | Parses kubeconfig with `package:yaml`: contexts, clusters, users, auth, TLS |
-| `core/connectivity/kubernetes_snapshot_loader.dart` | Calls K8s API; fetches nodes/pods/services/deployments/daemonsets/statefulsets/jobs/replicasets; reduces to `ClusterSnapshot`. **Mirrors the gateway's `transform.go`** (selectors, selectorless services, Job rule) — change both together |
+| `core/connectivity/kubernetes_snapshot_loader.dart` | Calls K8s API; fetches nodes/pods/services/deployments/daemonsets/statefulsets/jobs/replicasets; reduces to `ClusterSnapshot`. **Mirrors the gateway's `transform.go`** (selectors, selectorless services, Job rule) — change both together; `testdata/contract/` holds the lists and the snapshot both must build (`snapshot_contract_test.dart`, `contract_test.go`, regenerate with `-update-contract`) |
 | `core/connectivity/sample_cluster_data.dart` | Fallback data + used in tests |
 | `core/sync_cache/snapshot_store.dart` | `SnapshotStore` interface + `SqfliteSnapshotStore` (profiles, snapshots, events, saved connections) + `ScopedSnapshotStore` decorator (per-saved-connection id prefix; the root gate wraps the shared store) |
 | `core/theme/` | Dark theme, `ClusterOrbitPalette`, `HealthStyle` (the one health-level → color/icon/label mapping) |

@@ -1,0 +1,53 @@
+{
+  "nodes": [
+    {"cpuCapacity":"4","health":"healthy","id":"cp-1","memoryCapacity":"16Gi","name":"cp-1","osImage":"Ubuntu 22.04.3 LTS","podCount":3,"role":"controlPlane","schedulable":true,"version":"v1.32.3","zone":"use1-a"},
+    {"cpuCapacity":"8","health":"warning","id":"worker-1","memoryCapacity":"32Gi","name":"worker-1","osImage":"Ubuntu 22.04.3 LTS","podCount":5,"role":"worker","schedulable":true,"version":"v1.32.3","zone":"use1-b"},
+    {"cpuCapacity":"8","health":"warning","id":"worker-2","memoryCapacity":"32Gi","name":"worker-2","osImage":"Bottlerocket OS 1.20.0","podCount":5,"role":"worker","schedulable":false,"version":"v1.31.7","zone":"unassigned"},
+    {"cpuCapacity":"unknown","health":"critical","id":"worker-3","memoryCapacity":"unknown","name":"worker-3","osImage":"unknown","podCount":1,"role":"controlPlane","schedulable":true,"version":"unknown","zone":"unassigned"}
+  ],
+  "workloads": [
+    {"desiredReplicas":2,"health":"warning","id":"deployment:apps/api","images":["nginx:1.25"],"kind":"deployment","name":"api","namespace":"apps","nodeIds":["cp-1","worker-1"],"readyReplicas":1},
+    {"desiredReplicas":1,"health":"healthy","id":"deployment:a/web","images":[],"kind":"deployment","name":"web","namespace":"a","nodeIds":["worker-1"],"readyReplicas":1},
+    {"desiredReplicas":1,"health":"healthy","id":"deployment:b/web","images":[],"kind":"deployment","name":"web","namespace":"b","nodeIds":["worker-2"],"readyReplicas":1},
+    {"desiredReplicas":1,"health":"critical","id":"deployment:apps/cache","images":["redis:7","redis-exporter:1.62"],"kind":"deployment","name":"cache","namespace":"apps","nodeIds":["worker-1"],"readyReplicas":1},
+    {"desiredReplicas":2,"health":"warning","id":"daemonSet:platform/agent","images":["agent:2.4"],"kind":"daemonSet","name":"agent","namespace":"platform","nodeIds":["cp-1","worker-1"],"readyReplicas":2},
+    {"desiredReplicas":1,"health":"warning","id":"statefulSet:apps/db","images":["postgres:17"],"kind":"statefulSet","name":"db","namespace":"apps","nodeIds":["worker-2"],"readyReplicas":0},
+    {"desiredReplicas":1,"health":"healthy","id":"job:batch/migrate","images":[],"kind":"job","name":"migrate","namespace":"batch","nodeIds":["worker-2"],"readyReplicas":0},
+    {"desiredReplicas":1,"health":"warning","id":"job:batch/report","images":[],"kind":"job","name":"report","namespace":"batch","nodeIds":["worker-1"],"readyReplicas":0},
+    {"desiredReplicas":1,"health":"warning","id":"job:batch/sweep","images":[],"kind":"job","name":"sweep","namespace":"batch","nodeIds":["cp-1"],"readyReplicas":0},
+    {"desiredReplicas":3,"health":"healthy","id":"job:batch/backfill","images":[],"kind":"job","name":"backfill","namespace":"batch","nodeIds":[],"readyReplicas":3}
+  ],
+  "services": [
+    {"clusterIp":"10.96.0.100","exposure":"loadBalancer","health":"healthy","id":"service:apps/api","name":"api","namespace":"apps","ports":[{"name":"http","port":80,"protocol":"TCP","targetPort":8080}],"targetWorkloadIds":["deployment:apps/api"]},
+    {"clusterIp":null,"exposure":"clusterIp","health":"warning","id":"service:apps/orphan","name":"orphan","namespace":"apps","ports":[{"name":null,"port":80,"protocol":"TCP","targetPort":8080}],"targetWorkloadIds":[]},
+    {"clusterIp":"10.96.0.1","exposure":"clusterIp","health":"healthy","id":"service:default/kubernetes","name":"kubernetes","namespace":"default","ports":[{"name":"https","port":443,"protocol":"TCP","targetPort":6443}],"targetWorkloadIds":[]},
+    {"clusterIp":null,"exposure":"clusterIp","health":"healthy","id":"service:a/web","name":"web","namespace":"a","ports":[],"targetWorkloadIds":["deployment:a/web"]},
+    {"clusterIp":"10.96.0.200","exposure":"nodePort","health":"healthy","id":"service:apps/db","name":"db","namespace":"apps","ports":[{"name":"pg","port":5432,"protocol":"TCP","targetPort":0},{"name":"metrics","port":9187,"protocol":"TCP","targetPort":9187}],"targetWorkloadIds":["statefulSet:apps/db"]},
+    {"clusterIp":null,"exposure":"ingress","health":"healthy","id":"service:apps/docs","name":"docs","namespace":"apps","ports":[],"targetWorkloadIds":[]}
+  ],
+  "alerts": [
+    {"id":"node-warning-worker-1","level":"warning","scope":"Node health","summary":"worker-1 is healthy but reporting pressure conditions.","title":"Node pressure detected"},
+    {"id":"node-drain-worker-2","level":"warning","scope":"Node lifecycle","summary":"worker-2 is cordoned or draining.","title":"Node unschedulable"},
+    {"id":"node-critical-worker-3","level":"critical","scope":"Node health","summary":"worker-3 is reporting an unhealthy ready condition.","title":"Node not ready"},
+    {"id":"workload-deployment:apps/api","level":"warning","scope":"Workload health","summary":"api is at 1/2 ready replicas.","title":"Replica skew detected"},
+    {"id":"workload-statefulSet:apps/db","level":"warning","scope":"Workload health","summary":"db is at 0/1 ready replicas.","title":"Replica skew detected"},
+    {"id":"workload-job:batch/report","level":"warning","scope":"Workload health","summary":"report has failed.","title":"Job failed"},
+    {"id":"service-service:apps/orphan","level":"warning","scope":"Service routing","summary":"orphan does not currently match any discovered workload pods.","title":"Service has no backing workloads"}
+  ],
+  "links": [
+    {"kind":"workload","label":null,"sourceId":"cp-1","targetId":"deployment:apps/api"},
+    {"kind":"workload","label":null,"sourceId":"worker-1","targetId":"deployment:apps/api"},
+    {"kind":"workload","label":null,"sourceId":"worker-1","targetId":"deployment:a/web"},
+    {"kind":"workload","label":null,"sourceId":"worker-2","targetId":"deployment:b/web"},
+    {"kind":"workload","label":null,"sourceId":"worker-1","targetId":"deployment:apps/cache"},
+    {"kind":"workload","label":null,"sourceId":"cp-1","targetId":"daemonSet:platform/agent"},
+    {"kind":"workload","label":null,"sourceId":"worker-1","targetId":"daemonSet:platform/agent"},
+    {"kind":"workload","label":null,"sourceId":"worker-2","targetId":"statefulSet:apps/db"},
+    {"kind":"workload","label":null,"sourceId":"worker-2","targetId":"job:batch/migrate"},
+    {"kind":"workload","label":null,"sourceId":"worker-1","targetId":"job:batch/report"},
+    {"kind":"workload","label":null,"sourceId":"cp-1","targetId":"job:batch/sweep"},
+    {"kind":"service","label":"LoadBalancer","sourceId":"service:apps/api","targetId":"deployment:apps/api"},
+    {"kind":"service","label":"ClusterIP","sourceId":"service:a/web","targetId":"deployment:a/web"},
+    {"kind":"service","label":"NodePort","sourceId":"service:apps/db","targetId":"statefulSet:apps/db"}
+  ]
+}

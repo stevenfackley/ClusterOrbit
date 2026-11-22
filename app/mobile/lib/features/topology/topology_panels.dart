@@ -24,7 +24,7 @@ class TopologySidebar extends StatelessWidget {
 
   final ClusterSnapshot snapshot;
   final ClusterOrbitPalette palette;
-  final Object? selectedEntity;
+  final TopologyEntity? selectedEntity;
   final VoidCallback onDismiss;
   final ClusterConnection? connection;
   final String? clusterId;

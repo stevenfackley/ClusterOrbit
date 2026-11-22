@@ -78,9 +78,8 @@ class _TopologyListViewState extends State<TopologyListView> {
     if (route.isActive) route.navigator?.removeRoute(route);
   }
 
-  Future<void> _openDetail(Object entity) async {
+  Future<void> _openDetail(TopologyEntity entity) async {
     final key = topologyEntityKey(entity);
-    if (key == null) return;
     final clusterId = widget.clusterId;
     final palette = Theme.of(context).extension<ClusterOrbitPalette>()!;
     ModalRoute<void>? route;
@@ -167,7 +166,7 @@ class _NodeSection extends StatelessWidget {
   });
 
   final List<ClusterNode> nodes;
-  final ValueChanged<Object> onOpen;
+  final ValueChanged<TopologyEntity> onOpen;
 
   @override
   Widget build(BuildContext context) {
@@ -206,7 +205,7 @@ class _NodeRow extends StatelessWidget {
   });
 
   final ClusterNode node;
-  final ValueChanged<Object> onOpen;
+  final ValueChanged<TopologyEntity> onOpen;
 
   @override
   Widget build(BuildContext context) {
@@ -242,7 +241,7 @@ class _WorkloadSection extends StatelessWidget {
   });
 
   final List<ClusterWorkload> workloads;
-  final ValueChanged<Object> onOpen;
+  final ValueChanged<TopologyEntity> onOpen;
 
   @override
   Widget build(BuildContext context) {
@@ -281,7 +280,7 @@ class _WorkloadRow extends StatelessWidget {
   });
 
   final ClusterWorkload workload;
-  final ValueChanged<Object> onOpen;
+  final ValueChanged<TopologyEntity> onOpen;
 
   @override
   Widget build(BuildContext context) {
@@ -313,7 +312,7 @@ class _ServiceSection extends StatelessWidget {
   });
 
   final List<ClusterService> services;
-  final ValueChanged<Object> onOpen;
+  final ValueChanged<TopologyEntity> onOpen;
 
   @override
   Widget build(BuildContext context) {
@@ -352,7 +351,7 @@ class _ServiceRow extends StatelessWidget {
   });
 
   final ClusterService service;
-  final ValueChanged<Object> onOpen;
+  final ValueChanged<TopologyEntity> onOpen;
 
   @override
   Widget build(BuildContext context) {

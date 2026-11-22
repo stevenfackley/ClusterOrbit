@@ -11,76 +11,27 @@ final class KubernetesSnapshotLoader {
 
   Future<ClusterSnapshot> loadSnapshot(
       KubeconfigResolvedCluster cluster) async {
-    final responses = await Future.wait([
-      _transport.getJson(
-        KubernetesRequest(
-          uri: kubeApiUri(cluster.server, ['api', 'v1', 'nodes']),
-          auth: cluster.auth,
-          tls: cluster.tls,
-        ),
-      ),
-      _transport.getJson(
-        KubernetesRequest(
-          uri: kubeApiUri(cluster.server, ['api', 'v1', 'pods']),
-          auth: cluster.auth,
-          tls: cluster.tls,
-        ),
-      ),
-      _transport.getJson(
-        KubernetesRequest(
-          uri: kubeApiUri(cluster.server, ['api', 'v1', 'services']),
-          auth: cluster.auth,
-          tls: cluster.tls,
-        ),
-      ),
-      _transport.getJson(
-        KubernetesRequest(
-          uri:
-              kubeApiUri(cluster.server, ['apis', 'apps', 'v1', 'deployments']),
-          auth: cluster.auth,
-          tls: cluster.tls,
-        ),
-      ),
-      _transport.getJson(
-        KubernetesRequest(
-          uri: kubeApiUri(cluster.server, ['apis', 'apps', 'v1', 'daemonsets']),
-          auth: cluster.auth,
-          tls: cluster.tls,
-        ),
-      ),
-      _transport.getJson(
-        KubernetesRequest(
-          uri: kubeApiUri(
-              cluster.server, ['apis', 'apps', 'v1', 'statefulsets']),
-          auth: cluster.auth,
-          tls: cluster.tls,
-        ),
-      ),
-      _transport.getJson(
-        KubernetesRequest(
-          uri: kubeApiUri(cluster.server, ['apis', 'batch', 'v1', 'jobs']),
-          auth: cluster.auth,
-          tls: cluster.tls,
-        ),
-      ),
-      _transport.getJson(
-        KubernetesRequest(
-          uri:
-              kubeApiUri(cluster.server, ['apis', 'apps', 'v1', 'replicasets']),
-          auth: cluster.auth,
-          tls: cluster.tls,
-        ),
-      ),
+    // Future.wait, not a record's .wait: the first failed list's own error
+    // reaches the caller, not a ParallelWaitError.
+    final [
+      nodeItems,
+      podItems,
+      serviceItems,
+      deploymentItems,
+      daemonSetItems,
+      statefulSetItems,
+      jobItems,
+      replicaSetItems,
+    ] = await Future.wait([
+      _list(cluster, ['api', 'v1', 'nodes']),
+      _list(cluster, ['api', 'v1', 'pods']),
+      _list(cluster, ['api', 'v1', 'services']),
+      _list(cluster, ['apis', 'apps', 'v1', 'deployments']),
+      _list(cluster, ['apis', 'apps', 'v1', 'daemonsets']),
+      _list(cluster, ['apis', 'apps', 'v1', 'statefulsets']),
+      _list(cluster, ['apis', 'batch', 'v1', 'jobs']),
+      _list(cluster, ['apis', 'apps', 'v1', 'replicasets']),
     ]);
-
-    final nodeItems = _items(responses[0]);
-    final podItems = _items(responses[1]);
-    final serviceItems = _items(responses[2]);
-    final deploymentItems = _items(responses[3]);
-    final daemonSetItems = _items(responses[4]);
-    final statefulSetItems = _items(responses[5]);
-    final jobItems = _items(responses[6]);
-    final replicaSetItems = _items(responses[7]);
 
     final nodePodCounts = <String, int>{};
     final replicaSetOwners = _replicaSetOwners(replicaSetItems);
@@ -222,6 +173,21 @@ final class KubernetesSnapshotLoader {
     );
   }
 
+  /// The items of the cluster-wide LIST at [segments].
+  Future<List<Map<String, dynamic>>> _list(
+    KubeconfigResolvedCluster cluster,
+    List<String> segments,
+  ) async =>
+      _items(
+        await _transport.getJson(
+          KubernetesRequest(
+            uri: kubeApiUri(cluster.server, segments),
+            auth: cluster.auth,
+            tls: cluster.tls,
+          ),
+        ),
+      );
+
   List<Map<String, dynamic>> _items(Map<String, dynamic> response) {
     final rawItems = response['items'];
     if (rawItems is! List) {
@@ -251,8 +217,8 @@ final class KubernetesSnapshotLoader {
               );
       final deploymentName = deploymentOwner['name'];
       if (deploymentName is String && deploymentName.isNotEmpty) {
-        owners[_resourceKey(namespace, name)] =
-            _workloadId(WorkloadKind.deployment, namespace, deploymentName);
+        owners[_resourceKey(namespace, name)] = formatWorkloadId(
+            WorkloadKind.deployment, namespace, deploymentName);
       }
     }
     return owners;
@@ -302,11 +268,11 @@ final class KubernetesSnapshotLoader {
         case 'ReplicaSet':
           return replicaSetOwners[_resourceKey(namespace, name)];
         case 'DaemonSet':
-          return _workloadId(WorkloadKind.daemonSet, namespace, name);
+          return formatWorkloadId(WorkloadKind.daemonSet, namespace, name);
         case 'StatefulSet':
-          return _workloadId(WorkloadKind.statefulSet, namespace, name);
+          return formatWorkloadId(WorkloadKind.statefulSet, namespace, name);
         case 'Job':
-          return _workloadId(WorkloadKind.job, namespace, name);
+          return formatWorkloadId(WorkloadKind.job, namespace, name);
       }
     }
 
@@ -367,7 +333,7 @@ final class KubernetesSnapshotLoader {
   }) {
     final namespace = _stringAt(item, ['metadata', 'namespace']) ?? 'default';
     final name = _stringAt(item, ['metadata', 'name']) ?? 'unknown';
-    final workloadId = _workloadId(kind, namespace, name);
+    final workloadId = formatWorkloadId(kind, namespace, name);
 
     final desiredReplicas = switch (kind) {
       WorkloadKind.deployment ||
@@ -434,7 +400,7 @@ final class KubernetesSnapshotLoader {
   Set<String> _failedJobIds(List<Map<String, dynamic>> jobItems) => {
         for (final item in jobItems)
           if (_jobFailed(item))
-            _workloadId(
+            formatWorkloadId(
               WorkloadKind.job,
               _stringAt(item, ['metadata', 'namespace']) ?? 'default',
               _stringAt(item, ['metadata', 'name']) ?? 'unknown',
@@ -615,9 +581,6 @@ final class KubernetesSnapshotLoader {
     }
     return ClusterHealthLevel.healthy;
   }
-
-  String _workloadId(WorkloadKind kind, String namespace, String name) =>
-      _resourceId(kind.name, namespace, name);
 
   String _resourceId(String prefix, String namespace, String name) =>
       '$prefix:$namespace/$name';

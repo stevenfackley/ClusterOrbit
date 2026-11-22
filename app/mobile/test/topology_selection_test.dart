@@ -4,6 +4,7 @@ import 'package:clusterorbit_mobile/core/connectivity/sample_cluster_data.dart';
 import 'package:clusterorbit_mobile/core/theme/clusterorbit_theme.dart';
 import 'package:clusterorbit_mobile/features/topology/topology_orbs.dart';
 import 'package:clusterorbit_mobile/features/topology/topology_screen.dart';
+import 'package:clusterorbit_mobile/features/topology/topology_selection.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -110,5 +111,20 @@ void main() {
     await pumpScreen(tester, refreshedSnapshot(dev), connection);
     expect(find.text('K8s Version'), findsNothing);
     expect(highlighted(tester, 'cp-1'), isFalse);
+  });
+
+  test('every entity keys by its own kind and id and resolves back', () {
+    for (final (entities, kind) in <(List<TopologyEntity>, TopologyEntityKind)>[
+      (dev.nodes, TopologyEntityKind.node),
+      (dev.workloads, TopologyEntityKind.workload),
+      (dev.services, TopologyEntityKind.service),
+    ]) {
+      expect(entities, isNotEmpty);
+      for (final entity in entities) {
+        final key = topologyEntityKey(entity);
+        expect(key, (kind: kind, id: entity.id));
+        expect(resolveTopologyEntity(dev, key), same(entity));
+      }
+    }
   });
 }

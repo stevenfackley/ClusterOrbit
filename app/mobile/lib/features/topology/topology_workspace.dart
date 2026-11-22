@@ -35,8 +35,8 @@ class TopologyWorkspace extends StatelessWidget {
   final ClusterSnapshot snapshot;
   final TopologyLayout layout;
   final ClusterOrbitPalette palette;
-  final Object? selectedEntity;
-  final void Function(Object) onEntityTap;
+  final TopologyEntity? selectedEntity;
+  final void Function(TopologyEntity) onEntityTap;
   final VoidCallback onDismiss;
   final bool showPortraitPanel;
   final ClusterConnection? connection;
@@ -305,8 +305,8 @@ class _TopologyCanvas extends StatefulWidget {
   final ClusterSnapshot snapshot;
   final TopologyLayout layout;
   final ClusterOrbitPalette palette;
-  final Object? selectedEntity;
-  final void Function(Object) onEntityTap;
+  final TopologyEntity? selectedEntity;
+  final void Function(TopologyEntity) onEntityTap;
   final TransformationController viewport;
 
   @override

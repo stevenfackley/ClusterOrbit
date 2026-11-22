@@ -52,7 +52,7 @@ class EntityEventsController extends ChangeNotifier {
   /// Starts over for [entity], dropping the previous entity's events and
   /// any of its fetches still in flight.
   void load({
-    required Object entity,
+    required TopologyEntity entity,
     required ClusterConnection? connection,
     required String? clusterId,
     SnapshotStore? store,
@@ -183,13 +183,12 @@ class EntityEventsController extends ChangeNotifier {
     }
   }
 
-  static _EntityRef? _entityRef(Object entity) => switch (entity) {
+  static _EntityRef _entityRef(TopologyEntity entity) => switch (entity) {
         ClusterNode n => _EntityRef(TopologyEntityKind.node, n.name, null),
         ClusterWorkload w =>
           _EntityRef(TopologyEntityKind.workload, w.name, w.namespace),
         ClusterService s =>
           _EntityRef(TopologyEntityKind.service, s.name, s.namespace),
-        _ => null,
       };
 }
 
