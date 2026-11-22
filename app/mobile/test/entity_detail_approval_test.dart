@@ -24,7 +24,8 @@ void main() {
         ..mutationError = ApprovalPendingException(
             PendingApproval(id: requestId, op: op, targetId: 'target'));
 
-  Widget host(Object entity, ClusterConnection connection) => MaterialApp(
+  Widget host(TopologyEntity entity, ClusterConnection connection) =>
+      MaterialApp(
         theme: theme,
         home: Scaffold(
           body: EntityDetailPanel(

@@ -27,7 +27,7 @@ class EntityDetailPanel extends StatefulWidget {
     this.profileId,
   });
 
-  final Object entity;
+  final TopologyEntity entity;
   final ClusterOrbitPalette palette;
   final VoidCallback onDismiss;
   final ClusterConnection? connection;
@@ -171,11 +171,10 @@ class _EntityDetailPanelState extends State<EntityDetailPanel> {
     );
   }
 
-  static String? _copyPayload(Object entity) => switch (entity) {
+  static String _copyPayload(TopologyEntity entity) => switch (entity) {
         ClusterNode n => n.name,
         ClusterWorkload w => '${w.namespace}/${w.name}',
         ClusterService s => '${s.namespace}/${s.name}',
-        _ => null,
       };
 
   Future<void> _copyToClipboard(String text) async {
@@ -194,7 +193,6 @@ class _EntityDetailPanelState extends State<EntityDetailPanel> {
       ClusterNode n => (n.name, n.role.label),
       ClusterWorkload w => (w.name, w.kind.label),
       ClusterService s => (s.name, s.exposure.label),
-      _ => ('Unknown', ''),
     };
     final copyPayload = _copyPayload(widget.entity);
     return Row(
@@ -202,9 +200,7 @@ class _EntityDetailPanelState extends State<EntityDetailPanel> {
         Expanded(
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
-            onLongPress: copyPayload == null
-                ? null
-                : () => _copyToClipboard(copyPayload),
+            onLongPress: () => _copyToClipboard(copyPayload),
             child: Text(
               name,
               style: theme.textTheme.titleMedium,
@@ -235,7 +231,6 @@ class _EntityDetailPanelState extends State<EntityDetailPanel> {
         ClusterNode n => _nodeFields(n, theme),
         ClusterWorkload w => _workloadFields(w, theme),
         ClusterService s => _serviceFields(s, theme),
-        _ => const [],
       };
 
   List<Widget> _nodeFields(ClusterNode n, ThemeData theme) {

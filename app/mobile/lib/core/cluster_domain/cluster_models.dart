@@ -299,7 +299,17 @@ class ClusterProfile {
       );
 }
 
-class ClusterNode {
+/// A node, workload or service on the topology map. Sealed, so a switch
+/// over one is exhaustive: a new entity kind fails to compile at every site
+/// that must handle it, instead of falling into a default arm.
+sealed class TopologyEntity {
+  /// Unique per [entityKind] within one snapshot.
+  String get id;
+
+  TopologyEntityKind get entityKind;
+}
+
+class ClusterNode implements TopologyEntity {
   const ClusterNode({
     required this.id,
     required this.name,
@@ -314,6 +324,7 @@ class ClusterNode {
     required this.osImage,
   });
 
+  @override
   final String id;
   final String name;
   final ClusterNodeRole role;
@@ -325,6 +336,9 @@ class ClusterNode {
   final String cpuCapacity;
   final String memoryCapacity;
   final String osImage;
+
+  @override
+  TopologyEntityKind get entityKind => TopologyEntityKind.node;
 
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -355,7 +369,7 @@ class ClusterNode {
       );
 }
 
-class ClusterWorkload {
+class ClusterWorkload implements TopologyEntity {
   const ClusterWorkload({
     required this.id,
     required this.namespace,
@@ -368,6 +382,7 @@ class ClusterWorkload {
     required this.images,
   });
 
+  @override
   final String id;
   final String namespace;
   final String name;
@@ -377,6 +392,9 @@ class ClusterWorkload {
   final List<String> nodeIds;
   final ClusterHealthLevel health;
   final List<String> images;
+
+  @override
+  TopologyEntityKind get entityKind => TopologyEntityKind.workload;
 
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -432,7 +450,7 @@ class ServicePort {
       );
 }
 
-class ClusterService {
+class ClusterService implements TopologyEntity {
   const ClusterService({
     required this.id,
     required this.namespace,
@@ -444,6 +462,7 @@ class ClusterService {
     this.clusterIp,
   });
 
+  @override
   final String id;
   final String namespace;
   final String name;
@@ -452,6 +471,9 @@ class ClusterService {
   final List<ServicePort> ports;
   final ClusterHealthLevel health;
   final String? clusterIp;
+
+  @override
+  TopologyEntityKind get entityKind => TopologyEntityKind.service;
 
   Map<String, dynamic> toJson() => {
         'id': id,

@@ -18,7 +18,7 @@ void main() {
     panel: Color(0xFF1A1F2E),
   );
 
-  Widget host(Object entity) => MaterialApp(
+  Widget host(TopologyEntity entity) => MaterialApp(
         theme: ClusterOrbitTheme.dark(),
         home: Scaffold(
           body: EntityDetailPanel(

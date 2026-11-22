@@ -67,7 +67,7 @@ class _TopologyScreenState extends State<TopologyScreen> {
     super.dispose();
   }
 
-  void _onEntityTap(Object entity) {
+  void _onEntityTap(TopologyEntity entity) {
     final key = topologyEntityKey(entity);
     setState(() => _selection = _selection == key ? null : key);
   }

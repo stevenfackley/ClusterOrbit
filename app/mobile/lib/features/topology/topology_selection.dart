@@ -5,15 +5,11 @@ import '../../core/cluster_domain/cluster_models.dart';
 /// within one snapshot), never by object reference.
 typedef TopologyEntityKey = ({TopologyEntityKind kind, String id});
 
-TopologyEntityKey? topologyEntityKey(Object entity) => switch (entity) {
-      ClusterNode n => (kind: TopologyEntityKind.node, id: n.id),
-      ClusterWorkload w => (kind: TopologyEntityKind.workload, id: w.id),
-      ClusterService s => (kind: TopologyEntityKind.service, id: s.id),
-      _ => null,
-    };
+TopologyEntityKey topologyEntityKey(TopologyEntity entity) =>
+    (kind: entity.entityKind, id: entity.id);
 
 /// The entity [key] names in [snapshot], or null if the snapshot lacks it.
-Object? resolveTopologyEntity(
+TopologyEntity? resolveTopologyEntity(
   ClusterSnapshot snapshot,
   TopologyEntityKey key,
 ) =>

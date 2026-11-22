@@ -22,7 +22,7 @@ void main() {
 
   Future<void> showPanel(
     WidgetTester tester,
-    Object entity,
+    TopologyEntity entity,
     ClusterConnection connection,
   ) async {
     final theme = ClusterOrbitTheme.dark();
