@@ -217,8 +217,8 @@ final class KubernetesSnapshotLoader {
               );
       final deploymentName = deploymentOwner['name'];
       if (deploymentName is String && deploymentName.isNotEmpty) {
-        owners[_resourceKey(namespace, name)] =
-            _workloadId(WorkloadKind.deployment, namespace, deploymentName);
+        owners[_resourceKey(namespace, name)] = formatWorkloadId(
+            WorkloadKind.deployment, namespace, deploymentName);
       }
     }
     return owners;
@@ -268,11 +268,11 @@ final class KubernetesSnapshotLoader {
         case 'ReplicaSet':
           return replicaSetOwners[_resourceKey(namespace, name)];
         case 'DaemonSet':
-          return _workloadId(WorkloadKind.daemonSet, namespace, name);
+          return formatWorkloadId(WorkloadKind.daemonSet, namespace, name);
         case 'StatefulSet':
-          return _workloadId(WorkloadKind.statefulSet, namespace, name);
+          return formatWorkloadId(WorkloadKind.statefulSet, namespace, name);
         case 'Job':
-          return _workloadId(WorkloadKind.job, namespace, name);
+          return formatWorkloadId(WorkloadKind.job, namespace, name);
       }
     }
 
@@ -333,7 +333,7 @@ final class KubernetesSnapshotLoader {
   }) {
     final namespace = _stringAt(item, ['metadata', 'namespace']) ?? 'default';
     final name = _stringAt(item, ['metadata', 'name']) ?? 'unknown';
-    final workloadId = _workloadId(kind, namespace, name);
+    final workloadId = formatWorkloadId(kind, namespace, name);
 
     final desiredReplicas = switch (kind) {
       WorkloadKind.deployment ||
@@ -400,7 +400,7 @@ final class KubernetesSnapshotLoader {
   Set<String> _failedJobIds(List<Map<String, dynamic>> jobItems) => {
         for (final item in jobItems)
           if (_jobFailed(item))
-            _workloadId(
+            formatWorkloadId(
               WorkloadKind.job,
               _stringAt(item, ['metadata', 'namespace']) ?? 'default',
               _stringAt(item, ['metadata', 'name']) ?? 'unknown',
@@ -581,9 +581,6 @@ final class KubernetesSnapshotLoader {
     }
     return ClusterHealthLevel.healthy;
   }
-
-  String _workloadId(WorkloadKind kind, String namespace, String name) =>
-      _resourceId(kind.name, namespace, name);
 
   String _resourceId(String prefix, String namespace, String name) =>
       '$prefix:$namespace/$name';

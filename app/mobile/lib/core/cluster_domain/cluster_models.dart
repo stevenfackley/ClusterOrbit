@@ -66,6 +66,56 @@ extension WorkloadKindLabel on WorkloadKind {
       };
 }
 
+/// What each workload kind can do, in one place: the detail panel offers
+/// these actions and the Direct-mode scaler accepts these kinds. The
+/// gateway holds the same rule in Go.
+extension WorkloadKindOps on WorkloadKind {
+  /// Takes a replica count. DaemonSet and Job ignore one.
+  bool get isScalable => switch (this) {
+        WorkloadKind.deployment || WorkloadKind.statefulSet => true,
+        WorkloadKind.daemonSet || WorkloadKind.job => false,
+      };
+
+  /// Takes a rolling restart: the scalable kinds and DaemonSet, not Job.
+  bool get isRestartable => isScalable || this == WorkloadKind.daemonSet;
+
+  /// The plural API resource the kind lives under (`apps/v1` for all but
+  /// Job, which is `batch/v1`).
+  String get resource => switch (this) {
+        WorkloadKind.deployment => 'deployments',
+        WorkloadKind.daemonSet => 'daemonsets',
+        WorkloadKind.statefulSet => 'statefulsets',
+        WorkloadKind.job => 'jobs',
+      };
+}
+
+/// A workload's topology id, `{kind}:{namespace}/{name}`. The snapshot
+/// loader and the gateway build it; [parseWorkloadId] and the gateway's
+/// ParseWorkloadID read it back.
+String formatWorkloadId(WorkloadKind kind, String namespace, String name) =>
+    '${kind.name}:$namespace/$name';
+
+/// Splits a workload id at its first `:` and then its first `/`, so a `/`
+/// in the name stays in the name. The kind comes back as written, so a
+/// caller can name a kind it doesn't support. Throws [ArgumentError] when
+/// the kind, namespace or name is missing.
+({String kind, String namespace, String name}) parseWorkloadId(String id) {
+  final colon = id.indexOf(':');
+  if (colon <= 0 || colon == id.length - 1) {
+    throw ArgumentError.value(id, 'workloadId', 'malformed');
+  }
+  final tail = id.substring(colon + 1);
+  final slash = tail.indexOf('/');
+  if (slash <= 0 || slash == tail.length - 1) {
+    throw ArgumentError.value(id, 'workloadId', 'malformed');
+  }
+  return (
+    kind: id.substring(0, colon),
+    namespace: tail.substring(0, slash),
+    name: tail.substring(slash + 1),
+  );
+}
+
 enum ServiceExposure {
   clusterIp,
   nodePort,

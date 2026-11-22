@@ -92,4 +92,29 @@ void main() {
     expect(find.text('Scale'), findsNothing);
     expect(find.text(noActionsLine), findsNothing);
   });
+
+  // The same kinds the scaler accepts: deployments and statefulSets scale,
+  // daemonSets also restart, and a Job does neither.
+  for (final (kind, scale, restart) in [
+    (WorkloadKind.deployment, true, true),
+    (WorkloadKind.statefulSet, true, true),
+    (WorkloadKind.daemonSet, false, true),
+    (WorkloadKind.job, false, false),
+  ]) {
+    testWidgets('a ${kind.name} offers only the actions its kind takes',
+        (tester) async {
+      final workload = snapshot.workloads.firstWhere((w) => w.kind == kind);
+
+      await showPanel(tester, workload,
+          RecordingClusterConnection(mode: ConnectionMode.gateway));
+      expect(find.text('Scale'), scale ? findsOneWidget : findsNothing);
+      expect(find.text('Restart'), restart ? findsOneWidget : findsNothing);
+
+      // A kind with no actions shows no actions line either, even on sample
+      // data.
+      await showPanel(tester, workload, const SampleClusterConnection());
+      expect(find.text(noActionsLine),
+          scale || restart ? findsOneWidget : findsNothing);
+    });
+  }
 }

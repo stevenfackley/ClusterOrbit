@@ -451,9 +451,8 @@ class _EntityDetailPanelState extends State<EntityDetailPanel> {
 
   List<Widget> _workloadFields(ClusterWorkload w, ThemeData theme) {
     final tint = w.health.color(widget.palette);
-    final isScalable =
-        w.kind == WorkloadKind.deployment || w.kind == WorkloadKind.statefulSet;
-    final isRestartable = isScalable || w.kind == WorkloadKind.daemonSet;
+    final isScalable = w.kind.isScalable;
+    final isRestartable = w.kind.isRestartable;
     return [
       _DetailRow(label: 'Namespace', value: w.namespace, theme: theme),
       _DetailRow(label: 'Kind', value: w.kind.label, theme: theme),

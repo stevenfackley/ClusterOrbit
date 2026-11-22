@@ -500,4 +500,13 @@ void main() {
       expect(snapshot.services.single.ports, isEmpty);
     });
   });
+
+  test('a workload id parses back to the kind, namespace and name', () {
+    for (final kind in WorkloadKind.values) {
+      final id = formatWorkloadId(kind, 'platform', 'api');
+      expect(id, '${kind.name}:platform/api');
+      expect(parseWorkloadId(id),
+          (kind: kind.name, namespace: 'platform', name: 'api'));
+    }
+  });
 }
