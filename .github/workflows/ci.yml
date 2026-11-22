@@ -16,6 +16,10 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+          # Pinned: on a floating "stable" the analyzer started failing every PR when 3.50 deprecated
+          # package:flutter/material.dart (an info on every file that imports it). 3.47.9 is the last
+          # release this branch's default-branch CI passed on. Raise it together with the import move.
+          flutter-version: 3.47.9
           cache: true
       - name: Seed mobile env
         run: cp .env.example .env
@@ -53,6 +57,10 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+          # Pinned: on a floating "stable" the analyzer started failing every PR when 3.50 deprecated
+          # package:flutter/material.dart (an info on every file that imports it). 3.47.9 is the last
+          # release this branch's default-branch CI passed on. Raise it together with the import move.
+          flutter-version: 3.47.9
           cache: true
       - name: Seed mobile env
         run: cp .env.example .env

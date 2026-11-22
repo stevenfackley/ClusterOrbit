@@ -6,6 +6,7 @@ import 'package:clusterorbit_mobile/core/connectivity/cluster_connection.dart';
 import 'package:clusterorbit_mobile/core/connectivity/cluster_connection_factory.dart';
 import 'package:clusterorbit_mobile/core/connectivity/kube_transport.dart';
 import 'package:clusterorbit_mobile/core/connectivity/kubeconfig_repository.dart';
+import 'package:clusterorbit_mobile/core/connectivity/kubernetes_event_loader.dart';
 import 'package:clusterorbit_mobile/core/connectivity/kubernetes_snapshot_loader.dart';
 import 'package:clusterorbit_mobile/core/connectivity/kubernetes_workload_scaler.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -365,6 +366,59 @@ current-context: prod-admin
     expect(jsonDecode(utf8.decode(transport.lastBody!)), {
       'spec': {'replicas': 5}
     });
+  });
+
+  // A Service and its Deployment often share a name, so name alone mixes their
+  // events. Node and service events filter on kind too, as on the gateway.
+  test('direct loadEvents adds the involved object kind for nodes and services',
+      () async {
+    final tempDir = await Directory.systemTemp.createTemp('clusterorbit_test');
+    addTearDown(() async => tempDir.delete(recursive: true));
+    final kubeconfig = File('${tempDir.path}${Platform.pathSeparator}config');
+    await kubeconfig.writeAsString('''
+apiVersion: v1
+clusters:
+  - cluster:
+      server: https://prod.example.internal:6443
+    name: prod-cluster
+contexts:
+  - context:
+      cluster: prod-cluster
+    name: prod-admin
+current-context: prod-admin
+''');
+    const api = 'https://prod.example.internal:6443/api/v1';
+    final connection = DirectClusterConnection(
+      repository: KubeconfigRepository(environment: {
+        'CLUSTERORBIT_KUBECONFIG': kubeconfig.path,
+      }),
+      eventLoader: KubernetesEventLoader(
+        transport: _FakeKubernetesTransport({
+          '$api/events?fieldSelector='
+                  'involvedObject.name%3Dworker-1%2CinvolvedObject.kind%3DNode':
+              _listResponse([]),
+          '$api/namespaces/platform/events?fieldSelector='
+                  'involvedObject.name%3Dapi%2CinvolvedObject.kind%3DService':
+              _listResponse([]),
+          // A workload entity doesn't say which controller kind it is.
+          '$api/namespaces/platform/events?fieldSelector='
+              'involvedObject.name%3Dapi': _listResponse([]),
+        }),
+      ),
+    );
+
+    for (final (kind, name, namespace) in [
+      (TopologyEntityKind.node, 'worker-1', null),
+      (TopologyEntityKind.service, 'api', 'platform'),
+      (TopologyEntityKind.workload, 'api', 'platform'),
+    ]) {
+      await connection.loadEvents(
+        clusterId: 'prod-admin',
+        kind: kind,
+        objectName: name,
+        namespace: namespace,
+      );
+    }
   });
 
   test('direct scaleWorkload rejects unsupported kind', () async {
