@@ -574,6 +574,51 @@ void main() {
 
     expect(snapshot.nodes, isEmpty);
   });
+
+  test('a failed list surfaces its own error, not a wrapper', () async {
+    const base = 'https://cluster.example.internal:6443';
+    final loader = KubernetesSnapshotLoader(
+      transport: _FailingKubernetesTransport(
+        failingUri: '$base/api/v1/pods',
+        error: KubernetesApiException(
+          'forbidden',
+          uri: Uri.parse('$base/api/v1/pods'),
+          statusCode: 403,
+        ),
+      ),
+    );
+
+    await expectLater(
+      loader.loadSnapshot(
+        const KubeconfigResolvedCluster(
+          profile: ClusterProfile(
+            id: 'c',
+            name: 'c',
+            apiServerHost: 'cluster.example.internal',
+            environmentLabel: 'Dev',
+            connectionMode: ConnectionMode.direct,
+          ),
+          server: base,
+          namespace: null,
+          auth: KubeconfigAuth(
+            bearerToken: 'abc123',
+            basicUsername: null,
+            basicPassword: null,
+            clientCertificateData: null,
+            clientKeyData: null,
+          ),
+          tls: KubeconfigTlsConfig(
+            insecureSkipTlsVerify: false,
+            certificateAuthorityData: null,
+          ),
+        ),
+      ),
+      throwsA(
+        isA<KubernetesApiException>()
+            .having((e) => e.statusCode, 'statusCode', 403),
+      ),
+    );
+  });
 }
 
 /// A snapshot of one Job, default/j, with [spec], [status] and [pods].
@@ -647,6 +692,32 @@ final class _FakeKubernetesTransport implements KubernetesTransport {
       throw StateError('Missing fake response for ${request.uri}');
     }
     return response;
+  }
+
+  @override
+  Future<Map<String, dynamic>> patchJson(
+    KubernetesRequest request, {
+    required String contentType,
+    required List<int> body,
+  }) async {
+    throw UnimplementedError();
+  }
+}
+
+/// Answers every list with no items, except [failingUri], which throws
+/// [error].
+final class _FailingKubernetesTransport implements KubernetesTransport {
+  _FailingKubernetesTransport({required this.failingUri, required this.error});
+
+  final String failingUri;
+  final Object error;
+
+  @override
+  Future<Map<String, dynamic>> getJson(KubernetesRequest request) async {
+    if (request.uri.toString() == failingUri) {
+      throw error;
+    }
+    return _listResponse([]);
   }
 
   @override
