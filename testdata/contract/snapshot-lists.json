@@ -1,0 +1,58 @@
+{
+  "api/v1/nodes": {"kind": "NodeList", "apiVersion": "v1", "items": [
+    {"metadata": {"name": "cp-1", "labels": {"node-role.kubernetes.io/control-plane": "", "topology.kubernetes.io/zone": "use1-a"}}, "spec": {}, "status": {"nodeInfo": {"kubeletVersion": "v1.32.3", "osImage": "Ubuntu 22.04.3 LTS"}, "capacity": {"cpu": "4", "memory": "16Gi"}, "conditions": [{"type": "Ready", "status": "True"}]}},
+    {"metadata": {"name": "worker-1", "labels": {"failure-domain.beta.kubernetes.io/zone": "use1-b"}}, "spec": {"unschedulable": false}, "status": {"nodeInfo": {"kubeletVersion": "v1.32.3", "osImage": "Ubuntu 22.04.3 LTS"}, "capacity": {"cpu": "8", "memory": "32Gi"}, "conditions": [{"type": "Ready", "status": "True"}, {"type": "MemoryPressure", "status": "True"}, {"type": "DiskPressure", "status": "False"}]}},
+    {"metadata": {"name": "worker-2", "labels": {}}, "spec": {"unschedulable": true}, "status": {"nodeInfo": {"kubeletVersion": "v1.31.7", "osImage": "Bottlerocket OS 1.20.0"}, "capacity": {"cpu": "8", "memory": "32Gi"}, "conditions": [{"type": "Ready", "status": "True"}]}},
+    {"metadata": {"name": "worker-3", "labels": {"node-role.kubernetes.io/master": ""}}, "spec": {}, "status": {"conditions": [{"type": "Ready", "status": "False"}]}}
+  ]},
+  "api/v1/pods": {"kind": "PodList", "apiVersion": "v1", "items": [
+    {"metadata": {"name": "api-7d9cc6c6df-a", "namespace": "apps", "labels": {"app": "api"}, "ownerReferences": [{"kind": "ReplicaSet", "name": "api-7d9cc6c6df", "controller": true}]}, "spec": {"nodeName": "worker-1"}, "status": {"phase": "Running", "containerStatuses": [{"restartCount": 0}]}},
+    {"metadata": {"name": "api-7d9cc6c6df-b", "namespace": "apps", "labels": {"app": "api"}, "ownerReferences": [{"kind": "ReplicaSet", "name": "api-7d9cc6c6df", "controller": true}]}, "spec": {"nodeName": "cp-1"}, "status": {"phase": "Pending"}},
+    {"metadata": {"name": "cache-5f6b8d9c4-a", "namespace": "apps", "labels": {"app": "cache"}, "ownerReferences": [{"kind": "ReplicaSet", "name": "cache-5f6b8d9c4", "controller": true}]}, "spec": {"nodeName": "worker-1"}, "status": {"phase": "Failed"}},
+    {"metadata": {"name": "web-a-1", "namespace": "a", "labels": {"app": "web"}, "ownerReferences": [{"kind": "ReplicaSet", "name": "web-a", "controller": true}]}, "spec": {"nodeName": "worker-1"}, "status": {"phase": "Running"}},
+    {"metadata": {"name": "web-b-1", "namespace": "b", "labels": {"app": "web"}, "ownerReferences": [{"kind": "ReplicaSet", "name": "web-b", "controller": true}]}, "spec": {"nodeName": "worker-2"}, "status": {"phase": "Running"}},
+    {"metadata": {"name": "agent-x1", "namespace": "platform", "labels": {"app": "agent"}, "ownerReferences": [{"kind": "DaemonSet", "name": "agent", "controller": true}]}, "spec": {"nodeName": "worker-1"}, "status": {"phase": "Running", "containerStatuses": [{"restartCount": 1}]}},
+    {"metadata": {"name": "agent-x2", "namespace": "platform", "labels": {"app": "agent"}, "ownerReferences": [{"kind": "DaemonSet", "name": "agent", "controller": true}]}, "spec": {"nodeName": "cp-1"}, "status": {"phase": "Running", "containerStatuses": [{"restartCount": 0}]}},
+    {"metadata": {"name": "db-0", "namespace": "apps", "labels": {"app": "db"}, "ownerReferences": [{"kind": "StatefulSet", "name": "db", "controller": true}]}, "spec": {"nodeName": "worker-2"}, "status": {"phase": "Running", "containerStatuses": [{"restartCount": 0, "state": {"waiting": {"reason": "CrashLoopBackOff"}}}]}},
+    {"metadata": {"name": "migrate-a", "namespace": "batch", "ownerReferences": [{"kind": "Job", "name": "migrate", "controller": true}]}, "spec": {"nodeName": "worker-2"}, "status": {"phase": "Failed"}},
+    {"metadata": {"name": "migrate-b", "namespace": "batch", "ownerReferences": [{"kind": "Job", "name": "migrate", "controller": true}]}, "spec": {"nodeName": "worker-2"}, "status": {"phase": "Running"}},
+    {"metadata": {"name": "report-a", "namespace": "batch", "ownerReferences": [{"kind": "Job", "name": "report", "controller": true}]}, "spec": {"nodeName": "worker-1"}, "status": {"phase": "Failed"}},
+    {"metadata": {"name": "sweep-a", "namespace": "batch", "ownerReferences": [{"kind": "Job", "name": "sweep", "controller": true}]}, "spec": {"nodeName": "cp-1"}, "status": {"phase": "Pending"}},
+    {"metadata": {"name": "legacy-1-x", "namespace": "apps", "labels": {"app": "legacy"}, "ownerReferences": [{"kind": "ReplicaSet", "name": "legacy-1", "controller": true}]}, "spec": {"nodeName": "worker-3"}, "status": {"phase": "Running"}},
+    {"metadata": {"name": "debug", "namespace": "default"}, "spec": {"nodeName": "worker-2"}, "status": {"phase": "Running"}},
+    {"metadata": {"name": "unscheduled", "namespace": "apps", "labels": {"app": "api"}, "ownerReferences": [{"kind": "ReplicaSet", "name": "api-7d9cc6c6df", "controller": true}]}, "spec": {}, "status": {"phase": "Pending"}}
+  ]},
+  "api/v1/services": {"kind": "ServiceList", "apiVersion": "v1", "items": [
+    {"metadata": {"name": "api", "namespace": "apps"}, "spec": {"type": "LoadBalancer", "clusterIP": "10.96.0.100", "selector": {"app": "api"}, "ports": [{"name": "http", "port": 80, "targetPort": 8080, "protocol": "TCP"}]}},
+    {"metadata": {"name": "orphan", "namespace": "apps"}, "spec": {"type": "ClusterIP", "selector": {"app": "missing"}, "ports": [{"port": 80, "targetPort": 8080, "protocol": "TCP"}]}},
+    {"metadata": {"name": "kubernetes", "namespace": "default"}, "spec": {"type": "ClusterIP", "clusterIP": "10.96.0.1", "ports": [{"name": "https", "port": 443, "targetPort": 6443}]}},
+    {"metadata": {"name": "web", "namespace": "a"}, "spec": {"clusterIP": "None", "selector": {"app": "web"}}},
+    {"metadata": {"name": "db", "namespace": "apps"}, "spec": {"type": "NodePort", "clusterIP": "10.96.0.200", "selector": {"app": "db"}, "ports": [{"name": "pg", "port": 5432, "targetPort": "pg", "protocol": "TCP"}, {"name": "metrics", "port": 9187, "targetPort": "9187", "protocol": "TCP"}]}},
+    {"metadata": {"name": "docs", "namespace": "apps"}, "spec": {"type": "ExternalName", "externalName": "docs.example.com"}}
+  ]},
+  "apis/apps/v1/deployments": {"kind": "DeploymentList", "apiVersion": "apps/v1", "items": [
+    {"metadata": {"name": "api", "namespace": "apps"}, "spec": {"replicas": 2, "template": {"spec": {"containers": [{"name": "api", "image": "nginx:1.25"}]}}}, "status": {"readyReplicas": 1}},
+    {"metadata": {"name": "web", "namespace": "a"}, "spec": {"replicas": 1}, "status": {"readyReplicas": 1}},
+    {"metadata": {"name": "web", "namespace": "b"}, "spec": {"replicas": 1}, "status": {"readyReplicas": 1}},
+    {"metadata": {"name": "cache", "namespace": "apps"}, "spec": {"replicas": 1, "template": {"spec": {"containers": [{"name": "redis", "image": "redis:7"}, {"name": "exporter", "image": "redis-exporter:1.62"}]}}}, "status": {"readyReplicas": 1}}
+  ]},
+  "apis/apps/v1/daemonsets": {"kind": "DaemonSetList", "apiVersion": "apps/v1", "items": [
+    {"metadata": {"name": "agent", "namespace": "platform"}, "spec": {"template": {"spec": {"containers": [{"name": "agent", "image": "agent:2.4"}]}}}, "status": {"desiredNumberScheduled": 2, "numberReady": 2}}
+  ]},
+  "apis/apps/v1/statefulsets": {"kind": "StatefulSetList", "apiVersion": "apps/v1", "items": [
+    {"metadata": {"name": "db", "namespace": "apps"}, "spec": {"replicas": 1, "template": {"spec": {"containers": [{"name": "postgres", "image": "postgres:17"}]}}}, "status": {"readyReplicas": 0}}
+  ]},
+  "apis/batch/v1/jobs": {"kind": "JobList", "apiVersion": "batch/v1", "items": [
+    {"metadata": {"name": "migrate", "namespace": "batch"}, "spec": {"completions": 1}, "status": {"active": 1, "failed": 1}},
+    {"metadata": {"name": "report", "namespace": "batch"}, "spec": {"completions": 1}, "status": {"failed": 2, "conditions": [{"type": "Failed", "status": "True"}]}},
+    {"metadata": {"name": "sweep", "namespace": "batch"}, "spec": {"parallelism": 2}, "status": {"active": 1}},
+    {"metadata": {"name": "backfill", "namespace": "batch"}, "spec": {"completions": 3}, "status": {"succeeded": 3, "conditions": [{"type": "Complete", "status": "True"}]}}
+  ]},
+  "apis/apps/v1/replicasets": {"kind": "ReplicaSetList", "apiVersion": "apps/v1", "items": [
+    {"metadata": {"name": "api-7d9cc6c6df", "namespace": "apps", "ownerReferences": [{"kind": "Deployment", "name": "api", "controller": true}]}},
+    {"metadata": {"name": "web-a", "namespace": "a", "ownerReferences": [{"kind": "Deployment", "name": "web", "controller": true}]}},
+    {"metadata": {"name": "web-b", "namespace": "b", "ownerReferences": [{"kind": "Deployment", "name": "web", "controller": true}]}},
+    {"metadata": {"name": "cache-5f6b8d9c4", "namespace": "apps", "ownerReferences": [{"kind": "Deployment", "name": "cache", "controller": true}]}},
+    {"metadata": {"name": "legacy-1", "namespace": "apps"}}
+  ]}
+}
