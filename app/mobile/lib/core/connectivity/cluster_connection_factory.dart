@@ -138,6 +138,13 @@ final class DirectClusterConnection implements ClusterConnection {
       cluster: resolvedCluster,
       objectName: objectName,
       namespace: kind == TopologyEntityKind.node ? null : namespace,
+      // As on the gateway: a workload entity doesn't say which controller kind
+      // it is, so only its name filters.
+      involvedObjectKind: switch (kind) {
+        TopologyEntityKind.node => 'Node',
+        TopologyEntityKind.service => 'Service',
+        TopologyEntityKind.workload => null,
+      },
       limit: limit,
     );
   }

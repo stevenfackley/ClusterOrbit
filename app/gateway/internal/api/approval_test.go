@@ -270,6 +270,41 @@ func TestScaleParksWhenApprovalRequired(t *testing.T) {
 	}
 }
 
+// Only deployments and statefulSets scale, and a job can't be restarted. Those
+// requests must fail with 400 up front, not park and fail once a second
+// operator approves them.
+func TestUnsupportedKindIsRejectedBeforeParking(t *testing.T) {
+	rb := &recordingBackend{ClusterBackend: NewSampleBackend()}
+	s := newApprovalServer(rb, OpScale, OpRestart)
+	var entries []AuditEntry
+	s.AuditSink = func(e AuditEntry) { entries = append(entries, e) }
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	base := ts.URL + "/v1/clusters/demo/workloads/"
+	for _, tc := range []struct{ workload, verb, body string }{
+		{"daemonSet:platform/agent", "scale", `{"replicas":2}`},
+		{"job:platform/migrate", "scale", `{"replicas":2}`},
+		{"job:platform/migrate", "restart", ""},
+	} {
+		entries = nil
+		resp := postAs(t, base+tc.workload+"/"+tc.verb, "tok-a", tc.body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("%s %s status = %d, want 400", tc.verb, tc.workload, resp.StatusCode)
+		}
+		if len(entries) != 1 || entries[0].Status != http.StatusBadRequest {
+			t.Fatalf("%s %s audit = %+v, want one 400 entry", tc.verb, tc.workload, entries)
+		}
+	}
+	if pending := s.Approvals.List(""); len(pending) != 0 {
+		t.Fatalf("parked %d requests, want none: %+v", len(pending), pending)
+	}
+	if rb.scaleCalls != 0 || rb.restartCalls != 0 {
+		t.Fatalf("backend called: scale %d restart %d", rb.scaleCalls, rb.restartCalls)
+	}
+}
+
 func TestScaleExecutesInlineWhenNotGated(t *testing.T) {
 	rb := &recordingBackend{ClusterBackend: NewSampleBackend()}
 	s := newApprovalServer(rb, OpDrain) // scale NOT gated

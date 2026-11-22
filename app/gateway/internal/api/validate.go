@@ -20,6 +20,24 @@ var workloadKinds = map[string]bool{
 	"job":         true,
 }
 
+// opKinds are the workload kinds scale and restart can act on: only
+// deployments and statefulSets scale, and a job can't be restarted
+// (kubebackend's scaleResourceFor and restartResourceFor). The handlers check
+// them before parking, so no one is asked to approve a mutation that can only
+// fail.
+var opKinds = map[string]map[string]bool{
+	OpScale:   {"deployment": true, "statefulSet": true},
+	OpRestart: {"deployment": true, "statefulSet": true, "daemonSet": true},
+}
+
+// checkKindSupports reports an ErrBadRequest when workload kind can't take op.
+func checkKindSupports(op, kind string) error {
+	if !opKinds[op][kind] {
+		return fmt.Errorf("%w: kind %q does not support %s", ErrBadRequest, kind, op)
+	}
+	return nil
+}
+
 // eventKinds maps each accepted GET /events kind filter to the Kubernetes kind
 // it selects (involvedObject.kind). The mobile app sends its entity kinds
 // (node, workload, service); the workload kinds, pod and the PascalCase API

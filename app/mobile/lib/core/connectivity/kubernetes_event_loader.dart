@@ -6,7 +6,9 @@ import 'kubeconfig_repository.dart';
 ///
 /// Node events are cluster-scoped (`/api/v1/events`); workload and service
 /// events are namespaced (`/api/v1/namespaces/{ns}/events`). Both use a
-/// `fieldSelector=involvedObject.name={name}` filter.
+/// `fieldSelector=involvedObject.name={name}` filter, plus
+/// `involvedObject.kind={kind}` when [loadEvents] gets an `involvedObjectKind`.
+/// The reducer mirrors the gateway's `eventFromItem` (backend.go).
 final class KubernetesEventLoader {
   KubernetesEventLoader({
     KubernetesTransport? transport,
@@ -18,6 +20,7 @@ final class KubernetesEventLoader {
     required KubeconfigResolvedCluster cluster,
     required String objectName,
     String? namespace,
+    String? involvedObjectKind,
     int limit = 5,
   }) async {
     final uri = kubeApiUri(
@@ -26,7 +29,11 @@ final class KubernetesEventLoader {
           ? ['api', 'v1', 'events']
           : ['api', 'v1', 'namespaces', namespace, 'events'],
       queryParameters: {
-        'fieldSelector': 'involvedObject.name=$objectName',
+        'fieldSelector': [
+          'involvedObject.name=$objectName',
+          if (involvedObjectKind != null)
+            'involvedObject.kind=$involvedObjectKind',
+        ].join(','),
       },
     );
 
@@ -71,18 +78,22 @@ final class KubernetesEventLoader {
     }
 
     final source = item['source'];
+    final reporting = item['reportingComponent'];
     final component = source is Map &&
             source['component'] is String &&
             source['component'] != ''
         ? source['component'] as String
-        : null;
+        : reporting is String && reporting.isNotEmpty
+            ? reporting
+            : null;
 
+    final count = item['count'];
     return ClusterEvent(
       type: ClusterEventTypeLabel.fromK8sType(item['type'] as String?),
       reason: reason,
       message: message,
       lastTimestamp: timestamp,
-      count: item['count'] is int ? item['count'] as int : 1,
+      count: count is int && count != 0 ? count : 1,
       sourceComponent: component,
     );
   }
